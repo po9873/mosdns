@@ -10,8 +10,10 @@ services:
       - "53:53/tcp"
       - "80:80"
     environment:
-      # ---- 账号密码（密码留空则容器启动时随机生成，见 docker logs）----
-      PREF_AUTH_USER: "admin"
+      # ---- 账号密码：初始 admin / admin，登录后可在「配置」里改 ----
+      # 只有这里同时填了用户名和密码，才会覆盖 /data/auth.json（可用来重置）。
+      # 留空则沿用 /data 里已保存的账号密码，重启不会被冲掉。
+      PREF_AUTH_USER: ""
       PREF_AUTH_PASS: ""
       # ---- 端口 ----
       PREF_DNS_PORT: "53"

@@ -33,8 +33,8 @@
 ## 部署
 
 1. 复制 `docker-compose.yml`，把 `CHANGE_ME` 改成你的用户名。
-2. 首次启动会打印随机登录密码（`docker logs mosdns-pref | grep 密码`），或用 `PREF_AUTH_PASS` 指定。
-3. 浏览器打开 `http://<服务器IP>/` 登录。
+2. 首次启动的初始账号是 **`admin` / `admin`**（不设置也能直接用）。
+3. 浏览器打开 `http://<服务器IP>/` 登录，登录后在 **配置 → 账号与密码** 里改成自己的（可改可不改，不强制）。
 
 ```bash
 docker compose up -d
@@ -77,8 +77,8 @@ mosdns 没有热重载接口，改 hosts / 清单只能重启进程。为了不�
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `PREF_AUTH_USER` | `admin` | 登录账号 |
-| `PREF_AUTH_PASS` | 空 | 登录密码；空则随机生成并打印 |
+| `PREF_AUTH_USER` | `admin` | 初始登录账号 |
+| `PREF_AUTH_PASS` | `admin` | 初始登录密码；两个都填了环境变量才会覆盖 `/data/auth.json`（可用来重置） |
 | `PREF_UI_PORT` | `80` | 控制台端口 |
 | `PREF_DNS_PORT` | `53` | DNS 端口 |
 | `PREF_DOMESTIC_DOH` | `https://223.5.5.5/dns-query` | 国内上游 |

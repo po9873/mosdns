@@ -15,8 +15,6 @@ UI_PORT="${PREF_UI_PORT:-80}"
 FOREIGN_DOH="${PREF_FOREIGN_DOH:-https://1.1.1.1/dns-query}"
 FOREIGN_DOH_BACKUP="${PREF_FOREIGN_DOH_BACKUP:-https://8.8.8.8/dns-query}"
 DOMESTIC_DOH="${PREF_DOMESTIC_DOH:-https://223.5.5.5/dns-query}"
-AUTH_USER="${PREF_AUTH_USER:-admin}"
-AUTH_PASS="${PREF_AUTH_PASS:-}"
 THREADS="${PREF_THREADS:-}"
 
 elog() { echo "[entrypoint] $*"; }
@@ -39,15 +37,35 @@ if [ -z "$THREADS" ] || [ "$THREADS" = "auto" ]; then
 fi
 elog "优选并发线程: $THREADS"
 
-# ---------- 账号密码（空则随机生成，仅打印到日志，不落镜像）----------
-if [ -z "$AUTH_PASS" ]; then
-  AUTH_PASS=$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 18)
-  elog "未设置 PREF_AUTH_PASS，已随机生成登录密码: $AUTH_PASS"
+# ---------- 账号密码：初始 admin/admin，之后以 /data/auth.json 为准 ----------
+# 规则：① 显式传了 PREF_AUTH_USER+PREF_AUTH_PASS → 以环境变量为准（可用来重置）
+#       ② 否则文件不存在 → 写入初始 admin/admin
+#       ③ 否则沿用已保存的（用户在控制台改过的密码，重启不会被冲掉）
+AUTH_USER="${PREF_AUTH_USER:-}"
+AUTH_PASS="${PREF_AUTH_PASS:-}"
+if [ -n "$AUTH_USER" ] && [ -n "$AUTH_PASS" ]; then
+  python3 - "$DATA_DIR/auth.json" "$AUTH_USER" "$AUTH_PASS" <<'PY'
+import json, sys
+p, u, a = sys.argv[1:4]
+tmp = p + ".tmp"
+with open(tmp, "w") as f:
+    json.dump({"user": u, "pass": a, "default": (u == "admin" and a == "admin")}, f, ensure_ascii=False)
+import os; os.replace(tmp, p)
+PY
+  elog "登录账号已按环境变量设置: $AUTH_USER"
+elif [ ! -f "$DATA_DIR/auth.json" ]; then
+  python3 - "$DATA_DIR/auth.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+tmp = p + ".tmp"
+with open(tmp, "w") as f:
+    json.dump({"user": "admin", "pass": "admin", "default": True}, f, ensure_ascii=False)
+os.replace(tmp, p)
+PY
+  elog "初始登录账号: admin / admin（进入控制台后可在「配置 → 账号与密码」修改）"
+else
+  elog "沿用已保存的登录账号（可在控制台「配置 → 账号与密码」修改）"
 fi
-cat > "$DATA_DIR/auth.json" <<EOF
-{"user":"$AUTH_USER","pass":"$AUTH_PASS"}
-EOF
-elog "登录账号: $AUTH_USER"
 
 # ---------- 默认设置 ----------
 if [ ! -f "$DATA_DIR/settings.json" ]; then

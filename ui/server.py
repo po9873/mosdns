@@ -37,12 +37,20 @@ LOCK = threading.Lock()
 
 
 def load_auth():
+    """返回 (user, pass, is_default)。is_default=True 表示仍是初始 admin/admin。"""
     try:
         with open(AUTH_FILE) as f:
             d = json.load(f)
-        return str(d.get("user", "admin")), str(d.get("pass", ""))
+        u, p = str(d.get("user", "admin")), str(d.get("pass", ""))
+        return u, p, bool(d.get("default", u == "admin" and p == "admin"))
     except Exception:
-        return "admin", ""
+        return "admin", "admin", True
+
+
+def save_auth(user, pwd):
+    data = {"user": user, "pass": pwd, "default": (user == "admin" and pwd == "admin")}
+    write_json(AUTH_FILE, data)
+    return data
 
 
 def read_json(path, default):
@@ -252,11 +260,13 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed():
                 return self._send(401, {"error": "unauthorized"})
             if path == "/api/status":
+                au, _, is_default = load_auth()
                 return self._send(200, {
                     "mosdns": mosdns_alive(),
                     "results": read_results(),
                     "settings": read_json(SETTINGS_FILE, {}),
                     "lists_brief": lists_brief(),
+                    "auth": {"user": au, "default_pass": is_default},
                     "now": int(time.time()),
                 })
             if path == "/api/lists":
@@ -296,12 +306,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/login":
             data = self._body()
-            user, pwd = load_auth()
+            user, pwd, is_default = load_auth()
             if str(data.get("user", "")) == user and str(data.get("pass", "")) == pwd and pwd != "":
                 tok = secrets.token_hex(24)
                 with LOCK:
                     SESSIONS[tok] = time.time() + SESSION_TTL
-                return self._send(200, {"ok": True}, extra={
+                return self._send(200, {"ok": True, "user": user, "default_pass": is_default}, extra={
                     "Set-Cookie": "pref_session=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d" % (tok, SESSION_TTL)
                 })
             return self._send(401, {"error": "账号或密码错误"})
@@ -316,6 +326,32 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True}, extra={
                 "Set-Cookie": "pref_session=; Path=/; HttpOnly; Max-Age=0"
             })
+
+        if path == "/api/account":
+            data = self._body()
+            cur_user, cur_pass, _ = load_auth()
+            old_pass = str(data.get("old_pass", ""))
+            new_user = str(data.get("user", cur_user)).strip()
+            new_pass = str(data.get("pass", ""))
+            if old_pass != cur_pass:
+                return self._send(400, {"error": "当前密码不正确"})
+            if not new_user or len(new_user) > 32:
+                return self._send(400, {"error": "账号不能为空，且不超过 32 个字符"})
+            if len(new_pass) < 4:
+                return self._send(400, {"error": "新密码至少 4 位"})
+            if len(new_pass) > 64:
+                return self._send(400, {"error": "新密码不超过 64 位"})
+            if new_user == cur_user and new_pass == cur_pass:
+                return self._send(400, {"error": "账号和密码都没有变化"})
+            saved = save_auth(new_user, new_pass)
+            # 旧会话全部失效，仅保留当前这次登录，避免改完密码被踹出去
+            tok = self._cookie()
+            with LOCK:
+                SESSIONS.clear()
+                if tok:
+                    SESSIONS[tok] = time.time() + SESSION_TTL
+            return self._send(200, {"ok": True, "user": saved["user"],
+                                    "default_pass": saved["default"], "relogin": False})
 
         if path == "/api/trigger":
             data = self._body()
