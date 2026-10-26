@@ -1,0 +1,19 @@
+# 强制所有文本文件使用 LF 换行（关键：否则容器内 shell 脚本会因 CRLF 无法执行）
+* text=auto eol=lf
+
+# 明确指定常见类型，避免被平台默认值覆盖
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.py        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.env       text eol=lf
+*.txt       text eol=lf
+*.html      text eol=lf
+*.md        text eol=lf
+*.json      text eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.tar.gz binary
