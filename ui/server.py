@@ -3,6 +3,7 @@
 # 控制台后端（纯 Python 标准库，无 pip 依赖）
 # 单登录 + 状态/结果/日志/配置/触发/实时解析
 # ============================================================
+import ipaddress
 import json
 import mimetypes
 import os
@@ -28,6 +29,8 @@ MOSDNS_PID = os.path.join(DATA_DIR, "mosdns.pid")
 SCHEDULER = "/app/scheduler/scheduler.sh"
 DNSSQ = "/app/scheduler/lib/dnsq.py"
 LISTS_PY = "/app/scheduler/lib/lists.py"
+DIAG_PY = "/app/scheduler/lib/diag.py"
+PUSH_PY = "/app/scheduler/lib/push.py"
 LISTS_META = os.path.join(DATA_DIR, "lists_meta.json")
 
 ROUTES = ["cf", "google", "gt", "github", "ghcr"]
@@ -93,20 +96,51 @@ def mosdns_alive():
 
 
 def is_ip(s):
-    return bool(re.match(r"^([0-9]{1,3}\.){3}[0-9]{1,3}$", s or ""))
+    try:
+        ipaddress.ip_address((s or "").strip())
+        return True
+    except Exception:
+        return False
 
 
 def read_results():
+    """读每路结果：域名 + 多个 IP（含延迟），兼容旧格式。"""
     out = {}
     for r in ROUTES:
         p = os.path.join(PREF_DIR, "%s.hosts" % r)
-        entry = {"domain": "", "ip": "", "mtime": 0}
+        entry = {"domain": "", "ip": "", "ips": [], "mtime": 0}
+        lat = {}
+        try:
+            with open(os.path.join(PREF_DIR, "%s.meta" % r)) as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        try:
+                            st = parts[2] if len(parts) > 2 else ""
+                            lat[parts[0]] = (float(parts[1]), st)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         try:
             with open(p) as f:
                 for line in f:
                     parts = line.split()
                     if len(parts) >= 2:
-                        entry["ip"], entry["domain"] = parts[0], parts[1]
+                        entry["domain"] = parts[0]
+                        ips = []
+                        for ip in parts[1:]:
+                            if not is_ip(ip):
+                                continue
+                            lt, st = lat.get(ip, (None, ""))
+                            ips.append({
+                                "ip": ip,
+                                "family": "v6" if ":" in ip else "v4",
+                                "latency": lt,
+                                "status": st or "ok",
+                            })
+                        entry["ips"] = ips
+                        entry["ip"] = ips[0]["ip"] if ips else ""
                         break
             entry["mtime"] = int(os.path.getmtime(p))
         except Exception:
@@ -115,14 +149,38 @@ def read_results():
     return out
 
 
+def diag_run(args, timeout=30):
+    try:
+        r = subprocess.run(["python3", DIAG_PY] + args, capture_output=True, timeout=timeout)
+        return json.loads(r.stdout.decode("utf-8", "replace") or "{}")
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def push_event(ev, title, body):
+    """按配置推送消息（企业微信 / 钉钉 / 飞书 机器人）。"""
+    cfg = read_json(SETTINGS_FILE, {}).get("push") or {}
+    if not cfg.get("enabled") or not cfg.get("url"):
+        return
+    evs = str(cfg.get("events", "") or "")
+    if evs and ev not in [x.strip() for x in evs.split(",") if x.strip()]:
+        return
+    try:
+        subprocess.run(["python3", PUSH_PY, cfg["url"], title, body],
+                       capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
 def tcp_latency(ip, port=443, timeout=3.0):
+    v6 = ":" in (ip or "")
     best = None
     for _ in range(3):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s = socket.socket(socket.AF_INET6 if v6 else socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         t0 = time.time()
         try:
-            s.connect((ip, port))
+            s.connect((ip, port, 0, 0) if v6 else (ip, port))
             dt = (time.time() - t0) * 1000.0
             best = dt if best is None else min(best, dt)
         except Exception:
@@ -138,14 +196,19 @@ def tcp_latency(ip, port=443, timeout=3.0):
 
 
 def dns_lookup(domain, port=None, timeout=3):
+    """同时查 A 与 AAAA，返回 [(ip, family), ...]"""
     port = port or DNS_PORT
     try:
         res = subprocess.run(
-            ["python3", DNSSQ, "127.0.0.1", str(port), domain],
+            ["python3", DNSSQ, "127.0.0.1", str(port), domain, "ALL"],
             capture_output=True, timeout=timeout + 2,
         )
-        ips = [l.strip() for l in res.stdout.decode("utf-8", "replace").splitlines() if is_ip(l.strip())]
-        return ips
+        out = []
+        for line in res.stdout.decode("utf-8", "replace").splitlines():
+            ip = line.strip()
+            if is_ip(ip):
+                out.append((ip, "v6" if ":" in ip else "v4"))
+        return out
     except Exception:
         return []
 
@@ -311,6 +374,14 @@ class Handler(BaseHTTPRequestHandler):
                 tok = secrets.token_hex(24)
                 with LOCK:
                     SESSIONS[tok] = time.time() + SESSION_TTL
+                try:
+                    ip = self.client_address[0]
+                except Exception:
+                    ip = "-"
+                threading.Thread(target=push_event, daemon=True, args=(
+                    "login", "控制台登录",
+                    "账号 %s 于 %s 从 %s 登录" % (user, time.strftime("%Y-%m-%d %H:%M:%S"), ip),
+                )).start()
                 return self._send(200, {"ok": True, "user": user, "default_pass": is_default}, extra={
                     "Set-Cookie": "pref_session=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d" % (tok, SESSION_TTL)
                 })
@@ -375,11 +446,12 @@ class Handler(BaseHTTPRequestHandler):
             domain = str(data.get("domain", "")).strip()
             if not re.match(r"^[A-Za-z0-9_.-]{1,253}$", domain):
                 return self._send(400, {"error": "非法域名"})
-            ips = dns_lookup(domain)
+            pairs = dns_lookup(domain)
             items = []
-            for ip in ips[:12]:
+            for ip, fam in pairs[:12]:
                 lat = tcp_latency(ip)
-                items.append({"ip": ip, "latency": None if lat is None else round(lat, 1)})
+                items.append({"ip": ip, "family": fam,
+                              "latency": None if lat is None else round(lat, 1)})
             items.sort(key=lambda x: (x["latency"] is None, x["latency"] or 1e9))
             return self._send(200, {"domain": domain, "items": items})
 
@@ -390,6 +462,50 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "未知清单"})
             threading.Thread(target=list_update_worker, args=(name,), daemon=True).start()
             return self._send(200, {"ok": True, "name": name, "started": True})
+
+        if path == "/api/push/test":
+            data = self._body()
+            url = str(data.get("url", "")).strip()
+            if not url.startswith(("http://", "https://")):
+                return self._send(400, {"error": "Webhook 地址需以 http:// 或 https:// 开头"})
+            try:
+                r = subprocess.run(
+                    ["python3", PUSH_PY, url, "测试消息",
+                     "这是一条来自控制台的测试推送，收到即说明配置正确。"],
+                    capture_output=True, timeout=15)
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            if r.returncode != 0:
+                return self._send(500, {"error": (r.stderr or b"").decode("utf-8", "replace")[:200] or "推送失败"})
+            return self._send(200, {"ok": True})
+
+        # ---------- 诊断 ----------
+        if path == "/api/diag/ip":
+            data = self._body()
+            ip = str(data.get("ip", "")).strip()
+            if not is_ip(ip):
+                return self._send(400, {"error": "请输入合法 IP（支持 IPv4 / IPv6）"})
+            return self._send(200, diag_run(["ip", ip], 20))
+
+        if path == "/api/diag/port":
+            data = self._body()
+            host = str(data.get("host", "")).strip()
+            try:
+                port = int(data.get("port") or 443)
+            except Exception:
+                port = 443
+            if not (is_ip(host) or re.match(r"^[A-Za-z0-9_.-]{1,253}$", host)):
+                return self._send(400, {"error": "请输入合法 IP 或域名"})
+            if not (1 <= port <= 65535):
+                return self._send(400, {"error": "端口需在 1-65535"})
+            return self._send(200, diag_run(["port", host, str(port)], 60))
+
+        if path == "/api/diag/domain":
+            data = self._body()
+            domain = str(data.get("domain", "")).strip()
+            if not re.match(r"^[A-Za-z0-9_.-]{1,253}$", domain):
+                return self._send(400, {"error": "非法域名"})
+            return self._send(200, diag_run(["domain", domain], 60))
 
         if path == "/api/reload":
             try:
@@ -411,6 +527,25 @@ class Handler(BaseHTTPRequestHandler):
                 cur["auto_reload"] = bool(data["auto_reload"])
             if isinstance(data.get("list_update_hours"), (int, float)):
                 cur["list_update_hours"] = max(1, int(data["list_update_hours"]))
+            if isinstance(data.get("top_n"), (int, float)):
+                cur["top_n"] = min(8, max(1, int(data["top_n"])))
+            if "ipv6" in data:
+                cur["ipv6"] = bool(data["ipv6"])
+            if "verify_https" in data:
+                cur["verify_https"] = bool(data["verify_https"])
+            if isinstance(data.get("push"), dict):
+                p = cur.get("push") or {}
+                src = data["push"]
+                if "enabled" in src:
+                    p["enabled"] = bool(src["enabled"])
+                if "url" in src:
+                    u = str(src["url"]).strip()
+                    if u and not u.startswith(("http://", "https://")):
+                        return self._send(400, {"error": "Webhook 地址需以 http:// 或 https:// 开头"})
+                    p["url"] = u
+                if "events" in src:
+                    p["events"] = str(src["events"])
+                cur["push"] = p
             if isinstance(data.get("routes"), dict):
                 r = cur.get("routes", {})
                 for k in ROUTES:

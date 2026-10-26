@@ -67,9 +67,25 @@ LISTS = {
             {"url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt"},
         ],
     },
+    # CDN 网段库：用于诊断页判断「这个 IP 是谁的」。多源合并，任一可用即保留其余
+    "cdn_ranges": {
+        "file": "cdn_ranges.txt",
+        "label": "CDN 网段库",
+        "kind": "cdn",
+        "min_lines": 20,
+        "auto": True,
+        "merge": True,
+        "sources": [
+            {"url": "https://www.cloudflare.com/ips-v4", "parser": "cdn", "provider": "Cloudflare"},
+            {"url": "https://www.cloudflare.com/ips-v6", "parser": "cdn", "provider": "Cloudflare"},
+            {"url": "https://www.gstatic.com/ipranges/goog.txt", "parser": "cdn_goog", "provider": "Google"},
+            {"url": "https://api.fastly.com/public-ip-list", "parser": "cdn_fastly", "provider": "Fastly"},
+        ],
+    },
 }
 
 RE_IP = re.compile(r"^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$")
+RE_CIDR_ANY = re.compile(r"^[0-9a-fA-F:.]+/\d{1,3}$")
 RE_DOM_PREFIXED = re.compile(r"^(domain|full|keyword|regexp):\S+$")
 RE_DOM_BARE = re.compile(r"^[A-Za-z0-9_.*\u4e00-\u9fa5-]+\.[A-Za-z]{2,}$")
 
@@ -132,7 +148,22 @@ def normalize(items, kind):
         s = (raw or "").strip()
         if not s or s.startswith("#") or s.startswith("//"):
             continue
-        if kind == "ip":
+        if kind == "cdn":
+            parts = s.split()
+            if len(parts) != 2:
+                continue
+            name, cidr = parts[0], parts[1]
+            if ":" in cidr:
+                if not RE_CIDR_ANY.match(cidr):
+                    continue
+            elif not RE_IP.match(cidr):
+                continue
+            try:
+                cidr = str(ipaddress.ip_network(cidr, strict=False))
+            except Exception:
+                continue
+            s = "%s %s" % (name, cidr)
+        elif kind == "ip":
             if not RE_IP.match(s):
                 continue
             try:
@@ -252,58 +283,107 @@ def cmd_preview(name, n=50):
     return 0
 
 
-def update_one(name):
-    """单清单更新：多源尝试，成功即原子替换；全失败保留旧文件。"""
-    spec = LISTS[name]
+def _parse_source(src, spec):
+    """按源类型解析成清单行（不同公开源的格式差异都在这里抹平）。"""
+    url = src["url"] if isinstance(src, dict) else src
+    parser = src.get("parser", "text") if isinstance(src, dict) else "text"
+    provider = src.get("provider", "") if isinstance(src, dict) else ""
+    raw = fetch(url)
+
+    if parser == "apnic_cn":
+        items = parse_apnic_cn(raw)
+    elif parser == "cdn":
+        items = ["%s %s" % (provider, l.strip()) for l in raw.splitlines()
+                 if l.strip() and not l.strip().startswith("#")]
+    elif parser == "cdn_goog":
+        items = []
+        for line in raw.splitlines():
+            p = line.split(",")
+            if len(p) >= 2 and p[0].strip() in ("ipv4", "ipv6"):
+                items.append("%s %s" % (provider, p[1].strip()))
+    elif parser == "cdn_fastly":
+        items = []
+        try:
+            d = json.loads(raw)
+            for k in ("addresses", "ipv6_addresses"):
+                for c in d.get(k) or []:
+                    items.append("%s %s" % (provider, c))
+        except Exception:
+            pass
+    else:
+        items = raw.splitlines()
+    return url, normalize(items, spec["kind"])
+
+
+def _commit(name, spec, items, source_desc):
     dst = os.path.join(DATA_DIR, spec["file"])
     os.makedirs(TMP_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
+    body = ("\n".join(items) + "\n").encode("utf-8")
+    tmp = os.path.join(TMP_DIR, spec["file"] + ".new")
+    with open(tmp, "wb") as f:
+        f.write(body)
+        f.flush()
+        os.fsync(f.fileno())
+    # 旧文件留一份 .bak，便于回滚
+    if os.path.isfile(dst):
+        try:
+            os.replace(dst, dst + ".bak")
+        except Exception:
+            pass
+    os.replace(tmp, dst)
+    meta = {
+        "status": "ok",
+        "source": source_desc,
+        "updated_at": int(time.time()),
+        "checked_at": int(time.time()),
+        "lines": len(items),
+        "bytes": len(body),
+        "sha256": hashlib.sha256(body).hexdigest()[:16],
+        "error": "",
+    }
+    meta_set(name, meta)
+    return dict(meta, ok=True, name=name, label=spec["label"])
+
+
+def update_one(name):
+    """单清单更新：多源尝试，成功即原子替换；全失败保留旧文件。
+
+    merge=True 的清单（CDN 网段库）会合并所有可用源，而不是取第一个成功的。
+    """
+    spec = LISTS[name]
     errors = []
 
-    for src in spec["sources"]:
-        url = src["url"] if isinstance(src, dict) else src
-        parser = src.get("parser", "text") if isinstance(src, dict) else "text"
-        try:
-            raw = fetch(url)
-            items = parse_apnic_cn(raw) if parser == "apnic_cn" else raw.splitlines()
-            items = normalize(items, spec["kind"])
-            if len(items) < spec["min_lines"]:
-                errors.append("%s 有效条目过少(%d)" % (host_of(url), len(items)))
-                continue
-
-            body = ("\n".join(items) + "\n").encode("utf-8")
-            tmp = os.path.join(TMP_DIR, spec["file"] + ".new")
-            with open(tmp, "wb") as f:
-                f.write(body)
-                f.flush()
-                os.fsync(f.fileno())
-            # 旧文件留一份 .bak，便于回滚
-            if os.path.isfile(dst):
-                try:
-                    os.replace(dst, dst + ".bak")
-                except Exception:
-                    pass
-            os.replace(tmp, dst)
-
-            meta = {
-                "status": "ok",
-                "source": url,
-                "updated_at": int(time.time()),
-                "checked_at": int(time.time()),
-                "lines": len(items),
-                "bytes": len(body),
-                "sha256": hashlib.sha256(body).hexdigest()[:16],
-                "error": "",
-            }
-            meta_set(name, meta)
-            return dict(meta, ok=True, name=name, label=spec["label"])
-        except Exception as e:
-            errors.append("%s: %s" % (host_of(url), str(e)[:100]))
+    if spec.get("merge"):
+        merged, used = [], []
+        for src in spec["sources"]:
+            url = src["url"] if isinstance(src, dict) else src
+            try:
+                _, items = _parse_source(src, spec)
+                if items:
+                    merged.extend(items)
+                    used.append(host_of(url))
+            except Exception as e:
+                errors.append("%s: %s" % (host_of(url), str(e)[:80]))
+        items = normalize(merged, spec["kind"])
+        if len(items) >= spec["min_lines"]:
+            return _commit(name, spec, items, " + ".join(used))
+        errors.insert(0, "合并后条目过少(%d)，需要 %d" % (len(items), spec["min_lines"]))
+    else:
+        for src in spec["sources"]:
+            url = src["url"] if isinstance(src, dict) else src
+            try:
+                _, items = _parse_source(src, spec)
+                if len(items) < spec["min_lines"]:
+                    errors.append("%s 有效条目过少(%d)" % (host_of(url), len(items)))
+                    continue
+                return _commit(name, spec, items, url)
+            except Exception as e:
+                errors.append("%s: %s" % (host_of(url), str(e)[:100]))
 
     old = meta_all().get(name, {})
     meta = dict(old)
     meta.update({
-        "status": "ok" if old.get("status") == "ok" else "fail",
         "checked_at": int(time.time()),
         "error": "; ".join(errors)[:300] or "全部源不可用",
     })

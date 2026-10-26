@@ -120,6 +120,12 @@
   .route-card .rc-name{font-size:12.5px;color:var(--muted);letter-spacing:.3px}
   .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;word-break:break-all}
   .route-card .rc-dom{font-size:11.5px;color:var(--muted);margin-top:4px;word-break:break-all}
+  .route-card .rc-sub{font-size:11px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .tag{display:inline-block;font-size:10px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
+  .tag.v6{color:#3b8eea;border-color:rgba(59,142,234,.45)}
+  .iplist{display:flex;flex-direction:column;gap:3px}
+  .iplist .row{display:flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+  .iplist .lat{color:var(--muted);font-size:11px}
   .route-card .rc-time{font-size:11px;color:var(--muted);margin-top:6px}
 
   table{width:100%;border-collapse:collapse;font-size:13px}
@@ -158,6 +164,8 @@
   .form-row .lab small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;font-weight:400}
   .form-row input[type=number]{width:130px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none}
   .form-row input[type=text],.form-row input[type=password]{width:230px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-family:inherit;font-size:13px}
+  .form-row input:not([type]):not([class]){width:320px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-family:inherit;font-size:13px}
+  .form-row input:not([type]):not([class]):focus{border-color:var(--blue)}
   .form-row input[type=text]:focus,.form-row input[type=password]:focus,.form-row input[type=number]:focus{border-color:var(--blue)}
   .switch{position:relative;width:44px;height:24px;flex:0 0 auto}
   .switch input{opacity:0;width:0;height:0}
@@ -177,6 +185,15 @@
   }
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .warn-box{background:rgba(226,160,38,.12);border:1px solid rgba(226,160,38,.4);color:#d99b1f;border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.65;margin:0 0 14px}
+  .inline-form{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}
+  .inline-form input{flex:1;min-width:180px;padding:9px 11px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-size:13px}
+  .inline-form input:focus{border-color:var(--blue)}
+  .diag-out{margin-top:12px;font-size:13px}
+  .diag-out .line{display:flex;gap:10px;padding:5px 0;border-bottom:1px dashed var(--border);align-items:center;flex-wrap:wrap}
+  .diag-out .line:last-child{border-bottom:none}
+  .diag-out .k{color:var(--muted);min-width:76px;font-size:12px}
+  .diag-out .v{flex:1;word-break:break-all}
+  .diag-out .foot{display:flex;align-items:center;gap:10px;margin-top:10px;color:var(--muted);font-size:11.5px}
   .hint{margin:12px 0 0;color:var(--muted);font-size:12px;line-height:1.7}
   .muted{color:var(--muted)}
   .preview{
@@ -250,7 +267,8 @@
     .form-row{flex-direction:column;align-items:stretch;gap:8px;padding:12px 0}
     .form-row input[type=number],
     .form-row input[type=text],
-    .form-row input[type=password]{width:100%}
+    .form-row input[type=password],
+    .form-row input:not([type]):not([class]){width:100%}
     .form-row:has(.switch){flex-direction:row;align-items:center;justify-content:space-between}
     .form-row:has(.switch) .lab{flex:1 1 auto;min-width:0;padding-right:10px}
     .form-row:has(.switch) .switch{flex:0 0 auto}
@@ -291,6 +309,7 @@
     <nav id="nav">
       <a data-view="overview" class="active"><i></i>概况</a>
       <a data-view="results"><i></i>结果</a>
+      <a data-view="diag"><i></i>诊断</a>
       <a data-view="logs"><i></i>日志</a>
       <a data-view="config"><i></i>配置</a>
       <a data-view="source"><i></i>源</a>
@@ -369,6 +388,18 @@
             <input type="number" id="cfgThreads" min="0" step="1">
           </div>
           <div class="form-row">
+            <div class="lab">每路保留 IP 数<small>按延迟取前 N 个写入 hosts（IPv4 / IPv6 各自排），解析失败可自动切换</small></div>
+            <input type="number" id="cfgTopN" min="1" max="8" step="1">
+          </div>
+          <div class="form-row">
+            <div class="lab">同时优选 IPv6<small>解析 AAAA 并按延迟探测；目标站有 IPv6 时会一起写入 hosts</small></div>
+            <label class="switch"><input type="checkbox" id="cfgIpv6"><span class="slider"></span></label>
+          </div>
+          <div class="form-row">
+            <div class="lab">HTTPS 校验（排除 1034）<small>用真实 TLS + Host 请求验证，Cloudflare 1034、证书不符、5xx 的 IP 一律剔除</small></div>
+            <label class="switch"><input type="checkbox" id="cfgVerify"><span class="slider"></span></label>
+          </div>
+          <div class="form-row">
             <div class="lab">结果变化后自动重载引擎<small>一轮五路跑完只判断一次；结果和上轮相同则不重启，DNS 零中断</small></div>
             <label class="switch"><input type="checkbox" id="cfgAutoReload"><span class="slider"></span></label>
           </div>
@@ -388,6 +419,26 @@
           <div style="display:flex;gap:10px;margin-top:16px">
             <button class="btn primary" id="btnSaveCfg">保存配置</button>
             <button class="btn" id="btnRunAll2">立即执行五路</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>消息推送</h3>
+          <p class="sub">企业微信 / 钉钉 / 飞书 群机器人 Webhook；只推事件，不推任何域名或 IP 明细</p>
+          <div class="form-row">
+            <div class="lab">开启推送</div>
+            <label class="switch"><input type="checkbox" id="cfgPushOn"><span class="slider"></span></label>
+          </div>
+          <div class="form-row">
+            <div class="lab">Webhook 地址<small>企业微信：机器人 Webhook；钉钉/飞书同理</small></div>
+            <input id="cfgPushUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+          </div>
+          <div class="form-row">
+            <div class="lab">推送哪些事件<small>逗号分隔：round 每轮完成 / warn 失败或降级 / login 登录提醒</small></div>
+            <input id="cfgPushEvents" placeholder="round,warn,login">
+          </div>
+          <div style="display:flex;gap:10px;margin-top:12px">
+            <button class="btn" id="btnPushTest">发送测试</button>
           </div>
         </div>
 
@@ -427,10 +478,44 @@
         </div>
       </section>
 
+      <!-- 诊断 -->
+      <section class="view" id="view-diag">
+        <div class="card">
+          <h3>IP 查询</h3>
+          <p class="sub">查任意 IP：境内 / 境外、是否 CDN 节点、PTR 反查（判定依据是本地清单，可在线更新）</p>
+          <div class="inline-form">
+            <input id="diagIp" placeholder="例如 104.16.132.229 或 2606:4700::1">
+            <button class="btn primary" id="btnDiagIp">查询</button>
+          </div>
+          <div id="diagIpOut" class="diag-out"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>端口连通检测</h3>
+          <p class="sub">ICMP 3 包 + TCP 握手 3 次 + UDP 3 次发送，分项给出结论（TCP 才是真正连通的判据）</p>
+          <div class="inline-form">
+            <input id="diagHost" placeholder="IP 或域名，例如 1.1.1.1 / www.baidu.com">
+            <input id="diagPort" type="number" min="1" max="65535" value="443" style="max-width:110px">
+            <button class="btn primary" id="btnDiagPort">检测端口</button>
+          </div>
+          <div id="diagPortOut" class="diag-out"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>域名查询</h3>
+          <p class="sub">解析域名的 A / AAAA 记录，逐个 IP 标注归属、CDN 厂商、实测延迟</p>
+          <div class="inline-form">
+            <input id="diagDomain" placeholder="例如 www.cloudflare.com">
+            <button class="btn primary" id="btnDiagDomain">查询</button>
+          </div>
+          <div id="diagDomainOut" class="diag-out"></div>
+        </div>
+      </section>
+
       <!-- 源 -->
       <section class="view" id="view-source">
         <div class="card">
-          <h3>分流清单 <span class="muted" style="font-weight:400;font-size:12px">（国内 IP 段随 APNIC 分配变化，可在这里更新）</span></h3>
+          <h3>分流清单 <span class="muted" style="font-weight:400;font-size:12px">（国内 IP 段随 APNIC 分配变化、CDN 网段随厂商发版变化，都可在这里更新）</span></h3>
           <div id="listsTable"><div class="empty">加载中…</div></div>
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
             <button class="btn primary" id="btnListsUpdateAll">全部更新</button>
@@ -451,8 +536,9 @@
         <div class="card" style="margin-top:16px">
           <h3>工作原理</h3>
           <p class="muted" style="margin:0">
-            候选 IP = 运行时向本机 mosdns 实时解析目标域名所得的真实 IP + 种子兜底 IP；
-            再对每个候选做 TCP 直连延迟探测，选最低者写入 hosts。
+            候选 IP = 运行时向本机 mosdns 实时解析目标域名得到的 A + AAAA 记录，再加种子兜底 IP；
+            先做 TCP 延迟粗筛，再用真实 HTTPS 请求（SNI / Host 都是目标域名）逐个校验，
+            剔除 Cloudflare 1034、证书不符、5xx 的 IP，最后按延迟取前 N 个写入 hosts。
             全程不依赖任何外部下载或代理，因此不会出现"拉不下来"。
           </p>
         </div>
@@ -551,7 +637,7 @@
     $$(".view").forEach(function(s){ s.classList.remove("active"); });
     var el = document.getElementById("view-" + v);
     if (el) el.classList.add("active");
-    var titles = {overview:"概况",results:"结果",logs:"日志",config:"配置",source:"源"};
+    var titles = {overview:"概况",results:"结果",diag:"诊断",logs:"日志",config:"配置",source:"源"};
     $("#viewTitle").textContent = titles[v] || v;
     clearTimers();
     if (v === "logs") { loadLogs(); state.timers.push(setInterval(loadLogs, 3000)); }
@@ -592,21 +678,45 @@
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
     return (n / 1048576).toFixed(1) + " MB";
   }
+  function routeIps(it){
+    if (it && it.ips && it.ips.length) return it.ips;
+    if (it && it.ip) {
+      return [{ip: it.ip, family: it.ip.indexOf(":") >= 0 ? "v6" : "v4", latency: null}];
+    }
+    return [];
+  }
   function renderRouteCards(results){
     var host = $("#routeCards");
     host.innerHTML = "";
     ROUTES.forEach(function(r){
       var item = results[r] || {};
+      var ips = routeIps(item);
       var div = document.createElement("div");
       div.className = "route-card";
       var top = document.createElement("div"); top.className = "rc-top";
       var name = document.createElement("div"); name.className = "rc-name"; name.textContent = ROUTE_LABEL[r];
-      var led = document.createElement("span"); led.className = "led " + (item.ip ? "ok" : "");
+      var led = document.createElement("span"); led.className = "led " + (ips.length ? "ok" : "");
       top.appendChild(name); top.appendChild(led);
-      var ip = document.createElement("div"); ip.className = "rc-ip"; ip.textContent = item.ip || "—";
+      var ip = document.createElement("div"); ip.className = "rc-ip"; ip.textContent = ips.length ? ips[0].ip : "—";
       var dom = document.createElement("div"); dom.className = "rc-dom"; dom.textContent = item.domain || "";
+      var sub = document.createElement("div"); sub.className = "rc-sub";
+      if (ips.length) {
+        var c = document.createElement("span"); c.textContent = "共 " + ips.length + " 个 IP";
+        sub.appendChild(c);
+        if (ips[0].latency != null) {
+          var l = document.createElement("span"); l.textContent = Math.round(ips[0].latency) + " ms";
+          sub.appendChild(l);
+        }
+        if (ips.some(function(x){ return x.family === "v6"; })) {
+          var t = document.createElement("span"); t.className = "tag v6"; t.textContent = "IPv6";
+          sub.appendChild(t);
+        }
+      }
       var tm = document.createElement("div"); tm.className = "rc-time"; tm.textContent = item.mtime ? fmtTime(item.mtime) : "未优选";
-      div.appendChild(top); div.appendChild(ip); div.appendChild(dom); div.appendChild(tm);
+      div.appendChild(top); div.appendChild(ip);
+      if (item.domain) div.appendChild(dom);
+      if (ips.length) div.appendChild(sub);
+      div.appendChild(tm);
       host.appendChild(div);
     });
   }
@@ -769,18 +879,47 @@
       host.innerHTML = "";
       var t = document.createElement("table");
       var thead = document.createElement("thead");
-      thead.innerHTML = "<tr><th>路</th><th>目标域名</th><th>最优 IP</th><th>更新时间</th></tr>";
+      thead.innerHTML = "<tr><th>路</th><th>目标域名</th><th>优选 IP（按延迟排序）</th><th>更新时间</th></tr>";
       var tbody = document.createElement("tbody");
       ROUTES.forEach(function(r){
         var it = results[r] || {};
+        var ips = routeIps(it);
         var tr = document.createElement("tr");
         var c1 = document.createElement("td"); c1.textContent = ROUTE_LABEL[r];
         var c2 = document.createElement("td"); c2.className = "mono"; c2.textContent = it.domain || "—";
-        var c3 = document.createElement("td"); c3.className = "mono"; c3.textContent = it.ip || "—";
+        var c3 = document.createElement("td"); c3.className = "mono";
+        if (ips.length) {
+          var box = document.createElement("div"); box.className = "iplist";
+          ips.forEach(function(x){
+            var row = document.createElement("div"); row.className = "row";
+            var a = document.createElement("span"); a.textContent = x.ip; row.appendChild(a);
+            if (x.family === "v6") {
+              var t = document.createElement("span"); t.className = "tag v6"; t.textContent = "v6"; row.appendChild(t);
+            }
+            if (x.latency != null) {
+              var l = document.createElement("span"); l.className = "lat"; l.textContent = Math.round(x.latency) + " ms"; row.appendChild(l);
+            }
+            if (x.status && x.status !== "ok") {
+              var st = document.createElement("span");
+              st.className = "tag " + (x.status === "unverified" ? "" : "bad");
+              st.style.color = x.status === "unverified" ? "" : "#e2534b";
+              st.style.borderColor = x.status === "unverified" ? "" : "rgba(226,83,75,.5)";
+              st.textContent = x.status === "unverified" ? "未校验" : x.status;
+              st.title = x.status === "cf1034"
+                ? "Cloudflare 1034：该 IP 无法解析此域名，已降级保留"
+                : "该 IP 未通过 HTTPS 校验";
+              row.appendChild(st);
+            }
+            box.appendChild(row);
+          });
+          c3.appendChild(box);
+        } else {
+          c3.textContent = "—";
+        }
         var c4 = document.createElement("td"); c4.textContent = it.mtime ? fmtTime(it.mtime) : "未优选";
         tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(c3); tr.appendChild(c4);
         c1.dataset.label = "路"; c2.dataset.label = "目标域名";
-        c3.dataset.label = "最优 IP"; c4.dataset.label = "更新时间";
+        c3.dataset.label = "优选 IP"; c4.dataset.label = "更新时间";
         tbody.appendChild(tr);
       });
       t.appendChild(thead); t.appendChild(tbody);
@@ -828,6 +967,16 @@
     if (s.list_update_hours !== undefined && document.activeElement !== $("#cfgListHours")) {
       $("#cfgListHours").value = s.list_update_hours;
     }
+    if (s.top_n !== undefined && document.activeElement !== $("#cfgTopN")) {
+      $("#cfgTopN").value = s.top_n;
+    }
+    if (s.ipv6 !== undefined) { $("#cfgIpv6").checked = !!s.ipv6; }
+    if (s.verify_https !== undefined) { $("#cfgVerify").checked = !!s.verify_https; }
+    if (s.push) {
+      if (document.activeElement !== $("#cfgPushUrl")) $("#cfgPushUrl").value = s.push.url || "";
+      if (document.activeElement !== $("#cfgPushEvents")) $("#cfgPushEvents").value = s.push.events || "";
+      $("#cfgPushOn").checked = !!s.push.enabled;
+    }
     if (s.routes) {
       $$("input[data-route]").forEach(function(cb){
         if (document.activeElement !== cb) cb.checked = !!s.routes[cb.dataset.route];
@@ -864,14 +1013,31 @@
     api("/api/settings", {method:"POST", body:{
       interval_min: parseInt($("#cfgInterval").value, 10) || 60,
       threads: parseInt($("#cfgThreads").value, 10) || 0,
+      top_n: parseInt($("#cfgTopN").value, 10) || 3,
+      ipv6: $("#cfgIpv6").checked,
+      verify_https: $("#cfgVerify").checked,
       list_auto_update: $("#cfgListAuto").checked,
       auto_reload: $("#cfgAutoReload").checked,
       list_update_hours: parseInt($("#cfgListHours").value, 10) || 24,
+      push: {
+        enabled: $("#cfgPushOn").checked,
+        url: $("#cfgPushUrl").value.trim(),
+        events: $("#cfgPushEvents").value.trim()
+      },
       routes: routes
     }}).then(function(res){
       state.settings = res.settings;
       toast("配置已保存");
     }).catch(function(err){ toast("保存失败：" + err.message); });
+  });
+
+  $("#btnPushTest").addEventListener("click", function(){
+    var url = $("#cfgPushUrl").value.trim();
+    if (!url) { toast("先填 Webhook 地址"); return; }
+    toast("正在发送测试…");
+    api("/api/push/test", {method:"POST", body:{url:url}}).then(function(){
+      toast("测试消息已发送");
+    }).catch(function(err){ toast("发送失败：" + err.message); });
   });
 
   function trigger(route){
@@ -884,6 +1050,95 @@
   }
   $("#btnRunAll").addEventListener("click", function(){ trigger("all"); });
   $("#btnRunAll2").addEventListener("click", function(){ trigger("all"); });
+
+  /* ---------- 诊断（每次现查，不做任何缓存） ---------- */
+  function diagLine(box, k, v){
+    var line = document.createElement("div"); line.className = "line";
+    var kk = document.createElement("span"); kk.className = "k"; kk.textContent = k;
+    var vv = document.createElement("span"); vv.className = "v"; vv.textContent = v;
+    line.appendChild(kk); line.appendChild(vv);
+    box.appendChild(line);
+  }
+  function diagFoot(box, fn){
+    var f = document.createElement("div"); f.className = "foot";
+    var t = document.createElement("span");
+    t.textContent = "查询时间 " + new Date().toLocaleTimeString("zh-CN", {hour12:false}) + " · 每次都是现查";
+    var b = document.createElement("button");
+    b.className = "btn"; b.style.padding = "4px 10px"; b.style.fontSize = "12px";
+    b.textContent = "重新查询";
+    b.onclick = function(){ fn(); };
+    f.appendChild(t); f.appendChild(b);
+    box.appendChild(f);
+  }
+
+  function doDiagIp(){
+    var box = $("#diagIpOut"), ip = $("#diagIp").value.trim();
+    if (!ip) { toast("请输入 IP"); return; }
+    box.textContent = "查询中…";
+    api("/api/diag/ip", {method:"POST", body:{ip:ip}}).then(function(d){
+      box.innerHTML = "";
+      if (d.error) { box.textContent = d.error; return; }
+      diagLine(box, "IP", d.ip + (d.version === 6 ? "（IPv6）" : "（IPv4）"));
+      diagLine(box, "归属", d.scope || "-");
+      diagLine(box, "CDN", d.cdn || "不属于已知 CDN 段");
+      diagLine(box, "PTR", d.ptr || "无反查记录");
+      diagFoot(box, doDiagIp);
+    }).catch(function(e){ box.textContent = "查询失败：" + e.message; });
+  }
+
+  function doDiagPort(){
+    var box = $("#diagPortOut");
+    var host = $("#diagHost").value.trim();
+    var port = parseInt($("#diagPort").value, 10) || 443;
+    if (!host) { toast("请输入 IP 或域名"); return; }
+    box.textContent = "检测中…（ICMP 3 包 + TCP 3 次 + UDP 3 次）";
+    api("/api/diag/port", {method:"POST", body:{host:host, port:port}}).then(function(d){
+      box.innerHTML = "";
+      if (d.error) { box.textContent = d.error; return; }
+      diagLine(box, "目标", d.host + " : " + d.port);
+      if (d.icmp) {
+        diagLine(box, "ICMP", d.icmp.recv > 0
+          ? ("通 · " + d.icmp.recv + "/" + d.icmp.sent + " 包 · 平均 " + (d.icmp.rtt_avg == null ? "-" : d.icmp.rtt_avg) + " ms")
+          : "不通（丢包 100%）");
+      } else {
+        diagLine(box, "ICMP", "跳过（需要 root / 原始套接字）");
+      }
+      diagLine(box, "TCP", d.tcp && d.tcp.ok
+        ? ("通 · " + d.tcp.ms + " ms")
+        : ("不通 · " + ((d.tcp && d.tcp.error) || "连接失败")));
+      diagLine(box, "UDP", d.udp && d.udp.ok
+        ? ("可发送 · 已发 " + d.udp.sent + " 次")
+        : ("异常 · " + ((d.udp && d.udp.note) || "发送失败")));
+      diagLine(box, "结论", d.tcp && d.tcp.ok ? "端口可达" : "端口不可达");
+      diagFoot(box, doDiagPort);
+    }).catch(function(e){ box.textContent = "检测失败：" + e.message; });
+  }
+
+  function doDiagDomain(){
+    var box = $("#diagDomainOut"), domain = $("#diagDomain").value.trim();
+    if (!domain) { toast("请输入域名"); return; }
+    box.textContent = "查询中…";
+    api("/api/diag/domain", {method:"POST", body:{domain:domain}}).then(function(d){
+      box.innerHTML = "";
+      if (d.error) { box.textContent = d.error; return; }
+      diagLine(box, "域名", d.domain);
+      diagLine(box, "解析结果", (d.count || 0) + " 个 IP");
+      (d.items || []).forEach(function(it, i){
+        var desc = it.ip + (it.family === "v6" ? "  [v6]" : "");
+        var who = it.cdn || it.scope || "-";
+        var lat = it.latency == null ? "超时" : (it.latency + " ms");
+        diagLine(box, "#" + (i + 1), desc + "  ·  " + who + "  ·  " + lat);
+      });
+      diagFoot(box, doDiagDomain);
+    }).catch(function(e){ box.textContent = "查询失败：" + e.message; });
+  }
+
+  $("#btnDiagIp").addEventListener("click", doDiagIp);
+  $("#btnDiagPort").addEventListener("click", doDiagPort);
+  $("#btnDiagDomain").addEventListener("click", doDiagDomain);
+  $("#diagIp").addEventListener("keydown", function(e){ if (e.key === "Enter") doDiagIp(); });
+  $("#diagHost").addEventListener("keydown", function(e){ if (e.key === "Enter") doDiagPort(); });
+  $("#diagDomain").addEventListener("keydown", function(e){ if (e.key === "Enter") doDiagDomain(); });
 
   /* ---------- 启动 ---------- */
   function boot(){

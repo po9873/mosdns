@@ -70,7 +70,7 @@ fi
 # ---------- 默认设置 ----------
 if [ ! -f "$DATA_DIR/settings.json" ]; then
   cat > "$DATA_DIR/settings.json" <<EOF
-{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true}}
+{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"top_n":3,"ipv6":true,"verify_https":true,"push":{"enabled":false,"url":"","events":"round,warn,login"},"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true}}
 EOF
 fi
 

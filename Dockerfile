@@ -50,6 +50,27 @@ RUN mkdir -p /opt/seed && \
     done; \
     [ "$ok" = "1" ] || echo "warn: china_ip 完整列表未下载，使用内置精简种子"; \
     touch /opt/seed/china_ip.txt
+# CDN 网段库（诊断用）：构建时按官方发布的源合并固化，运行时仍可在线更新
+RUN { : > /opt/seed/cdn_ranges.txt; \
+      for src in "Cloudflare|https://www.cloudflare.com/ips-v4" \
+                 "Cloudflare|https://www.cloudflare.com/ips-v6" \
+                 "Fastly|https://api.fastly.com/public-ip-list"; do \
+        name="${src%%|*}"; url="${src#*|}"; \
+        if curl -fsSL --retry 2 --max-time 60 "$url" -o /tmp/cdn.txt; then \
+          case "$url" in \
+            *public-ip-list*) \
+              python3 -c "import json,sys;d=json.load(open('/tmp/cdn.txt'));[print('$name',c) for c in (d.get('addresses') or [])+(d.get('ipv6_addresses') or [])]" >> /opt/seed/cdn_ranges.txt 2>/dev/null ;; \
+            *) \
+              awk -v n="$name" '/^[0-9a-fA-F:.]+\/[0-9]+$/{print n" "$0}' /tmp/cdn.txt >> /opt/seed/cdn_ranges.txt ;; \
+          esac; \
+        fi; \
+      done; \
+      if curl -fsSL --retry 2 --max-time 60 "https://www.gstatic.com/ipranges/goog.txt" -o /tmp/goog.txt 2>/dev/null; then \
+        awk -F, '/^(ipv4|ipv6),/{gsub(/ /,"",$2); if ($2 ~ /\//) print "Google "$2}' /tmp/goog.txt >> /opt/seed/cdn_ranges.txt; \
+      fi; \
+      n=$(wc -l < /opt/seed/cdn_ranges.txt 2>/dev/null || echo 0); \
+      echo "cdn_ranges 固化: ${n} 条"; \
+      [ "${n:-0}" -ge 20 ] || : > /opt/seed/cdn_ranges.txt }
 
 # ---------- 阶段 3：运行时镜像 ----------
 FROM ${ALPINE_IMAGE}
@@ -67,8 +88,10 @@ WORKDIR /app
 COPY config/      /app/config/
 # 若构建时成功下载了完整 china_ip 列表，则覆盖内置精简种子
 COPY --from=tools /opt/seed/china_ip.txt /tmp/china_ip_full.txt
+COPY --from=tools /opt/seed/cdn_ranges.txt /tmp/cdn_ranges_full.txt
 RUN if [ -s /tmp/china_ip_full.txt ]; then cp /tmp/china_ip_full.txt /app/config/china_ip.txt; fi \
-    && rm -f /tmp/china_ip_full.txt
+    && if [ -s /tmp/cdn_ranges_full.txt ]; then cp /tmp/cdn_ranges_full.txt /app/config/cdn_ranges.txt; fi \
+    && rm -f /tmp/china_ip_full.txt /tmp/cdn_ranges_full.txt
 COPY scheduler/   /app/scheduler/
 COPY ui/          /app/ui/
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

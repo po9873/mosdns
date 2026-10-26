@@ -26,7 +26,7 @@ maybe_update_lists() {
 }
 
 run_all() {
-  local r en fp
+  local r en fp ok=0 bad=0 names="" rc
   fp=$(file_sig "$PREF_DIR/all.hosts")
   for r in $ROUTES; do
     en=$(setting "routes.$r")
@@ -35,10 +35,19 @@ run_all() {
       *) log "跳过 $r（已在配置中关闭）"; continue ;;
     esac
     log "== 开始 $r 路 =="
-    "/app/scheduler/${r}_pref.sh" || log "$r 路未选出结果"
+    "/app/scheduler/${r}_pref.sh"
+    rc=$?
+    if [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; then
+      ok=$((ok + 1))
+      names="$names $r"
+    else
+      bad=$((bad + 1))
+      log "$r 路未选出结果"
+    fi
   done
   # 五路全部跑完，只在这里判断一次是否需要重载
   reload_if_changed "$fp"
+  notify "round" "五路优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。"
 }
 
 once_mode() {
