@@ -146,10 +146,22 @@
   .srcrow .u4,.srcrow .u6{width:100%;margin-top:6px;font-size:12px}
   .srcnum{font-size:11.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace}
   .srcnum b{color:var(--text);font-weight:600}
-  .poolgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .poolgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
   .poolcell{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--panel2)}
   .poolcell .n{font-size:20px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
   .poolcell .l{font-size:11.5px;color:var(--muted);margin-top:3px}
+  /* 这个池子的数到底由哪几个源给的：一行一个源，名字 + 数量 */
+  .poolsrc{margin-top:8px;padding-top:7px;border-top:1px dashed var(--border)}
+  .poolsrc .h{font-size:10.5px;color:var(--muted);letter-spacing:.04em;margin-bottom:3px}
+  .poolsrc .r{display:flex;align-items:flex-start;gap:8px;font-size:11px;line-height:1.5;color:var(--text)}
+  .poolsrc .r i{flex:1;min-width:0;font-style:normal;white-space:normal;word-break:break-word;color:var(--muted)}
+  .poolsrc .r b{font-weight:600;line-height:1.5;font-family:ui-monospace,Menlo,Consolas,monospace;flex:none}
+  .poolsrc .r.gone i{color:#e2534b}
+  .poolsrc .r.feed i{color:var(--blue)}
+  .poolsrc .more{font-size:11px;color:var(--muted);margin-top:2px}
+  .delbox{border:1px solid rgba(226,83,75,.35);border-radius:10px;padding:8px 10px;background:rgba(226,83,75,.06)}
+  .delbox .r{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:1.7;flex-wrap:wrap}
+  .delbox .r i{flex:1;min-width:120px;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tag.official{color:var(--blue);border-color:rgba(59,142,234,.5)}
   .tag.third{color:var(--amber);border-color:rgba(192,125,26,.5)}
   .tag.mirror{color:var(--muted)}
@@ -652,10 +664,21 @@
             <span class="muted" id="hlNext" style="font-size:12px"></span>
             <button class="btn" id="btnSrcHealth" style="margin-left:auto">立即体检</button>
           </div>
+
+          <div class="rowline">
+            <label class="chk" title="开着：连续失败的源直接删掉，列表里不留废源；关掉：只停用，等它自己恢复">
+              <input type="checkbox" id="adOn"> 失效自动删除
+            </label>
+            <span class="muted" id="adHint" style="font-size:12px"></span>
+            <button class="btn" id="btnSrcGc">立即清理失效源</button>
+            <button class="btn" id="btnSrcRestore" style="margin-left:auto">恢复内置源</button>
+          </div>
           <p class="muted" style="margin:0 0 12px;font-size:12px">
             体检会逐个拉一次所有源（不只启用中的）。官方源失败只标红——它是权威定义，多半只是临时断网；
-            第三方/镜像源连续失败 3 次自动停用，避免每轮白等超时，恢复后手动勾回即可。
+            第三方/镜像源连续失败 <span id="adCnt">3</span> 次就按上面的开关处理：删除（默认）或只停用。
+            删掉的源会从候选池里一并带走它还没验证过的 IP，已验证过、实测能通的 IP 保留。
           </p>
+          <div id="srcDeleted" hidden style="margin:0 0 12px"></div>
 
           <div class="rowline" style="align-items:flex-start">
             <label class="grow">源订阅（一行一个清单地址，同步进来的源默认不启用）
@@ -1287,6 +1310,7 @@
   function loadSources(){
     api("/api/sources").then(function(d){
       SRC.data = d;
+      SRC.since = Math.floor(Date.now() / 1000);
       $("#proxyBox").value = d.proxy || "";
       $("#subBox").value = (d.subs || []).join("\n");
       var pull = d.pull || {};
@@ -1308,6 +1332,12 @@
         : "已关闭";
       var hl = d.health || {};
       if ($("#hlOn")) $("#hlOn").checked = !!hl.enabled;
+      if ($("#adOn")) $("#adOn").checked = d.auto_delete !== false;
+      if ($("#adCnt")) $("#adCnt").textContent = d.auto_disable_after || 3;
+      if ($("#adHint")) {
+        $("#adHint").textContent = (d.auto_delete !== false)
+          ? "连续失败的源会被删掉" : "连续失败的源只停用，留在列表里";
+      }
       if ($("#hlNext")) {
         var hb = hl.last_bad;
         $("#hlNext").textContent = hl.enabled
@@ -1316,6 +1346,7 @@
           : "已关闭";
       }
       renderSources();
+      renderDeleted(d);
       renderPool(d.pools || {});
       renderSwaps(d.events || []);
     }).catch(function(e){
@@ -1326,21 +1357,46 @@
     var N = {cf:"Cloudflare", google:"Google", gt:"翻译", github:"GitHub", ghcr:"ghcr"};
     $("#poolStat").innerHTML = ROUTES.map(function(r){
       var p = pools[r] || {};
-      var bs = p.by_src || {};
-      var parts = [];
-      if (bs.sub) parts.push("订阅 " + bs.sub);
-      if (bs.dns) parts.push("解析 " + bs.dns);
-      if (bs.seed) parts.push("种子 " + bs.seed);
-      var srcLine = parts.length
-        ? '<div class="l">' + parts.join(" · ") + "</div>"
-        : '<div class="l">还没有候选，跑一轮优选或拉取源</div>';
+      var rows = p.by_source || [];
+      var show = rows.slice(0, 6);
+      var list = show.map(function(s){
+        var cls = s.gone ? " gone" : (s.kind === "feed" ? " feed" : "");
+        return '<div class="r' + cls + '" title="' + escH((s.key || "") + " · " + (s.kind || "")) + '">' +
+          "<i>" + escH(s.name || s.key) + "</i><b>" + (s.n || 0) + "</b></div>";
+      }).join("");
+      if (rows.length > show.length) {
+        list += '<div class="more">另有 ' + (rows.length - show.length) + " 个源，共 " +
+          rows.slice(show.length).reduce(function(a, x){ return a + (x.n || 0); }, 0) + " 个 IP</div>";
+      }
+      var srcBox = rows.length
+        ? '<div class="poolsrc"><div class="h">来源明细</div>' + list + "</div>"
+        : '<div class="poolsrc"><div class="h">来源明细</div>' +
+          '<div class="r"><i>还没有候选，跑一轮优选或拉取源</i></div></div>';
       return '<div class="poolcell">' +
         '<div class="n">' + (p.total || 0) + "</div>" +
         '<div class="l">' + (N[r] || r) + " · v4 " + (p.v4 || 0) + " / v6 " + (p.v6 || 0) + "</div>" +
         '<div class="l">已验证 ' + (p.verified || 0) + " · 已拉黑 " + (p.blocked || 0) + "</div>" +
-        srcLine +
+        srcBox +
       "</div>";
     }).join("");
+  }
+  /* 已自动清理的源：删了也要能查、能找回 */
+  function renderDeleted(d){
+    var box = $("#srcDeleted");
+    var rows = d.deleted || [];
+    if (!box) return;
+    if (!rows.length) { box.hidden = true; box.innerHTML = ""; return; }
+    box.hidden = false;
+    box.className = "delbox";
+    box.innerHTML = '<div class="h" style="font-size:11.5px;color:#e2534b;margin-bottom:4px">' +
+      "已自动清理的源（" + rows.length + " 个，不再参与拉取）</div>" +
+      rows.slice(0, 8).map(function(x){
+        return '<div class="r"><i title="' + escH(x.url_v4 || x.url_v6 || "") + '">' +
+          escH(x.name || x.key) + "</i>" +
+          '<span class="muted" style="font-size:11px">' + escH(x.why || "") + " · " + fmtAgo(x.ts) + "</span></div>";
+      }).join("") +
+      '<div class="muted" style="font-size:11px;margin-top:4px">' +
+      "内置源被删掉后，点「恢复内置源」可以找回来</div>";
   }
   function renderSwaps(evs){
     var box = $("#swapList");
@@ -1380,6 +1436,9 @@
       last: hlCur.last || 0,
       last_bad: hlCur.last_bad || 0
     };
+    // since = 本次页面加载时间：之后被系统自动删掉的源，不会被浏览器里的旧列表写回来
+    payload.since = SRC.since || 0;
+    payload.auto_delete = $("#adOn") ? $("#adOn").checked : true;
     if (extra) Object.keys(extra).forEach(function(k){ payload[k] = extra[k]; });
     return api("/api/sources", {method:"POST", body: JSON.stringify(payload)});
   }
@@ -1478,13 +1537,40 @@
     toast("正在逐个检查所有源，源多时可能要一分钟…");
     api("/api/sources/health", {method:"POST"}).then(function(r){
       if (r && r.skipped) { toast("体检未启用或未到时间"); return; }
-      var bad = r.bad || 0, dis = r.auto_disabled || 0;
+      var bad = r.bad || 0, dis = r.auto_disabled || 0, rmv = r.removed || 0;
       toast("体检完成：检查 " + (r.checked || 0) + " 个，可用 " + (r.good || 0) +
             " 个" + (bad ? "，失效 " + bad + " 个" : "") +
-            (dis ? "（已自动停用 " + dis + " 个）" : ""));
+            (rmv ? "（已删除 " + rmv + " 个失效源）" : (dis ? "（已停用 " + dis + " 个）" : "")));
       loadSources();
     }).catch(function(err){ toast("体检失败：" + err.message); })
       .then(function(){ b.disabled = false; b.textContent = "立即体检"; });
+  });
+  $("#adOn").addEventListener("change", function(){
+    saveSources().then(function(){
+      toast($("#adOn").checked ? "已开启：失效源直接删除" : "已关闭：失效源只停用");
+      loadSources();
+    }).catch(function(err){ toast("保存失败：" + err.message); });
+  });
+  $("#btnSrcGc").addEventListener("click", function(){
+    var b = $("#btnSrcGc");
+    b.disabled = true; b.textContent = "清理中…";
+    api("/api/sources/gc", {method:"POST"}).then(function(r){
+      var n = (r && r.removed) || 0, st = (r && r.stopped) || 0;
+      toast(n ? ("已删除 " + n + " 个失效源" + (r.purged ? "，带走 " + r.purged + " 个未验证 IP" : ""))
+              : (st ? ("已停用 " + st + " 个失效源") : "没有需要清理的失效源"));
+      loadSources();
+    }).catch(function(err){ toast("清理失败：" + err.message); })
+      .then(function(){ b.disabled = false; b.textContent = "立即清理失效源"; });
+  });
+  $("#btnSrcRestore").addEventListener("click", function(){
+    var b = $("#btnSrcRestore");
+    b.disabled = true; b.textContent = "恢复中…";
+    api("/api/sources/restore", {method:"POST", body:{}}).then(function(r){
+      var n = (r && (r.added || []).length) || 0;
+      toast(n ? ("已补回 " + n + " 个内置源，记得点「全部拉取」") : "内置源都在，无需补回");
+      loadSources();
+    }).catch(function(err){ toast("恢复失败：" + err.message); })
+      .then(function(){ b.disabled = false; b.textContent = "恢复内置源"; });
   });
   $("#hlOn").addEventListener("change", function(){
     saveSources().then(function(){ toast("体检设置已保存"); loadSources(); })

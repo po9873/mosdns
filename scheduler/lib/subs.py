@@ -20,6 +20,9 @@
   pull-if-due              到点才拉（供调度器每轮调用）
   sync                     拉「源订阅」清单，把里面的新源同步进来（默认不启用）
   discover [--force]       扫描：把从没测过 / 上次失败的源挨个试一遍
+  health [--force]         体检：所有源挨个拉一次，连续失败的第三方源直接删除
+  gc                       立刻清理失效源（不等体检时间）
+  restore [KEY...]         把删掉的内置源补回来
   pool ROUTE [N]           池内候选（已过滤黑名单）
   take ROUTE [N]           同 pool，已验证优先 + 新 IP 配额
   bump-many ROUTE          stdin: "IP ok|fail"
@@ -116,6 +119,8 @@ DEFAULT_DISC = {"enabled": False, "cycle": "daily", "hour": 4, "last": 0, "found
 # 源体检：默认每天一次。官方源失败只标红，第三方连续失败这么多次就自动停用
 DEFAULT_HEALTH = {"enabled": True, "cycle": "daily", "hour": 5, "last": 0, "last_bad": 0}
 AUTO_DISABLE_AFTER = _int("PREF_SRC_DISABLE_AFTER", 3)
+# 失效源处理：1=直接删除（默认，界面上不留垃圾源），0=只停用、留在列表里等它恢复
+AUTO_DELETE_BAD = _int("PREF_SRC_AUTO_DELETE", 1)
 
 
 # ---------------------------------------------------------------- 读写
@@ -155,6 +160,13 @@ def load_src():
 
 def save_src(d):
     jsave(SRC_FILE, d)
+
+
+def auto_delete(d=None):
+    """失效源是否直接删除：页面上的开关优先，没设置过就看环境变量。"""
+    if isinstance(d, dict) and "auto_delete" in d:
+        return bool(d["auto_delete"])
+    return bool(AUTO_DELETE_BAD)
 
 
 def pool_file(route):
@@ -494,6 +506,101 @@ def cmd_add(name, u4, u6=""):
     return {"ok": True, "key": key}
 
 
+def _purge_pool_src(keys):
+    """源没了，把它带进池子、但还没验证通过的 IP 一起清掉。
+
+    已验证过（ok>0）的 IP 留着——它在实测里是通的，源挂了 IP 照样能用。
+    """
+    if not keys:
+        return 0
+    n = 0
+    for rt in ROUTES:
+        pool = load_pool(rt)
+        b = pool["ips"]
+        gone = [ip for ip, v in b.items()
+                if str(v.get("s", "")) in keys and int(v.get("ok", 0)) == 0]
+        for ip in gone:
+            b.pop(ip, None)
+        if gone:
+            save_pool(rt, pool)
+            n += len(gone)
+    return n
+
+
+def _drop_sources(d, keys, why):
+    """从源清单里移除若干源，记进 deleted 历史（可查、可一键恢复内置源）。"""
+    keys = {k for k in keys if k}
+    if not keys:
+        return 0
+    gone = [it for it in d["items"] if it.get("key") in keys]
+    if not gone:
+        return 0
+    d["items"] = [it for it in d["items"] if it.get("key") not in keys]
+    now = int(time.time())
+    hist = d.get("deleted")
+    if not isinstance(hist, list):
+        hist = []
+    for it in gone:
+        hist.insert(0, {"key": it.get("key"), "name": it.get("name"),
+                        "kind": it.get("kind"), "route": it.get("route", "cf"),
+                        "url_v4": it.get("url_v4", ""), "url_v6": it.get("url_v6", ""),
+                        "ts": now, "why": why})
+    d["deleted"] = hist[:40]
+    return len(gone)
+
+
+def cmd_gc():
+    """清理失效源：连续失败达到阈值的非官方源立刻处理（含已停用的）。
+
+    和 health 里的自动处理是同一套规则，区别是这里不看体检时间、立刻执行。
+    开关「失效自动删除」开着就删掉，关掉就只停用。
+    """
+    d = load_src()
+    adv = auto_delete(d)
+    keys, stopped = [], 0
+    for it in d["items"]:
+        if it.get("kind") == "official":
+            continue
+        h = it.get("health") or {}
+        if int(h.get("fails", 0)) < AUTO_DISABLE_AFTER:
+            continue
+        if adv:
+            keys.append(it.get("key"))
+        elif it.get("enabled", True):
+            it["enabled"] = False
+            h["auto_disabled"] = int(time.time())
+            stopped += 1
+    n = _drop_sources(d, keys, "连续失败 %d 次" % AUTO_DISABLE_AFTER)
+    save_src(d)
+    return {"ok": True, "removed": n, "stopped": stopped, "keys": keys,
+            "purged": _purge_pool_src(set(keys))}
+
+
+def cmd_restore(keys=None):
+    """把被删掉的内置源补回来（第三方/镜像也能找回，官方源一定补）。"""
+    d = load_src()
+    have = {it.get("key") for it in d["items"]}
+    want = {k for k in (keys or []) if k}
+    added = []
+    for p in PRESETS:
+        if p["key"] in have:
+            continue
+        if want and p["key"] not in want:
+            continue
+        d["items"].append({
+            "key": p["key"], "name": p["name"], "note": p.get("note", ""),
+            "kind": p["kind"], "url_v4": p["url_v4"], "url_v6": p["url_v6"],
+            "enabled": p.get("enabled", True), "route": p.get("route", "cf"),
+            "last_fetch": 0, "last_test": None, "status": "",
+        })
+        added.append(p["key"])
+    if added:
+        hist = [h for h in (d.get("deleted") or []) if h.get("key") not in set(added)]
+        d["deleted"] = hist
+        save_src(d)
+    return {"ok": True, "added": added}
+
+
 def cmd_del(key):
     d = load_src()
     n = len(d["items"])
@@ -501,7 +608,7 @@ def cmd_del(key):
     if len(d["items"]) == n:
         return {"ok": False, "error": "源不存在"}
     save_src(d)
-    return {"ok": True}
+    return {"ok": True, "purged": _purge_pool_src({key})}
 
 
 def cmd_enable(key, on):
@@ -518,9 +625,15 @@ def cmd_save(payload):
     """保存全部：覆盖 items / subs / proxy / 定时配置（保留未提交的 last_test）。"""
     d = load_src()
     old = {it.get("key"): it for it in d["items"]}
+    # 页面加载之后被系统自动删掉的源，别被浏览器里的旧列表又写回来
+    since = int(payload.get("since") or 0)
+    dead = {h.get("key") for h in (d.get("deleted") or [])
+            if int(h.get("ts", 0)) > since}
     items = []
     for it in (payload.get("items") or []):
         key = it.get("key") or ("custom-%d" % int(time.time() * 1000))
+        if key in dead:
+            continue
         prev = old.get(key, {})
         items.append({
             "key": key,
@@ -549,6 +662,8 @@ def cmd_save(payload):
         d["discover"] = {**d["discover"], **payload["discover"]}
     if isinstance(payload.get("health"), dict):
         d["health"] = {**d["health"], **payload["health"]}
+    if "auto_delete" in payload:
+        d["auto_delete"] = bool(payload["auto_delete"])
     save_src(d)
     return {"ok": True, "items": len(d["items"])}
 
@@ -676,7 +791,8 @@ def cmd_health(force=False, only=None):
       health   = 定期复检「所有」源，包括一直正常的，目的是及时发现挂掉的源
 
     官方源（kind=official）失败只标记不改状态——它是权威定义，可能只是临时断网；
-    第三方/镜像源连续失败 AUTO_DISABLE_AFTER 次会自动停用，避免每轮白等超时。
+    第三方/镜像源连续失败 AUTO_DISABLE_AFTER 次：默认直接删掉（不留废源），
+    把 PREF_SRC_AUTO_DELETE 设为 0 则只停用保留。
     """
     d = load_src()
     now = int(time.time())
@@ -686,6 +802,8 @@ def cmd_health(force=False, only=None):
 
     checked = good = bad = disabled = 0
     results = []
+    drop = {}
+    adv = auto_delete(d)
     for it in d["items"]:
         if only and it.get("key") != only:
             continue
@@ -700,31 +818,48 @@ def cmd_health(force=False, only=None):
             good += 1
             h["fails"] = 0
             h["ok"] = True
+            h.pop("auto_disabled", None)
         else:
             bad += 1
             h["fails"] = int(h.get("fails", 0)) + 1
             h["ok"] = False
             h["error"] = (r.get("errors") or [""])[0][:100]
-            # 第三方源连续失败就停用；官方源只标红
-            if it.get("kind") != "official" and h["fails"] >= AUTO_DISABLE_AFTER \
-                    and it.get("enabled", True):
-                it["enabled"] = False
-                h["auto_disabled"] = now
-                disabled += 1
+            # 非官方源连续失败到阈值：默认删除，避免列表里堆一堆死源
+            if it.get("kind") != "official" and h["fails"] >= AUTO_DISABLE_AFTER:
+                del_it = adv or not it.get("enabled", True)
+                if del_it:
+                    h["auto_disabled"] = now
+                    drop[it.get("key")] = {
+                        "key": it.get("key"), "name": it.get("name"),
+                        "kind": it.get("kind"), "route": it.get("route", "cf"),
+                        "url_v4": it.get("url_v4", ""), "url_v6": it.get("url_v6", ""),
+                        "ts": now, "why": "连续失败 %d 次" % h["fails"],
+                    }
+                    disabled += 1
+                elif it.get("enabled", True):
+                    it["enabled"] = False
+                    h["auto_disabled"] = now
+                    disabled += 1
         results.append({
             "key": it.get("key"), "name": it.get("name"),
             "kind": it.get("kind"), "ok": bool(r.get("ok")),
             "v4": r.get("v4", 0), "v6": r.get("v6", 0),
             "fails": h["fails"], "was_alive": alive,
             "disabled": not it.get("enabled", True),
+            "deleted": it.get("key") in drop,
             "error": h.get("error", "") if not r.get("ok") else "",
         })
 
+    removed = 0
+    if drop:
+        removed = _drop_sources(d, set(drop), "连续失败 %d 次" % AUTO_DISABLE_AFTER)
     d["health"]["last"] = now
     d["health"]["last_bad"] = bad
     save_src(d)
+    purged = _purge_pool_src(set(drop)) if drop else 0
     return {"ok": True, "checked": checked, "good": good, "bad": bad,
-            "auto_disabled": disabled, "results": results,
+            "auto_disabled": disabled, "removed": removed, "purged": purged,
+            "results": results,
             "next": _next_ts(d["health"], now, now)}
 
 
@@ -886,6 +1021,7 @@ def cmd_prune(route=""):
 
 
 SRC_LABEL = {"sub": "订阅", "dns": "解析", "seed": "种子"}
+FEED_LABEL = {"dns": "DNS 实时解析", "seed": "种子 / 兜底地址", "verify": "优选验证通过"}
 
 
 def _src_split(ips):
@@ -899,6 +1035,43 @@ def _src_split(ips):
         key = s0 if s0 in SRC_LABEL else "sub"
         out[key] = out.get(key, 0) + 1
     return out
+
+
+def _src_detail(ips, items, deleted=None):
+    """按具体源名统计池内 IP：这一池子的数到底是哪几个源给的。
+
+    池里每条 IP 的 s = 源 key（订阅源），或 feed:dns / feed:seed（非订阅来源）。
+    源被删掉后它的 IP 会短暂指向已不存在的 key，这里标成 gone（前端标红），
+    名字从删除历史里找回来，显示成「原名（已删除）」。
+    """
+    by_key = {it.get("key"): it for it in items}
+    hist = {h.get("key"): h for h in (deleted or [])}
+    tally = {}
+    for v in ips.values():
+        s = str(v.get("s") or "")
+        if s.startswith("feed:"):
+            k = s[5:]
+        elif s:
+            k = s
+        else:
+            k = "unknown"
+        tally[k] = tally.get(k, 0) + 1
+    rows = []
+    for k, n in tally.items():
+        it = by_key.get(k)
+        if it:
+            rows.append({"key": k, "name": it.get("name") or k,
+                         "kind": it.get("kind") or "custom", "n": n, "gone": False})
+        elif k in FEED_LABEL:
+            rows.append({"key": k, "name": FEED_LABEL[k], "kind": "feed",
+                         "n": n, "gone": False})
+        else:
+            h = hist.get(k) or {}
+            nm = h.get("name") or k
+            rows.append({"key": k, "name": "%s（已删除）" % nm, "kind": "gone",
+                         "n": n, "gone": True})
+    rows.sort(key=lambda r: (-r["n"], r["name"]))
+    return rows
 
 
 def cmd_status():
@@ -922,6 +1095,8 @@ def cmd_status():
             # 来源拆分：订阅(sub) / DNS 实时解析(dns) / 种子(seed)
             # 让用户看得清「这个池子的数是从哪来的」
             "by_src": _src_split(ips),
+            # 再细一层：具体哪个源给了多少（用户要看「到底是什么源」）
+            "by_source": _src_detail(ips, d["items"], d.get("deleted")),
         }
     ev = jload(EVENT_FILE, {"events": []})
     return {
@@ -932,6 +1107,8 @@ def cmd_status():
         "discover": {**d["discover"], "next": _next_ts(d["discover"], d["discover"].get("last", 0), now)},
         "health": {**d["health"], "next": _next_ts(d["health"], d["health"].get("last", 0), now)},
         "auto_disable_after": AUTO_DISABLE_AFTER,
+        "auto_delete": auto_delete(d),
+        "deleted": (d.get("deleted") or [])[:20],
         "pools": pools,
         "bad": [{"ip": k, **v} for k, v in sorted(active.items(),
                                                   key=lambda kv: -int(kv[1].get("ts", 0)))],
@@ -991,6 +1168,14 @@ def main():
 
     if cmd == "del":
         print(json.dumps(cmd_del(a[0]) if a else {"ok": False}, ensure_ascii=False))
+        return 0
+
+    if cmd == "gc":
+        print(json.dumps(cmd_gc(), ensure_ascii=False))
+        return 0
+
+    if cmd == "restore":
+        print(json.dumps(cmd_restore(a), ensure_ascii=False))
         return 0
 
     if cmd == "enable":

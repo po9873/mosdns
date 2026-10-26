@@ -786,6 +786,16 @@ class Handler(BaseHTTPRequestHandler):
             r = run_subs(["prune"], timeout=60)
             return self._send(200, r)
 
+        if path == "/api/sources/gc":
+            # 立即清理：连续失败到阈值的第三方源直接删掉，同时清掉它没验证过的 IP
+            r = run_subs(["gc"], timeout=90)
+            return self._send(200, r)
+
+        if path == "/api/sources/restore":
+            keys = self._body().get("keys") or []
+            r = run_subs(["restore"] + [str(k) for k in keys], timeout=60)
+            return self._send(200, r)
+
         if path == "/api/reload":
             try:
                 subprocess.run([SCHEDULER, "reload"], capture_output=True, timeout=20)
