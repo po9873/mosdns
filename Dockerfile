@@ -16,7 +16,11 @@ ARG MOSDNS_VERSION
 ENV GOPROXY=https://proxy.golang.org,direct
 RUN apk add --no-cache git ca-certificates
 WORKDIR /build
-RUN go install github.com/IrineSistiana/mosdns/v5@${MOSDNS_VERSION}
+# 不能用 go install pkg@version：mosdns 的 go.mod 含 replace 指令，Go 不允许
+# 以「非主模块」方式安装这类包。改为克隆源码、以主模块身份 go build，replace 才生效。
+RUN git clone --depth 1 --branch ${MOSDNS_VERSION} https://github.com/IrineSistiana/mosdns.git /build/mosdns \
+    && cd /build/mosdns \
+    && go build -trimpath -o /go/bin/mosdns .
 
 # ---------- 阶段 2：可选测速工具（失败不阻断，脚本会自动回退纯脚本探测）----------
 FROM ${ALPINE_IMAGE} AS tools
