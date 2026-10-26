@@ -1,8 +1,9 @@
 #!/bin/bash
 # ============================================================
 # 公共函数库（被 entrypoint 与五路优选脚本 source）
-# 设计原则：运行时零外网下载；候选 IP 靠向 mosdns 实时查询，
-#           延迟靠纯 TCP 直连探测；不依赖任何外部二进制或代理。
+# 设计原则：运行时零外网下载；候选 IP 靠向 mosdns 实时查询 +
+#           订阅池 + 种子兜底；延迟靠纯 TCP 直连探测；
+#           真实 HTTPS 校验，1034 一出现就换 IP，绝不降级使用坏 IP。
 # ============================================================
 
 DATA_DIR="${PREF_DATA_DIR:-/data}"
@@ -11,6 +12,8 @@ SETTINGS_FILE="$DATA_DIR/settings.json"
 MOSDNS_PID_FILE="$DATA_DIR/mosdns.pid"
 LOCK_DIR="$DATA_DIR/.pref.lock"
 SELF_DIR="/app/scheduler"
+SUB_PY="$SELF_DIR/lib/subs.py"
+BAD_TTL_H="${PREF_BAD_TTL_HOURS:-6}"
 
 log() {
   local m
@@ -99,12 +102,18 @@ first_domain() {
   awk '!/^[[:space:]]*#/ && NF {print; exit}' "$1" 2>/dev/null
 }
 
+# 种子里所有域名（用于全部解析，而不是只解析第一个）
+seed_domains() {
+  awk '!/^[[:space:]]*#/ && NF {print $1}' "$1" 2>/dev/null | grep -E '\.[a-zA-Z]{2,}$'
+}
+
+# 种子里写死的兜底 IP（v4 / v6 都认）
 fallback_ips() {
-  awk '!/^[[:space:]]*#/ && NF && $0 !~ /[a-zA-Z]/ {print}' "$1" 2>/dev/null
+  awk '!/^[[:space:]]*#/ && NF {print $1}' "$1" 2>/dev/null \
+    | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^[0-9a-fA-F:]+$'
 }
 
 # 向本机 mosdns 查询（不依赖系统 resolv.conf，避免自解析循环）
-# $3 = A / AAAA / ALL
 resolve_ips() {
   local domain="$1" port="${2:-${PREF_DNS_PORT:-53}}" qtype="${3:-A}"
   [ -z "$port" ] && port="${PREF_DNS_PORT:-53}"
@@ -120,15 +129,33 @@ probe_top() {
     | head -n "$n"
 }
 
-# 兼容旧调用：只要第一个 IP
 probe_best() {
   probe_top "$1" "${2:-443}" "${3:-4}" "${4:-3}" 1 | awk 'NR==1{print $1}'
 }
 
+# 从候选里排除已经试过的一批
+exclude_ips() {
+  local all="$1" drop="$2" a b
+  a=$(mktemp); b=$(mktemp)
+  printf '%s\n' "$all" | awk 'NF{print $1}' | sort -u > "$a"
+  printf '%s\n' "$drop" | awk 'NF{print $1}' | sort -u > "$b"
+  comm -23 "$a" "$b" 2>/dev/null
+  rm -f "$a" "$b"
+}
+
+# ---------- 订阅池 / 黑名单 ----------
+sub_cli() {
+  python3 "$SUB_PY" "$@" 2>/dev/null
+}
+
+# stdin 过滤掉黑名单里的 IP
+filter_bad_ips() {
+  sub_cli filter
+}
+
 # ---------- 结果落盘 ----------
-# mosdns hosts 文件格式：每行「域名 ip1 ip2 ...」，域名必须在第一位，
+# mosdns hosts 格式：每行「域名 ip1 ip2 ...」，域名必须在第一位，
 # 后面可跟任意多个 IP（v4/v6 可混在同一行，引擎会自动按查询类型分开应答）。
-# 同时写一个 <route>.meta 记录延迟，供控制台展示。
 write_route() {
   local route="$1" domain="$2"
   shift 2
@@ -147,6 +174,7 @@ write_route() {
   printf '%s\n' "$pairs" > "$PREF_DIR/$route.meta"
   merge_hosts
 }
+
 merge_hosts() {
   cat "$PREF_DIR"/*.hosts 2>/dev/null | awk 'NF' | sort -u > "$PREF_DIR/all.hosts.tmp"
   mv "$PREF_DIR/all.hosts.tmp" "$PREF_DIR/all.hosts"
@@ -165,7 +193,6 @@ reload_mosdns() {
   return 1
 }
 
-# 文件指纹（用于判断这轮优选结果是否真的变了）
 file_sig() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" 2>/dev/null | awk '{print $1}'
@@ -175,7 +202,6 @@ file_sig() {
 }
 
 # 只有内容真的变化（或清单被更新）才重启；否则一次都不重启。
-# 一轮五路跑完只调用一次，绝不会"每路重启一次"。
 reload_if_changed() {
   local before="$1" after
   case "$(setting auto_reload)" in
@@ -194,8 +220,81 @@ reload_if_changed() {
   fi
 }
 
+# ---------- 换 IP：立即止血 ----------
+# 把坏 IP 从「当前正在生效」的 hosts 里立刻摘掉并重载，
+# 不等本轮优选跑完，也不等下一个周期。
+purge_bad_from_hosts() {
+  local route="$1"; shift
+  [ "$#" -eq 0 ] && return 0
+  local hf="$PREF_DIR/$route.hosts" tmp left
+  [ -f "$hf" ] || return 0
+  tmp="$hf.purge"
+  python3 - "$hf" "$tmp" "$@" <<'PY'
+import sys
+hf, tmp = sys.argv[1], sys.argv[2]
+bad = set(sys.argv[3:])
+out = []
+try:
+    lines = open(hf, encoding="utf-8").read().splitlines()
+except Exception:
+    lines = []
+for ln in lines:
+    parts = ln.split()
+    if not parts:
+        continue
+    keep = [x for x in parts[1:] if x not in bad]
+    if keep:
+        out.append(" ".join([parts[0]] + keep))
+open(tmp, "w", encoding="utf-8").write("\n".join(out) + ("\n" if out else ""))
+PY
+  left=$(awk 'NF' "$tmp" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${left:-0}" -gt 0 ]; then
+    mv "$tmp" "$hf"
+    merge_hosts
+    log "$route: 立即撤下坏 IP（$*），保留剩余 $left 条记录继续服务"
+    reload_mosdns
+    return 0
+  fi
+  rm -f "$tmp" "$hf" 2>/dev/null
+  merge_hosts
+  log "$route: 该路 IP 全部不可用，已撤下 hosts（域名回退上游解析），等待补位"
+  reload_mosdns
+  return 2
+}
+
+# 每路状态（供控制台展示：选了什么、拒了什么、为什么）
+write_state() {
+  local route="$1" domain="$2" status="$3" sel="$4" rej="$5" dns="$6" seed="$7" sub="$8"
+  python3 - "$PREF_DIR/$route.state.json" "$route" "$domain" "$status" \
+           "$sel" "$rej" "$dns" "$seed" "$sub" <<'PY' 2>/dev/null
+import json, os, sys, time
+path, route, domain, status, sel, rej, dns, seed, sub = sys.argv[1:10]
+def sel_lines(s):
+    out = []
+    for ln in (s or "").splitlines():
+        p = ln.split()
+        if len(p) >= 2:
+            out.append({"ip": p[0], "ms": p[1], "verify": p[2] if len(p) > 2 else ""})
+    return out
+def rej_lines(s):
+    out = []
+    for ln in (s or "").splitlines():
+        p = ln.split()
+        if len(p) >= 2:
+            out.append({"ip": p[0], "reason": p[1]})
+    return out
+obj = {
+    "route": route, "domain": domain, "status": status, "ts": int(time.time()),
+    "selected": sel_lines(sel), "rejected": rej_lines(rej),
+    "source": {"dns": int(dns or 0), "seed": int(seed or 0), "pool": int(sub or 0)},
+}
+tmp = path + ".tmp"
+open(tmp, "w", encoding="utf-8").write(json.dumps(obj, ensure_ascii=False))
+os.replace(tmp, path)
+PY
+}
+
 # ---------- 消息推送（企业微信 / 钉钉 / 飞书 机器人）----------
-# 事件类型：round(每轮完成) / warn(失败或降级) / login(登录提醒) / daily(日报)
 notify() {
   local ev="$1" title="$2" body="$3"
   case "$(setting push.enabled)" in
@@ -219,10 +318,12 @@ notify() {
 }
 
 # ---------- 单路优选主流程 ----------
-# 每路保留 top_n 个最优 IP（v4/v6 各自排），一次写入 hosts
 run_route() {
   local route="$1" seed="$2" port="${3:-443}"
-  local target conc top_n want6 v4 v6 best4 best6 total
+  local target conc top_n want6
+  local seed_v4 seed_v6 seed_doms pool_ips pool_v4 pool_v6 pool_n
+  local v4 v6 n4 n6 b4 b6 batch vres
+  local ok hard soft best4 best6 total downgrade=0
 
   target=$(first_domain "$seed")
   if [ -z "$target" ]; then
@@ -246,63 +347,135 @@ run_route() {
     *) want6=1 ;;
   esac
 
-  v4=$( { resolve_ips "$target" "" A; fallback_ips "$seed"; } \
-        | awk 'NF' | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' | sort -u )
+  # ---- 候选组装：种子域名全解析 + 订阅池 + 种子兜底 IP ----
+  seed_doms=$(seed_domains "$seed")
+  seed_v4=$(printf '%s\n' "$seed_doms" | while read -r d; do
+              [ -n "$d" ] && resolve_ips "$d" "" A
+            done)
+  if [ "$want6" = "1" ]; then
+    seed_v6=$(printf '%s\n' "$seed_doms" | while read -r d; do
+                [ -n "$d" ] && resolve_ips "$d" "" AAAA
+              done)
+  else
+    seed_v6=""
+  fi
+
+  pool_ips=$(sub_cli take "$route" $(( top_n * 20 )))
+  pool_n=$(printf '%s\n' "$pool_ips" | awk 'NF' | wc -l | tr -d ' ')
+  pool_v4=$(printf '%s\n' "$pool_ips" | awk 'NF && !/:/')
+  pool_v6=$(printf '%s\n' "$pool_ips" | awk 'NF && /:/')
+
+  v4=$( { printf '%s\n' "$seed_v4"; fallback_ips "$seed"; printf '%s\n' "$pool_v4"; } \
+        | awk 'NF' | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' | sort -u | filter_bad_ips )
   v6=""
   if [ "$want6" = "1" ]; then
-    v6=$( { resolve_ips "$target" "" AAAA; fallback_ips "$seed"; } \
-          | awk 'NF' | grep ':' | sort -u )
+    v6=$( { printf '%s\n' "$seed_v6"; fallback_ips "$seed"; printf '%s\n' "$pool_v6"; } \
+          | awk 'NF' | grep ':' | grep -E '^[0-9a-fA-F:]+$' | sort -u | filter_bad_ips )
   fi
 
-  if [ -z "$v4" ] && [ -z "$v6" ]; then
-    log "$route: 无候选 IP（DNS 未就绪且无兜底）"
+  n4=$(printf '%s\n' "$v4" | awk 'NF' | wc -l | tr -d ' ')
+  n6=$(printf '%s\n' "$v6" | awk 'NF' | wc -l | tr -d ' ')
+
+  if [ "${n4:-0}" = "0" ] && [ "${n6:-0}" = "0" ]; then
+    log "$route: 无候选 IP（DNS 未就绪、订阅池为空且无兜底）"
+    write_state "$route" "$target" "no_candidate" "" "" 0 0 0
     return 1
   fi
 
-  log "$route: 目标 $target，候选 v4 $(printf '%s\n' "$v4" | awk 'NF' | wc -l | tr -d ' ') 个 / v6 $(printf '%s\n' "$v6" | awk 'NF' | wc -l | tr -d ' ') 个，并发 $conc，每族保留 $top_n 个"
+  log "$route: 目标 $target，候选 v4 ${n4} / v6 ${n6}（订阅池贡献 ${pool_n}），并发 $conc，每族保留 $top_n"
 
-  # 第一步：TCP 粗筛（快，取 2 倍名额）
-  local cand4 cand6 cand vres verified bad downgrade
-  cand4=$(probe_top "$v4" "$port" "$conc" 3 $((top_n * 2)))
-  cand6=$(probe_top "$v6" "$port" "$conc" 3 $((top_n * 2)))
-  cand=$( { printf '%s\n' "$cand4"; printf '%s\n' "$cand6"; } | awk 'NF' )
+  # ---- 第一步：TCP 粗筛（多取 3 倍，给校验失败留补位余量）----
+  b4=$(probe_top "$v4" "$port" "$conc" 3 $((top_n * 3)))
+  b6=$(probe_top "$v6" "$port" "$conc" 3 $((top_n * 3)))
+  batch=$( { printf '%s\n' "$b4"; printf '%s\n' "$b6"; } | awk 'NF' )
 
-  if [ -z "$cand" ]; then
+  if [ -z "$batch" ]; then
     log "$route: TCP 探测全部失败"
+    write_state "$route" "$target" "no_tcp" "" "" 0 0 0
     return 1
   fi
 
-  # 第二步：真实 HTTPS 校验（SNI/Host = 目标域名），揪出 1034 / 证书不符 / 5xx
+  # ---- 第二步：真实 HTTPS 校验（SNI/Host = 目标域名）----
   case "$(setting verify_https)" in
-    false|False|0) verified=""; bad="" ;;
+    false|False|0)
+      vres=$(printf '%s\n' "$batch" | awk '{print $1, "ok", $2}')
+      ;;
     *)
-      vres=$(printf '%s\n' "$cand" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 2>/dev/null)
-      verified=$(printf '%s\n' "$vres" | awk '$2=="ok"{print $1, $3, "ok"}' | sort -k2 -n)
-      bad=$(printf '%s\n' "$vres" | awk '$2!="ok"{printf "%s(%s) ", $1, $2}')
+      vres=$(printf '%s\n' "$batch" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 2>/dev/null)
+      # 补位：通过的不足 top_n 时，把没试过的候选再探一批，别急着降级
+      ok=$(printf '%s\n' "$vres" | awk '$2=="ok"' | wc -l | tr -d ' ')
+      if [ "${ok:-0}" -lt "$top_n" ]; then
+        local more more_n
+        more=$(exclude_ips "$(printf '%s\n%s\n' "$v4" "$v6")" "$batch" | head -n $((top_n * 6)))
+        more_n=$(printf '%s\n' "$more" | awk 'NF' | wc -l | tr -d ' ')
+        if [ "${more_n:-0}" -gt 0 ]; then
+          log "$route: 仅 $ok 个通过校验，补探 $more_n 个候补"
+          vres=$(printf '%s\n%s\n' "$vres" \
+                 "$(printf '%s\n' "$more" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 2>/dev/null)")
+        fi
+      fi
       ;;
   esac
 
-  downgrade=0
-  if [ -n "$verified" ]; then
-    best4=$(printf '%s\n' "$verified" | awk '!/:/' | head -n "$top_n")
-    best6=$(printf '%s\n' "$verified" | awk '/:/' | head -n "$top_n")
+  ok=$(printf '%s\n' "$vres" | awk '$2=="ok"{print $1, $3, "ok"}' | sort -k2 -n)
+  # 明确不可用：1034/1010/1020、证书不符、5xx
+  hard=$(printf '%s\n' "$vres" | awk '$2!="ok" && $2!="timeout" && $2!="fail"{print $1" "$2}')
+  # 不确定（可能只是网络抖动）：超时、连接失败
+  soft=$(printf '%s\n' "$vres" | awk '$2=="timeout"||$2=="fail"{print $1" "$2}')
+
+  # ---- 第三步：坏 IP 立即拉黑 + 立即撤下，这一步就是「1034 一触发就换 IP」----
+  if [ -n "$hard" ]; then
+    local bad_ips n_hard
+    bad_ips=$(printf '%s\n' "$hard" | awk '{print $1}')
+    n_hard=$(printf '%s\n' "$hard" | awk 'NF' | wc -l | tr -d ' ')
+    printf '%s\n' "$hard" | while read -r ip why; do
+      [ -z "$ip" ] && continue
+      sub_cli mark-bad "$ip" "$why" "$route" >/dev/null
+    done
+    log "$route: 校验拒绝 $n_hard 个（$(printf '%s' "$hard" | tr '\n' ' ')），已拉黑 ${BAD_TTL_H}h 并立即撤下"
+    # shellcheck disable=SC2086
+    purge_bad_from_hosts "$route" $bad_ips
   fi
 
-  total=$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF' | wc -l | tr -d ' ')
+  # ---- 第四步：选结果。绝不把「明确坏」的 IP 写进 hosts ----
+  best4=""; best6=""
+  if [ -n "$ok" ]; then
+    best4=$(printf '%s\n' "$ok" | awk '!/:/' | head -n "$top_n")
+    best6=$(printf '%s\n' "$ok" | awk '/:/' | head -n "$top_n")
+  fi
+  total=$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF' | wc -l | tr -d ' ' )
+
   if [ "$total" = "0" ]; then
-    # 全都没通过校验：降级用 TCP 结果，但标记 unverified，控制台会显红
-    downgrade=1
-    best4=$(printf '%s\n' "$cand4" | awk 'NF{print $1, $2, "unverified"}' | head -n "$top_n")
-    best6=$(printf '%s\n' "$cand6" | awk 'NF{print $1, $2, "unverified"}' | head -n "$top_n")
-    total=$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF' | wc -l | tr -d ' ')
-    [ "$total" = "0" ] && { log "$route: 探测全部失败"; return 1; }
-    log "$route: 警告：候选均未通过 HTTPS 校验（${bad:-未知}），降级使用 TCP 最优结果"
-    notify "warn" "$route 路优选降级" "所有候选未通过 HTTPS 校验：${bad:-未知}，已降级使用 TCP 结果。"
-  elif [ -n "$bad" ]; then
-    log "$route: 已剔除 $(printf '%s\n' "$bad" | wc -w | tr -d ' ') 个不可用 IP：$bad"
+    if [ -n "$soft" ]; then
+      # 只有超时/连不上，没有明确拒绝 → 允许降级，但标 unverified
+      downgrade=1
+      best4=$(printf '%s\n' "$soft" | awk '!/:/{print $1, "?", "unverified"}' | head -n "$top_n")
+      best6=$(printf '%s\n' "$soft" | awk '/:/{print $1, "?", "unverified"}' | head -n "$top_n")
+      total=$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF' | wc -l | tr -d ' ' )
+      log "$route: 无 IP 通过校验（仅超时/连接失败），降级用 TCP 结果并标记 unverified"
+      notify "warn" "$route 路优选降级" "无 IP 通过 HTTPS 校验（仅超时），已降级使用 TCP 结果，控制台显示为 unverified。"
+    else
+      # 全部被明确拒绝（1034/证书/5xx）→ 撤下该路，宁可回退上游也不用坏 IP
+      rm -f "$PREF_DIR/$route.hosts" 2>/dev/null
+      merge_hosts
+      write_state "$route" "$target" "no_valid" "" "$hard" "${n4:-0}" 0 "${pool_n}"
+      log "$route: 全部候选被拒绝（$(printf '%s' "$hard" | awk '{print $2}' | sort -u | tr '\n' ' ')），已撤下该路 hosts，域名回退上游解析"
+      notify "warn" "$route 路无可用 IP" "全部候选被 HTTPS 校验拒绝（1034/证书/5xx），已撤下该路 hosts，回退上游解析，不使用任何坏 IP。"
+      return 3
+    fi
+  fi
+
+  # ---- 第五步：回写池统计（通过的加分，超时的记失败）----
+  {
+    printf '%s\n' "$best4"; printf '%s\n' "$best6"
+  } | awk 'NF{print $1, "ok"}' | sub_cli bump-many "$route" >/dev/null
+  if [ -n "$soft" ]; then
+    printf '%s\n' "$soft" | awk 'NF{print $1, "fail"}' | sub_cli bump-many "$route" >/dev/null
   fi
 
   write_route "$route" "$target" "$best4" "$best6" || return 1
+  write_state "$route" "$target" "$( [ "$downgrade" = "1" ] && echo degraded || echo ok )" \
+              "$(printf '%s\n%s\n' "$best4" "$best6")" "$hard" "${n4:-0}" 0 "${pool_n}"
   log "$route: 选中 $total 个 -> $target：$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF {printf "%s(%sms) ", $1, $2}' )"
   [ "$downgrade" = "1" ] && return 2
   return 0

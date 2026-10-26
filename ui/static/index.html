@@ -123,6 +123,29 @@
   .route-card .rc-sub{font-size:11px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .tag{display:inline-block;font-size:10px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
   .tag.v6{color:#3b8eea;border-color:rgba(59,142,234,.45)}
+  /* ---------- 源管理 ---------- */
+  .rowline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 0;border-top:1px dashed var(--border)}
+  .rowline label{font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .rowline .grow{flex:1;min-width:220px;display:block;align-items:stretch}
+  .rowline .grow input,.rowline .grow textarea{width:100%;margin-top:5px}
+  .rowline textarea{resize:vertical;min-height:52px}
+  .chk{cursor:pointer;color:var(--text)!important}
+  .chk input{width:15px;height:15px;accent-color:var(--blue)}
+  .srcrow{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)}
+  .srcrow .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .srcrow .nm{flex:1;min-width:150px;font-size:13px}
+  .srcrow .u4,.srcrow .u6{width:100%;margin-top:6px;font-size:12px}
+  .srcnum{font-size:11.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace}
+  .srcnum b{color:var(--text);font-weight:600}
+  .poolgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .poolcell{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--panel2)}
+  .poolcell .n{font-size:20px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .poolcell .l{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .tag.official{color:var(--blue);border-color:rgba(59,142,234,.5)}
+  .tag.third{color:var(--amber);border-color:rgba(192,125,26,.5)}
+  .tag.mirror{color:var(--muted)}
+  .tag.custom{color:var(--green);border-color:rgba(47,158,99,.45)}
+  .tag.sub{color:#8b5cf6;border-color:rgba(139,92,246,.45)}
   .iplist{display:flex;flex-direction:column;gap:3px}
   .iplist .row{display:flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
   .iplist .lat{color:var(--muted);font-size:11px}
@@ -199,6 +222,7 @@
     position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
     background:var(--panel);border:1px solid var(--border);color:var(--text);
     padding:10px 18px;border-radius:10px;font-size:13px;box-shadow:var(--shadow);
+    max-width:min(92vw,540px);white-space:normal;word-break:break-word;line-height:1.45;
     opacity:0;pointer-events:none;transition:.25s;z-index:100
   }
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -571,6 +595,87 @@
       <!-- 源 -->
       <section class="view" id="view-source">
         <div class="card">
+          <div class="flexhead">
+            <h3>IP 源 <span class="muted" style="font-weight:400;font-size:12px">（勾选启用 · 定时拉取 · 自动增删候选）</span></h3>
+            <div class="btns" style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" id="btnSrcDiscover">扫描新源</button>
+              <button class="btn" id="btnSrcAdd">+ 添加</button>
+              <button class="btn primary" id="btnSrcSave">保存全部</button>
+            </div>
+          </div>
+          <p class="muted" style="margin:8px 0 14px;font-size:12.5px">
+            官方源最权威、只给网段；第三方更新快、量小；镜像用于 raw 直连不通时兜底。
+            只有勾上「启用」的源参与定时拉取和优选，取消勾选立即停止使用。
+          </p>
+
+          <div class="rowline">
+            <label class="chk"><input type="checkbox" id="spOn"> 定时拉取</label>
+            <label>间隔
+              <select id="spCycle">
+                <option value="1h">1 小时</option><option value="2h">2 小时</option>
+                <option value="3h">3 小时</option><option value="4h">4 小时</option>
+                <option value="6h">6 小时</option><option value="8h">8 小时</option>
+                <option value="12h">12 小时</option><option value="daily">每天</option>
+                <option value="weekly">每周</option>
+              </select>
+            </label>
+            <label id="spHourWrap" hidden>几点 <select id="spHour"></select></label>
+            <span class="muted" id="spNext" style="font-size:12px"></span>
+            <button class="btn" id="btnSrcPull" style="margin-left:auto">全部拉取</button>
+          </div>
+
+          <div class="rowline">
+            <label class="grow">GitHub 加速前缀
+              <input id="proxyBox" placeholder="https://ghfast.top（留空=直连 raw）">
+            </label>
+          </div>
+
+          <div class="rowline" style="align-items:flex-start">
+            <label class="grow">源订阅（一行一个清单地址，同步进来的源默认不启用）
+              <textarea id="subBox" rows="2" placeholder="https://example.com/my-cf-sources.json"></textarea>
+              <span class="muted" style="font-size:11.5px">支持两种格式：① JSON 数组，每项 {name,url_v4,url_v6}；② 文本行「名称 | v4地址 | v6地址」或裸地址。</span>
+            </label>
+            <button class="btn" id="btnSubSync">立即同步订阅</button>
+          </div>
+
+          <div id="srcAddForm" hidden style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)">
+            <div class="rowline" style="border:0;padding-top:0">
+              <label class="grow">名称 <input id="addName" placeholder="我的 CF 源"></label>
+            </div>
+            <div class="rowline">
+              <label class="grow">v4 地址 <input id="addV4" placeholder="https://example.com/ips-v4.txt"></label>
+            </div>
+            <div class="rowline">
+              <label class="grow">v6 地址（可空） <input id="addV6" placeholder="https://example.com/ips-v6.txt"></label>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+              <button class="btn primary" id="btnAddOk">添加并立即拉取</button>
+              <button class="btn" id="btnAddCancel">取消</button>
+              <span class="muted" style="font-size:12px;align-self:center">添加后会马上拉一次，显示能拿到多少 v4 / v6</span>
+            </div>
+          </div>
+
+          <div id="srcList"><div class="empty">加载中…</div></div>
+          <div class="muted" style="font-size:12px;margin-top:10px">
+            点「看有多少IP」只拉取、不测速，用来确认地址还通、能拿到多少 v4 / v6。
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>候选池 <span class="muted" style="font-weight:400;font-size:12px">（拉下来的 IP 进这里，优选直接取用）</span></h3>
+          <div id="poolStat" class="poolgrid"><div class="empty">加载中…</div></div>
+          <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
+            <button class="btn" id="btnPoolPrune">清理失效 IP</button>
+            <span class="muted" style="font-size:12px">清掉已拉黑的、连续失败的、14 天没再出现的、超出上限的</span>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>换 IP 记录 <span class="muted" style="font-weight:400;font-size:12px">（1034 一出现就换，不等下一轮）</span></h3>
+          <div id="swapList"><div class="empty">还没有换过 IP</div></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
           <h3>分流清单 <span class="muted" style="font-weight:400;font-size:12px">（国内 IP 段随 APNIC 分配变化、CDN 网段随厂商发版变化，都可在这里更新）</span></h3>
           <div id="listsTable"><div class="empty">加载中…</div></div>
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
@@ -579,31 +684,6 @@
             <span class="muted" style="font-size:12px">更新后自动重载引擎，1~2 秒内生效</span>
           </div>
           <pre class="preview" id="listPreview" hidden></pre>
-        </div>
-
-        <div class="card" style="margin-top:16px">
-          <h3>候选源（内置镜像，公开种子）</h3>
-          <div class="kv"><span class="k">Cloudflare 优选种子</span><span class="mono">/app/config/seeds/cloudflare.txt</span></div>
-          <div class="kv"><span class="k">Google 搜索种子</span><span class="mono">/app/config/seeds/google.txt</span></div>
-          <div class="kv"><span class="k">Google 翻译种子</span><span class="mono">/app/config/seeds/ghtranslate.txt</span></div>
-          <div class="kv"><span class="k">GitHub 访问种子</span><span class="mono">/app/config/seeds/github.txt</span></div>
-          <div class="kv"><span class="k">ghcr 镜像仓库种子</span><span class="mono">/app/config/seeds/ghcr.txt</span></div>
-        </div>
-        <div class="card" style="margin-top:16px">
-          <h3>工作原理</h3>
-          <p class="muted" style="margin:0">
-            候选 IP = 运行时向本机 mosdns 实时解析目标域名得到的 A + AAAA 记录，再加种子兜底 IP；
-            先做 TCP 延迟粗筛，再用真实 HTTPS 请求（SNI / Host 都是目标域名）逐个校验，
-            剔除 Cloudflare 1034、证书不符、5xx 的 IP，最后按延迟取前 N 个写入 hosts。
-            全程不依赖任何外部下载或代理，因此不会出现"拉不下来"。
-          </p>
-        </div>
-        <div class="card" style="margin-top:16px">
-          <h3>覆盖方式</h3>
-          <p class="muted" style="margin:0">
-            将自定义种子挂载到容器内对应路径即可覆盖；或在 /data 卷保留长期运行数据。
-            镜像本身只含公开种子，不含任何个人数据。
-          </p>
         </div>
       </section>
     </div>
@@ -698,7 +778,7 @@
     clearTimers();
     if (v === "logs") { loadLogs(); state.timers.push(setInterval(loadLogs, 3000)); }
     if (v === "results") { loadResults(); }
-    if (v === "source") { loadLists(); }
+    if (v === "source") { loadSources(); loadLists(); }
     if (v === "config") { loadStatus(); }
     if (v === "overview") { loadStatus(); state.timers.push(setInterval(loadStatus, 5000)); }
   }
@@ -1042,6 +1122,263 @@
       .catch(function(err){ toast("重载失败：" + err.message); });
   });
   $("#pillList").addEventListener("click", function(){ switchView("source"); });
+
+  /* ---------- 源管理 ---------- */
+  var SRC = { data:null };
+  function escH(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+  function fmtBig(n){
+    if (!n || n <= 0) return "0";
+    if (n >= 1e15) {
+      var e = Math.floor(Math.log(n) / Math.LN10);
+      return "≈" + (n / Math.pow(10, e)).toFixed(1) + "×10^" + e;
+    }
+    if (n >= 1e8) return "≈" + Math.round(n / 1e8) + " 亿";
+    if (n >= 1e4) return "≈" + Math.round(n / 1e4) + " 万";
+    return String(n);
+  }
+  function statText(it){
+    var lt = it.last_test;
+    if (!lt || (!lt.v4 && !lt.v6)) return "未拉取 · 点「看有多少IP」";
+    var a = lt.s4 ? (lt.s4 + " 段 " + fmtBig(lt.v4_ips) + " 个") : (lt.v4 + " 个");
+    var b = lt.s6 ? (lt.s6 + " 段 " + fmtBig(lt.v6_ips) + " 个") : (lt.v6 + " 个");
+    return "v4 " + a + " · v6 " + b;
+  }
+  var KIND = {official:["official","官方"], thirdparty:["third","第三方"],
+              mirror:["mirror","镜像"], custom:["custom","自定义"]};
+  function kindTag(it){
+    var m = KIND[it.kind] || KIND.custom;
+    return '<span class="tag ' + m[0] + '">' + m[1] + "</span>";
+  }
+  function renderSources(){
+    var box = $("#srcList");
+    var items = (SRC.data && SRC.data.items) || [];
+    if (!items.length) {
+      box.innerHTML = '<div class="empty">还没有源，点右上角「+ 添加」加一个</div>';
+      return;
+    }
+    box.innerHTML = items.map(function(it){
+      var k = escH(it.key);
+      return '<div class="srcrow" data-key="' + k + '">' +
+        '<div class="top">' +
+          '<label class="chk" title="勾上才参与定时拉取和优选"><input type="checkbox" data-act="toggle" data-key="' + k + '"' +
+            (it.enabled ? " checked" : "") + '></label>' +
+          kindTag(it) +
+          (it.from_sub ? '<span class="tag sub">订阅</span>' : '') +
+          '<input class="nm" data-act="name" data-key="' + k + '" value="' + escH(it.name) + '">' +
+          '<span class="srcnum">' + escH(statText(it)) + "</span>" +
+          '<button class="btn" data-act="test" data-key="' + k + '">看有多少IP</button>' +
+          '<button class="btn" data-act="del" data-key="' + k + '">删除</button>' +
+        "</div>" +
+        '<input class="u4" data-act="url" data-field="url_v4" data-key="' + k + '" value="' + escH(it.url_v4) + '" placeholder="v4 地址">' +
+        '<input class="u6" data-act="url" data-field="url_v6" data-key="' + k + '" value="' + escH(it.url_v6) + '" placeholder="v6 地址（可空）">' +
+        (it.status ? '<div class="srcnum" style="margin-top:6px">' + escH(it.status) + "</div>" : "") +
+      "</div>";
+    }).join("");
+  }
+  function findItem(key){
+    return ((SRC.data && SRC.data.items) || []).filter(function(x){ return x.key === key; })[0];
+  }
+  function collectSources(){
+    var rows = $$("#srcList .srcrow");
+    return rows.map(function(row){
+      var key = row.dataset.key;
+      var it = findItem(key) || {};
+      var nm = row.querySelector(".nm");
+      var u4 = row.querySelector(".u4");
+      var u6 = row.querySelector(".u6");
+      var cb = row.querySelector('input[data-act="toggle"]');
+      return {
+        key: key, name: nm ? nm.value : it.name,
+        url_v4: u4 ? u4.value.trim() : it.url_v4,
+        url_v6: u6 ? u6.value.trim() : it.url_v6,
+        enabled: cb ? cb.checked : it.enabled,
+        kind: it.kind, note: it.note, from_sub: it.from_sub,
+        last_test: it.last_test, route: it.route
+      };
+    });
+  }
+  function loadSources(){
+    api("/api/sources").then(function(d){
+      SRC.data = d;
+      $("#proxyBox").value = d.proxy || "";
+      $("#subBox").value = (d.subs || []).join("\n");
+      var pull = d.pull || {};
+      $("#spOn").checked = !!pull.enabled;
+      $("#spCycle").value = pull.cycle || "6h";
+      var hsel = $("#spHour");
+      if (hsel && !hsel.options.length) {
+        for (var hh = 0; hh < 24; hh++) {
+          var op = document.createElement("option");
+          op.value = String(hh);
+          op.textContent = (hh < 10 ? "0" : "") + hh + ":00";
+          hsel.appendChild(op);
+        }
+      }
+      hsel.value = String(pull.hour == null ? 4 : pull.hour);
+      $("#spHourWrap").hidden = !(pull.cycle === "daily" || pull.cycle === "weekly");
+      $("#spNext").textContent = pull.enabled
+        ? ("下次 " + fmtTime(pull.next))
+        : "已关闭";
+      renderSources();
+      renderPool(d.pools || {});
+      renderSwaps(d.events || []);
+    }).catch(function(e){
+      $("#srcList").innerHTML = '<div class="empty">读取失败：' + escH(e.message) + "</div>";
+    });
+  }
+  function renderPool(pools){
+    var N = {cf:"Cloudflare", google:"Google", gt:"翻译", github:"GitHub", ghcr:"ghcr"};
+    $("#poolStat").innerHTML = ROUTES.map(function(r){
+      var p = pools[r] || {};
+      return '<div class="poolcell">' +
+        '<div class="n">' + (p.total || 0) + "</div>" +
+        '<div class="l">' + (N[r] || r) + " · v4 " + (p.v4 || 0) + " / v6 " + (p.v6 || 0) + "</div>" +
+        '<div class="l">已验证 ' + (p.verified || 0) + " · 已拉黑 " + (p.blocked || 0) + "</div>" +
+      "</div>";
+    }).join("");
+  }
+  function renderSwaps(evs){
+    var box = $("#swapList");
+    if (!evs.length) {
+      box.innerHTML = '<div class="empty">还没有换过 IP（一直可用就不换）</div>';
+      return;
+    }
+    box.innerHTML = evs.slice(0, 20).map(function(e){
+      var swapped = e.kind === "swap";
+      return '<div class="kv" style="align-items:flex-start;gap:10px">' +
+        "<span>" +
+          '<span class="tag ' + (swapped ? "custom" : "") + '">' + (swapped ? "已换" : "拉黑") + "</span> " +
+          '<span class="mono">' + escH(e.ip) + "</span> " +
+          '<span class="muted">' + escH(e.reason || "") + "</span>" +
+          (e.to ? ' <span class="muted">→</span> <span class="mono">' + escH(e.to) + "</span>" : "") +
+        "</span>" +
+        '<span class="muted" style="font-size:12px;white-space:nowrap">' + fmtTime(e.t) + "</span>" +
+      "</div>";
+    }).join("");
+  }
+  function saveSources(extra){
+    var payload = {
+      items: collectSources(),
+      subs: ($("#subBox").value || "").split("\n").map(function(s){ return s.trim(); }).filter(Boolean),
+      proxy: $("#proxyBox").value.trim()
+    };
+    payload.pull = {
+      enabled: $("#spOn").checked,
+      cycle: $("#spCycle").value,
+      hour: parseInt($("#spHour").value, 10) || 4
+    };
+    if (extra) Object.keys(extra).forEach(function(k){ payload[k] = extra[k]; });
+    return api("/api/sources", {method:"POST", body: JSON.stringify(payload)});
+  }
+  $("#srcList").addEventListener("click", function(e){
+    var b = e.target.closest("button[data-act]");
+    if (!b) return;
+    var key = b.dataset.key;
+    if (b.dataset.act === "del") {
+      if (!window.confirm("删除这个源？")) return;
+      api("/api/sources/del", {method:"POST", body: JSON.stringify({key:key})})
+        .then(function(){ toast("已删除"); loadSources(); })
+        .catch(function(err){ toast("删除失败：" + err.message); });
+      return;
+    }
+    if (b.dataset.act === "test") {
+      var row = b.closest(".srcrow");
+      var tag = row ? row.querySelector(".srcnum") : null;
+      if (tag) tag.textContent = "拉取中…";
+      saveSources().then(function(){
+        return api("/api/sources/test", {method:"POST", body: JSON.stringify({key:key})});
+      }).then(function(r){
+        if (r && r.ok) toast("v4 " + r.v4 + " · v6 " + r.v6 + "，入池 " + (r.ips || 0) + " 个");
+        else toast("拉取失败：" + ((r && (r.errors || [])[0]) || "未知错误"));
+        loadSources();
+      }).catch(function(err){ toast("拉取失败：" + err.message); loadSources(); });
+    }
+  });
+  $("#srcList").addEventListener("change", function(e){
+    var t = e.target;
+    if (!t.dataset || !t.dataset.act) return;
+    if (t.dataset.act === "toggle") {
+      api("/api/sources/toggle", {method:"POST",
+        body: JSON.stringify({key:t.dataset.key, enabled:t.checked})})
+        .then(function(){ toast(t.checked ? "已启用" : "已停用，下轮不再使用"); })
+        .catch(function(err){ toast("操作失败：" + err.message); });
+    }
+  });
+  $("#btnSrcSave").addEventListener("click", function(){
+    saveSources().then(function(r){ var n = (r && typeof r.items === "number") ? r.items : collectSources().length; toast("已保存 " + n + " 个源"); loadSources(); })
+      .catch(function(err){ toast("保存失败：" + err.message); });
+  });
+  $("#btnSrcAdd").addEventListener("click", function(){
+    $("#srcAddForm").hidden = false;
+    $("#addName").focus();
+  });
+  $("#btnAddCancel").addEventListener("click", function(){
+    $("#srcAddForm").hidden = true;
+    $("#addName").value = $("#addV4").value = $("#addV6").value = "";
+  });
+  $("#btnAddOk").addEventListener("click", function(){
+    var name = $("#addName").value.trim() || "自定义源";
+    var u4 = $("#addV4").value.trim();
+    var u6 = $("#addV6").value.trim();
+    if (!u4 && !u6) { toast("至少填一个 v4 或 v6 地址"); return; }
+    $("#btnAddOk").disabled = true;
+    $("#btnAddOk").textContent = "拉取中…";
+    api("/api/sources/add", {method:"POST", body: JSON.stringify({name:name, url_v4:u4, url_v6:u6})})
+      .then(function(r){
+        var t = r.test || {};
+        if (t.ok) toast("已添加：" + name + " · v4 " + (t.v4 || 0) + " · v6 " + (t.v6 || 0));
+        else toast("已添加，但拉取失败：" + ((t.errors || [])[0] || "未知错误"));
+        $("#srcAddForm").hidden = true;
+        $("#addName").value = $("#addV4").value = $("#addV6").value = "";
+        loadSources();
+      })
+      .catch(function(err){ toast("添加失败：" + err.message); })
+      .then(function(){ $("#btnAddOk").disabled = false; $("#btnAddOk").textContent = "添加并立即拉取"; });
+  });
+  $("#btnSrcPull").addEventListener("click", function(){
+    $("#btnSrcPull").disabled = true;
+    toast("正在拉取全部启用的源…");
+    api("/api/sources/pull", {method:"POST"}).then(function(r){
+      toast("拉取完成：成功 " + (r.succeeded || 0) + " / 共 " + (r.sources || 0) + " 个源");
+      loadSources();
+    }).catch(function(err){ toast("拉取失败：" + err.message); })
+      .then(function(){ $("#btnSrcPull").disabled = false; });
+  });
+  $("#btnSubSync").addEventListener("click", function(){
+    saveSources().then(function(){ return api("/api/sources/sync", {method:"POST"}); })
+      .then(function(r){
+        var errs = Object.keys(r.errors || {}).length;
+        toast("同步完成：新增 " + (r.added || 0) + " 个源" + (errs ? ("，" + errs + " 个订阅失败") : ""));
+        loadSources();
+      }).catch(function(err){ toast("同步失败：" + err.message); });
+  });
+  $("#btnSrcDiscover").addEventListener("click", function(){
+    toast("正在扫描没测过的源…");
+    api("/api/sources/discover", {method:"POST"}).then(function(r){
+      toast("扫描完成：检查 " + (r.checked || 0) + " 个，可用 " + (r.good || 0) + " 个");
+      loadSources();
+    }).catch(function(err){ toast("扫描失败：" + err.message); });
+  });
+  $("#btnPoolPrune").addEventListener("click", function(){
+    api("/api/sources/prune", {method:"POST"}).then(function(r){
+      var n = 0;
+      (r.report || []).forEach(function(x){ n += x.removed || 0; });
+      toast("已清理 " + n + " 个失效 IP");
+      loadSources();
+    }).catch(function(err){ toast("清理失败：" + err.message); });
+  });
+  ["spOn","spCycle","proxyBox"].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("change", function(){
+      $("#spHourWrap").hidden = !($("#spCycle").value === "daily" || $("#spCycle").value === "weekly");
+      saveSources().then(function(){ toast("设置已保存"); loadSources(); })
+        .catch(function(err){ toast("保存失败：" + err.message); });
+    });
+  });
 
   /* ---------- 结果 ---------- */
   function loadResults(){

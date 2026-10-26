@@ -26,6 +26,15 @@ services:
       PREF_THREADS: ""
       # ---- DNS 缓存条数上限（LRU 淘汰，不会无限增长；控制台可一键清空）----
       PREF_CACHE_SIZE: "8192"
+      # ---- 换 IP 看门狗：每隔多少秒巡检一次当前生效 IP（发现 1034 立即换）----
+      PREF_WATCHDOG_SEC: "180"
+      # ---- 坏 IP 冷却时长（小时）：1034/证书/5xx 的 IP 在这段时间内不再使用 ----
+      PREF_BAD_TTL_HOURS: "6"
+      # ---- 候选池上限与失效清理（天）----
+      PREF_POOL_MAX: "4000"
+      PREF_SUB_TTL_DAYS: "14"
+      # ---- 官方网段展开时的采样数（每个 CIDR 取几个 IP 去测）----
+      PREF_CIDR_SAMPLE: "6"
     volumes:
       - ./data:/data
     # 若宿主机 53 端口被占用（如 systemd-resolved），改用 "1053:53/udp" 等

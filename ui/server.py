@@ -11,6 +11,7 @@ import re
 import secrets
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -35,6 +36,7 @@ CACHE_SIZE = int(os.environ.get("PREF_CACHE_SIZE", "8192"))
 SCHEDULER = "/app/scheduler/scheduler.sh"
 DNSSQ = "/app/scheduler/lib/dnsq.py"
 LISTS_PY = "/app/scheduler/lib/lists.py"
+SUBS_PY = "/app/scheduler/lib/subs.py"
 DIAG_PY = "/app/scheduler/lib/diag.py"
 PUSH_PY = "/app/scheduler/lib/push.py"
 LISTS_META = os.path.join(DATA_DIR, "lists_meta.json")
@@ -91,6 +93,39 @@ def tail(path, n=200):
         return []
 
 
+def run_subs(args, stdin_data=None, timeout=180):
+    """调用 subs.py 并解析 JSON；超时或异常都返回可读错误，不抛给前端。"""
+    try:
+        p = subprocess.run(
+            [sys.executable, SUBS_PY] + list(args),
+            input=stdin_data,
+            capture_output=True,
+            timeout=timeout,
+        )
+        out = p.stdout.decode("utf-8", "replace").strip()
+        if not out:
+            return {"ok": False, "error": (p.stderr.decode("utf-8", "replace")[:300] or "无输出")}
+        return json.loads(out)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "操作超时（%ds），源可能响应太慢" % timeout}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+def sources_status():
+    st = run_subs(["status"])
+    if not isinstance(st, dict) or "items" not in st:
+        return {"items": [], "subs": [], "pools": {}, "bad": [], "events": [],
+                "error": st.get("error") if isinstance(st, dict) else "读取失败"}
+    # 每路最近一次优选结果（含被拒原因），供「结果」页显示
+    states = {}
+    for r in ROUTES:
+        p = os.path.join(PREF_DIR, "%s.state.json" % r)
+        d = read_json(p, None)
+        if d:
+            states[r] = d
+    st["states"] = states
+    return st
 def mosdns_alive():
     try:
         with open(MOSDNS_PID) as f:
@@ -506,6 +541,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, read_qlog(n))
             if path == "/api/cache/info":
                 return self._send(200, cache_info())
+            if path == "/api/sources":
+                return self._send(200, sources_status())
             return self._send(404, {"error": "not found"})
 
         return self._send(404, {"error": "not found"})
@@ -667,6 +704,57 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, {"error": "清空失败：%s" % e})
             return self._send(200, {"ok": True})
+
+        if path == "/api/sources":
+            data = self._body()
+            r = run_subs(["save"], stdin_data=json.dumps(data).encode("utf-8"))
+            return self._send(200 if r.get("ok") else 400, r)
+
+        if path == "/api/sources/add":
+            data = self._body()
+            name = str(data.get("name") or "自定义源").strip()[:60]
+            u4 = str(data.get("url_v4") or "").strip()
+            u6 = str(data.get("url_v6") or "").strip()
+            r = run_subs(["add", name, u4, u6])
+            if not r.get("ok"):
+                return self._send(400, r)
+            # 添加后立刻拉一次：手动添加的源要能马上生效，看到数量
+            t = run_subs(["test", r["key"]], timeout=90)
+            r["test"] = t
+            return self._send(200, r)
+
+        if path == "/api/sources/del":
+            key = str(self._body().get("key", ""))
+            r = run_subs(["del", key])
+            return self._send(200 if r.get("ok") else 400, r)
+
+        if path == "/api/sources/toggle":
+            data = self._body()
+            key = str(data.get("key", ""))
+            on = "1" if data.get("enabled") else "0"
+            r = run_subs(["enable", key, on])
+            return self._send(200 if r.get("ok") else 400, r)
+
+        if path == "/api/sources/test":
+            key = str(self._body().get("key", ""))
+            r = run_subs(["test", key], timeout=90)
+            return self._send(200, r)
+
+        if path == "/api/sources/pull":
+            r = run_subs(["pull", "--force"], timeout=180)
+            return self._send(200, r)
+
+        if path == "/api/sources/sync":
+            r = run_subs(["sync"], timeout=120)
+            return self._send(200, r)
+
+        if path == "/api/sources/discover":
+            r = run_subs(["discover", "--force"], timeout=180)
+            return self._send(200, r)
+
+        if path == "/api/sources/prune":
+            r = run_subs(["prune"], timeout=60)
+            return self._send(200, r)
 
         if path == "/api/reload":
             try:

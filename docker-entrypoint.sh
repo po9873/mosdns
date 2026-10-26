@@ -31,6 +31,8 @@ python3 /app/scheduler/lib/lists.py init >/dev/null 2>&1 || true
 [ -f "$DATA_DIR/gfw_domains.txt" ] || cp /app/config/gfw_domains.txt "$DATA_DIR/gfw_domains.txt" 2>/dev/null || : > "$DATA_DIR/gfw_domains.txt"
 [ -f "$DATA_DIR/china_ip.txt" ] || cp /app/config/china_ip.txt "$DATA_DIR/china_ip.txt" 2>/dev/null || : > "$DATA_DIR/china_ip.txt"
 elog "分流清单: $(wc -l < "$DATA_DIR/china_ip.txt" 2>/dev/null || echo 0) 条国内 IP 段"
+# IP 源与候选池：首次启动写入内置源（官方 + 第三方 + 镜像）
+python3 /app/scheduler/lib/subs.py init >/dev/null 2>&1 || true
 
 # ---------- 自动线程 ----------
 if [ -z "$THREADS" ] || [ "$THREADS" = "auto" ]; then
@@ -71,7 +73,7 @@ fi
 # ---------- 默认设置 ----------
 if [ ! -f "$DATA_DIR/settings.json" ]; then
   cat > "$DATA_DIR/settings.json" <<EOF
-{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"top_n":3,"ipv6":true,"verify_https":true,"push":{"enabled":false,"url":"","events":"round,warn,login"},"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true}}
+{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"top_n":3,"ipv6":true,"verify_https":true,"bad_ttl_hours":${PREF_BAD_TTL_HOURS:-6},"watchdog_sec":${PREF_WATCHDOG_SEC:-180},"sub_ttl_days":${PREF_SUB_TTL_DAYS:-14},"pool_max":${PREF_POOL_MAX:-4000},"push":{"enabled":false,"url":"","events":"round,warn,login"},"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true}}
 EOF
 fi
 
@@ -117,6 +119,11 @@ mosdns_loop &
 
 # ---------- scheduler（等 mosdns 就绪后再起）----------
 ( sleep 6; exec /app/scheduler/scheduler.sh daemon ) &
+
+# ---------- watchdog（盯住 1034，一出现就换 IP）----------
+export PREF_WATCHDOG_SEC="${PREF_WATCHDOG_SEC:-180}"
+export PREF_DATA_DIR="$DATA_DIR"
+( sleep 20; exec python3 /app/scheduler/lib/watchdog.py ) &
 
 # ---------- UI（前台，容器主进程）----------
 export PREF_UI_PORT="$UI_PORT"
