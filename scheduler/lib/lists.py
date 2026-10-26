@@ -7,7 +7,8 @@
   status              输出 JSON（条目数 / 大小 / 更新时间 / 来源 / 状态）
   preview NAME [N]    输出清单前 N 行（供 UI 查看）
   update NAME|all     多源下载 → 校验 → 原子替换 → 写元数据
-  auto HOURS          过期的自动清单才更新；有变更返回 0，无变更返回 1
+  auto [HOURS]        到点自动更新（周期+时刻来自设置）；有变化返回 0，无变化返回 1
+  sched               输出当前的自动更新计划（开关 / 周期 / 时刻）
 
 设计要点：
   1) 多个源依次尝试，任一成功即止；全部失败保留旧文件（绝不让清单变空）。
@@ -27,7 +28,79 @@ DATA_DIR = os.environ.get("PREF_DATA_DIR", "/data")
 IMAGE_CONFIG = "/app/config"
 TMP_DIR = os.path.join(DATA_DIR, ".lists_tmp")
 META_FILE = os.path.join(DATA_DIR, "lists_meta.json")
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 UA = "mosdns-pref/1.0"
+
+# 自动更新周期：跟「源拉取 / 源体检」用同一套写法（小时 / 每天 / 每周）
+CYCLE_H = {"1h": 1, "2h": 2, "3h": 3, "4h": 4, "6h": 6, "8h": 8, "12h": 12,
+           "24h": 24, "daily": 24, "weekly": 168}
+DEFAULT_HOUR = 4
+
+
+def list_sched():
+    """读设置：清单自动更新的开关 / 周期 / 时刻。
+
+    老版本设置里只有 list_auto_update + list_update_hours，这里做一次兼容映射，
+    升级后不用手动重填。
+    """
+    st = {}
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            st = json.load(f) or {}
+    except Exception:
+        st = {}
+
+    on = st.get("list_upd_enabled")
+    if on is None:
+        on = st.get("list_auto_update", True)
+
+    cyc = str(st.get("list_upd_cycle") or "").strip()
+    if cyc not in CYCLE_H:
+        try:
+            h = int(st.get("list_update_hours"))
+        except Exception:
+            h = 24
+        if h in (1, 2, 3, 4, 6, 8, 12):
+            cyc = "%dh" % h
+        elif h <= 48:
+            cyc = "daily"
+        else:
+            cyc = "weekly"
+
+    try:
+        hour = int(st.get("list_upd_hour", DEFAULT_HOUR))
+    except Exception:
+        hour = DEFAULT_HOUR
+    return {"enabled": bool(on), "cycle": cyc, "hour": max(0, min(23, hour))}
+
+
+def sched_due(sched, last, now=None):
+    """到点没有：周期 < 24h 按间隔算；按天/按周还要求已过设定的时刻。"""
+    if not sched["enabled"]:
+        return False
+    now = now or time.time()
+    if not last:
+        return True
+    cyc = CYCLE_H.get(sched["cycle"], 24)
+    if cyc >= 24:
+        if time.localtime(now).tm_hour < int(sched["hour"]):
+            return False
+        return now - last >= cyc * 3600 - 3600
+    return now - last >= cyc * 3600
+
+
+def sched_next(sched, last, now=None):
+    if not sched["enabled"]:
+        return 0
+    now = now or time.time()
+    cyc = CYCLE_H.get(sched["cycle"], 24)
+    if not last:
+        return int(now)
+    if cyc >= 24:
+        t = time.localtime(last + cyc * 3600 - 3600)
+        return int(time.mktime((t.tm_year, t.tm_mon, t.tm_mday,
+                                int(sched["hour"]), 0, 0, 0, 0, -1)))
+    return int(last + cyc * 3600)
 
 # ---------------------------------------------------------------- 清单定义
 LISTS = {
@@ -50,7 +123,7 @@ LISTS = {
         "label": "国内域名",
         "kind": "domain",
         "min_lines": 100,
-        "auto": False,
+        "auto": True,              # 域名也会变（新站/换域名），跟着一起自动更新
         "sources": [
             {"url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt"},
             {"url": "https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/cn"},
@@ -61,7 +134,7 @@ LISTS = {
         "label": "国外/GFW 域名",
         "kind": "domain",
         "min_lines": 100,
-        "auto": False,
+        "auto": True,
         "sources": [
             {"url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt"},
             {"url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt"},
@@ -233,6 +306,8 @@ def cmd_init():
 
 
 def cmd_status():
+    sched = list_sched()
+    now = int(time.time())
     out = {}
     m = meta_all()
     for name, spec in LISTS.items():
@@ -258,8 +333,12 @@ def cmd_status():
         item["source_host"] = host_of(info.get("source", "")) if info.get("source") else "内置镜像"
         item["status"] = info.get("status") or ("ok" if item["lines"] else "empty")
         item["error"] = info.get("error", "")
+        # 这一份清单自己的自动更新计划（开关关掉时为 0）
+        item["auto_enabled"] = bool(sched["enabled"] and spec["auto"])
+        item["next"] = (sched_next(sched, item["updated_at"], now)
+                        if item["auto_enabled"] else 0)
         out[name] = item
-    print(json.dumps(out, ensure_ascii=False))
+    print(json.dumps({"sched": sched, "items": out}, ensure_ascii=False))
 
 
 def cmd_preview(name, n=50):
@@ -320,6 +399,19 @@ def _commit(name, spec, items, source_desc):
     os.makedirs(TMP_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
     body = ("\n".join(items) + "\n").encode("utf-8")
+    sha = hashlib.sha256(body).hexdigest()[:16]
+    old = meta_all().get(name, {})
+
+    # 内容一模一样就不动文件、不触发引擎重载（DNS 零中断），只把「已检查」时间刷新
+    if old.get("sha256") == sha and os.path.isfile(dst):
+        meta = dict(old)
+        meta.update({
+            "status": "ok", "source": source_desc, "checked_at": int(time.time()),
+            "updated_at": int(time.time()), "error": "",
+        })
+        meta_set(name, meta)
+        return dict(meta, ok=True, unchanged=True, name=name, label=spec["label"])
+
     tmp = os.path.join(TMP_DIR, spec["file"] + ".new")
     with open(tmp, "wb") as f:
         f.write(body)
@@ -339,11 +431,11 @@ def _commit(name, spec, items, source_desc):
         "checked_at": int(time.time()),
         "lines": len(items),
         "bytes": len(body),
-        "sha256": hashlib.sha256(body).hexdigest()[:16],
+        "sha256": sha,
         "error": "",
     }
     meta_set(name, meta)
-    return dict(meta, ok=True, name=name, label=spec["label"])
+    return dict(meta, ok=True, unchanged=False, name=name, label=spec["label"])
 
 
 def update_one(name):
@@ -404,30 +496,52 @@ def cmd_update(target):
     return 0 if any(r.get("ok") for r in results) else 1
 
 
-def cmd_auto(hours):
-    """只有标记 auto 且已过期的清单才更新；有变更返回 0。"""
-    try:
-        hours = float(hours)
-    except Exception:
-        hours = 24.0
-    if hours <= 0:
+def cmd_auto(hours=None):
+    """四份清单到点就自动拉；内容有变化返回 0（调度器据此重载引擎）。
+
+    计划来自设置里的「周期 + 时刻」（list_upd_cycle / list_upd_hour），
+    只有内容真的变了才算 changed，避免每天白白重启一次引擎。
+    """
+    sched = list_sched()
+    if not sched["enabled"]:
+        print(json.dumps({"checked": [], "changed": 0, "reason": "自动更新已关闭"},
+                         ensure_ascii=False))
         return 1
+    # 兼容老调用：auto <hours> 时按小时数临时覆盖周期
+    if hours not in (None, ""):
+        try:
+            h = float(hours)
+        except Exception:
+            h = 0
+        if h > 0:
+            sched = {"enabled": True, "hour": sched["hour"],
+                     "cycle": ("%dh" % int(h)) if int(h) in (1, 2, 3, 4, 6, 8, 12)
+                              else ("daily" if h <= 48 else "weekly")}
+
     now = time.time()
-    changed = []
+    checked, changed = [], []
     for name, spec in LISTS.items():
         if not spec["auto"]:
             continue
         info = meta_all().get(name, {})
         last = info.get("updated_at") or 0
-        if last and (now - last) < hours * 3600:
+        if not sched_due(sched, last, now):
+            continue
+        # 刚试过（失败也算）就先跳过，别每轮都白等一次超时
+        if info.get("checked_at") and (now - int(info["checked_at"])) < 1800 \
+                and info.get("status") != "ok":
             continue
         r = update_one(name)
-        if r.get("ok"):
+        checked.append({
+            "name": name, "label": spec["label"], "ok": bool(r.get("ok")),
+            "unchanged": bool(r.get("unchanged")), "lines": r.get("lines") or 0,
+            "error": r.get("error", ""),
+        })
+        if r.get("ok") and not r.get("unchanged"):
             changed.append((name, r.get("lines"), host_of(r.get("source", ""))))
-    if changed:
-        print(json.dumps({"auto_updated": changed}, ensure_ascii=False))
-        return 0
-    return 1
+    print(json.dumps({"checked": checked, "changed": len(changed),
+                      "updated": changed, "sched": sched}, ensure_ascii=False))
+    return 0 if changed else 1
 
 
 def main():
@@ -446,7 +560,12 @@ def main():
     if cmd == "update":
         return cmd_update(sys.argv[2] if len(sys.argv) > 2 else "all")
     if cmd == "auto":
-        return cmd_auto(sys.argv[2] if len(sys.argv) > 2 else "24")
+        # auto            按设置里的周期+时刻判断
+        # auto 24         兼容旧调用：按小时数
+        return cmd_auto(sys.argv[2] if len(sys.argv) > 2 else None)
+    if cmd == "sched":
+        print(json.dumps(list_sched(), ensure_ascii=False))
+        return 0
     print("未知命令: %s" % cmd, file=sys.stderr)
     return 2
 

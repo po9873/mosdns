@@ -163,6 +163,15 @@
   .srcrow{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)}
   .srcrow .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .srcrow .nm{flex:1;min-width:150px;font-size:13px}
+  /* 系列选择：一眼看出这个源喂给哪一路、服务哪个域名 */
+  .srcrow select.rt{
+    flex:none;max-width:230px;padding:4px 6px;font-size:11.5px;
+    color:var(--blue2);border-color:rgba(90,162,240,.35);background:rgba(90,162,240,.10);
+    border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;
+  }
+  @media (max-width:820px){
+    .srcrow select.rt{max-width:none;flex:1 1 100%;min-height:38px;font-size:12px}
+  }
   .srcrow .u4,.srcrow .u6{width:100%;margin-top:6px;font-size:12px}
   .srcnum{font-size:11.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace}
   .srcnum b{color:var(--text);font-weight:600}
@@ -170,6 +179,23 @@
   .poolcell{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--panel2)}
   .poolcell .n{font-size:20px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
   .poolcell .l{font-size:11.5px;color:var(--muted);margin-top:3px}
+  /* 卡头：系列 + 这一池只服务哪个域名，一眼对上 */
+  .poolcell .phead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .poolcell .phead b{font-size:13px;font-weight:650}
+  .poolcell .chip{
+    font-size:10.5px;line-height:1.7;padding:0 8px;border-radius:999px;flex:none;
+    border:1px solid var(--glass-brd,var(--border));color:var(--muted);background:rgba(255,255,255,.06);
+  }
+  .poolcell .chip.ser{color:var(--blue2);background:rgba(90,162,240,.13);border-color:rgba(90,162,240,.35)}
+  .poolcell .pdom{
+    font-size:11.5px;color:var(--muted);margin:5px 0 8px;
+    display:flex;align-items:center;gap:5px;flex-wrap:wrap;
+  }
+  .poolcell .pdom code{
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--text);
+    background:rgba(255,255,255,.08);border-radius:7px;padding:1px 7px;overflow-wrap:anywhere;
+  }
+  html[data-theme="light"] .poolcell .pdom code{background:rgba(20,40,80,.07)}
   /* 这个池子的数到底由哪几个源给的：一行一个源，名字 + 数量 */
   .poolsrc{margin-top:8px;padding-top:7px;border-top:1px dashed var(--border)}
   .poolsrc .h{font-size:10.5px;color:var(--muted);letter-spacing:.04em;margin-bottom:3px}
@@ -605,6 +631,24 @@
     .srow .sfreq select{min-height:40px;flex:1 1 auto;min-width:0}
     .srow .snext{font-size:11.5px}
   }
+
+  /* 分流清单卡里的「自动更新」条 */
+  .listauto{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    margin:2px 0 14px;padding:10px 12px;border-radius:12px;
+    border:1px solid var(--glass-brd,var(--border));
+    background:var(--glass2,var(--panel2));
+  }
+  .listauto .lab{font-size:12.5px;font-weight:600}
+  .listauto select{padding:6px 8px;font-size:12.5px;min-width:92px}
+  .listauto select.hour{min-width:76px}
+  .listauto select[hidden]{display:none}
+  .listauto #lstNext{font-size:12px}
+  @media (max-width:820px){
+    .listauto{gap:8px;padding:10px}
+    .listauto select{min-height:40px;flex:1 1 120px;min-width:0}
+    .listauto #lstHint{flex:1 1 100%}
+  }
 </style>
 </head>
 <body>
@@ -760,9 +804,18 @@
             </div>
 
             <div class="srow">
-              <div class="sname">国内 IP 段更新<small>拉最新网段；失败保留旧清单，不会把清单弄空</small></div>
-              <label class="switch"><input type="checkbox" id="cfgListAuto"><span class="slider"></span></label>
-              <div class="sfreq">每 <input type="number" id="cfgListHours" min="1" max="720" step="1"> 小时</div>
+              <div class="sname">分流清单自动更新<small>国内 IP 段 / 国内域名 / 国外域名 / CDN 网段，四份一起；内容有变化才重载引擎</small></div>
+              <label class="switch"><input type="checkbox" id="scListOn"><span class="slider"></span></label>
+              <div class="sfreq">
+                <select id="scListCycle">
+                  <option value="1h">每 1 小时</option><option value="2h">每 2 小时</option>
+                  <option value="3h">每 3 小时</option><option value="4h">每 4 小时</option>
+                  <option value="6h">每 6 小时</option><option value="8h">每 8 小时</option>
+                  <option value="12h">每 12 小时</option><option value="daily">每天</option>
+                  <option value="weekly">每周</option>
+                </select>
+                <select id="scListHour" class="hour"></select>
+              </div>
               <div class="snext" id="scListNext">—</div>
             </div>
 
@@ -1039,12 +1092,13 @@
 
           <div id="srcList"><div class="empty">加载中…</div></div>
           <div class="muted" style="font-size:12px;margin-top:10px">
+            每条源后面的「系列 X → 域名」是这个源喂给哪一路：拉到的 IP 只进那一池，只服务那个域名，改了立即保存。
             点「看有多少IP」只拉取、不测速，用来确认地址还通、能拿到多少 v4 / v6。
           </div>
         </div>
 
         <div class="card" style="margin-top:16px">
-          <h3>候选池 <span class="muted" style="font-weight:400;font-size:12px">（拉下来的 IP 进这里，优选直接取用）</span></h3>
+          <h3>候选池 <span class="muted" style="font-weight:400;font-size:12px">（五个池子分开：每池标了系列和它服务的域名，池里的数按源拆开）</span></h3>
           <div id="poolStat" class="poolgrid"><div class="empty">加载中…</div></div>
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
             <button class="btn" id="btnPoolPrune">清理失效 IP</button>
@@ -1059,6 +1113,21 @@
 
         <div class="card" style="margin-top:16px">
           <h3>分流清单 <span class="muted" style="font-weight:400;font-size:12px">（国内 IP 段随 APNIC 分配变化、CDN 网段随厂商发版变化，都可在这里更新）</span></h3>
+          <!-- 自动更新：开关 / 周期 / 时刻，改完立即生效，不用手动点 -->
+          <div class="listauto" id="listAutoBar">
+            <label class="switch" title="关掉后只能手动点更新"><input type="checkbox" id="lstAutoOn"><span class="slider"></span></label>
+            <span class="lab">自动更新</span>
+            <select id="lstCycle">
+              <option value="1h">每 1 小时</option><option value="2h">每 2 小时</option>
+              <option value="3h">每 3 小时</option><option value="4h">每 4 小时</option>
+              <option value="6h">每 6 小时</option><option value="8h">每 8 小时</option>
+              <option value="12h">每 12 小时</option><option value="daily">每天</option>
+              <option value="weekly">每周</option>
+            </select>
+            <select id="lstHour" class="hour"></select>
+            <span class="muted" id="lstNext">—</span>
+            <span class="muted" id="lstHint" style="font-size:11.5px">四份清单一起按这个时间自动拉；内容没变不重载引擎</span>
+          </div>
           <div id="listsTable"><div class="empty">加载中…</div></div>
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
             <button class="btn primary" id="btnListsUpdateAll">全部更新</button>
@@ -1223,6 +1292,24 @@
     if (!ts) return "-";
     var d = new Date(ts * 1000);
     return d.toLocaleString("zh-CN", {hour12:false});
+  }
+  /* 下次执行这种「未来时间」说得短一点：今天 04:00 / 明天 04:00 / 10-28 04:00 */
+  function fmtWhen(ts){
+    if (!ts) return "";
+    var d = new Date(ts * 1000), now = new Date();
+    var p = function(n){ return (n < 10 ? "0" : "") + n; };
+    var hm = p(d.getHours()) + ":" + p(d.getMinutes());
+    var d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var dd = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - d0) / 86400000);
+    if (dd === 0) return "今天 " + hm;
+    if (dd === 1) return "明天 " + hm;
+    if (dd === -1) return "昨天 " + hm;
+    return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + hm;
+  }
+  /* 到点了但还没跑（调度器每轮才检查一次）：不显示一个过去的时间 */
+  function fmtNext(ts){
+    if (!ts) return "";
+    return (ts * 1000 <= Date.now()) ? "已到点，下一轮自动拉" : "下次 " + fmtWhen(ts);
   }
   function fmtAgo(ts){
     if (!ts) return "未更新";
@@ -1491,9 +1578,61 @@
   }
 
   /* ---------- 分流清单 ---------- */
+  var CYCLE_LABEL = {"1h":"每 1 小时","2h":"每 2 小时","3h":"每 3 小时","4h":"每 4 小时",
+                     "6h":"每 6 小时","8h":"每 8 小时","12h":"每 12 小时",
+                     "daily":"每天","weekly":"每周"};
+  function cycleText(cyc, hour){
+    var l = CYCLE_LABEL[cyc] || "每天";
+    if (cyc !== "daily" && cyc !== "weekly") return l;
+    var h = hour == null ? 4 : hour;
+    return l + " " + (h < 10 ? "0" : "") + h + ":00";
+  }
+  /* 自动更新计划：配置页定时表 + 分流清单卡，两处共用同一份设置 */
+  function applyListSched(sched, nextTs){
+    sched = sched || {};
+    var on = sched.enabled !== false;
+    var cyc = sched.cycle || "daily";
+    var hour = sched.hour == null ? 4 : sched.hour;
+    [["scListOn", "scListCycle", "scListHour", "scListNext"],
+     ["lstAutoOn", "lstCycle", "lstHour", "lstNext"]].forEach(function(ids){
+      var o = $("#" + ids[0]), c = $("#" + ids[1]),
+          h = $("#" + ids[2]), n = $("#" + ids[3]);
+      if (!o || !c || !h) return;
+      hourOptions(h);
+      if (document.activeElement !== o) o.checked = on;
+      if (document.activeElement !== c) c.value = cyc;
+      if (document.activeElement !== h) h.value = String(hour);
+      syncHour(c, h);
+      c.disabled = !on; h.disabled = !on;
+      if (n) {
+        n.innerHTML = on
+          ? cycleText(cyc, hour) + (nextTs ? " · " + fmtNext(nextTs) : "")
+          : "已关闭，只能手动点更新";
+      }
+    });
+  }
+  function saveListSched(onId, cycId, hourId){
+    var on = $("#" + onId).checked;
+    var cyc = $("#" + cycId).value;
+    var hour = parseInt($("#" + hourId).value, 10);
+    if (isNaN(hour)) hour = 4;
+    api("/api/settings", {method:"POST", body:{
+      list_upd_enabled: on, list_upd_cycle: cyc, list_upd_hour: hour
+    }}).then(function(){
+      toast(on ? ("自动更新已开启：" + cycleText(cyc, hour)) : "自动更新已关闭，清单只能手动点更新");
+      return loadLists();
+    }).catch(function(e){ toast("保存失败：" + e.message); loadLists(); });
+  }
   function loadLists(){
     return api("/api/lists").then(function(res){
       state.lists = res.items || {};
+      state.listSched = res.auto || {};
+      var nextTs = 0;
+      Object.keys(state.lists).forEach(function(k){
+        var n = state.lists[k] && state.lists[k].next;
+        if (n && (!nextTs || n < nextTs)) nextTs = n;
+      });
+      applyListSched(state.listSched, nextTs);
       renderLists(state.lists);
     }).catch(function(){});
   }
@@ -1526,7 +1665,15 @@
       var c3 = document.createElement("td"); c3.textContent = fmtBytes(it.bytes);
       var c4 = document.createElement("td");
       c4.textContent = it.updated_at ? fmtAgo(it.updated_at) : "—";
-      c4.title = it.updated_at ? fmtTime(it.updated_at) : "";
+      c4.title = (it.updated_at ? fmtTime(it.updated_at) : "") +
+        (it.next ? " · 下次自动更新 " + fmtTime(it.next) : "");
+      if (it.next) {
+        var nx = document.createElement("div");
+        nx.className = "muted";
+        nx.style.cssText = "font-size:11px;margin-top:2px;white-space:nowrap";
+        nx.textContent = fmtNext(it.next);
+        c4.appendChild(nx);
+      }
       var c5 = document.createElement("td"); c5.style.fontSize = "12.5px";
       c5.textContent = sourceLabel(it);
       if (it.source) c5.title = it.source;
@@ -1540,6 +1687,15 @@
       txt.textContent = st === "fail" ? "更新失败" : (it.lines > 0 ? "正常" : "空");
       if (it.error) c6.title = it.error;
       c6.appendChild(led); c6.appendChild(txt);
+      // 这一份是自动更新还是只能手动点，直接写在状态下面，不用猜
+      var sch = state.listSched || {};
+      var au = document.createElement("div");
+      au.className = "muted";
+      au.style.cssText = "font-size:11px;margin-top:2px;white-space:nowrap";
+      au.textContent = it.auto_enabled
+        ? ("自动 · " + cycleText(sch.cycle, sch.hour))
+        : (it.auto ? "自动已关 · 手动" : "手动");
+      c6.appendChild(au);
 
       var c7 = document.createElement("td");
       var b1 = document.createElement("button");
@@ -1582,6 +1738,20 @@
   }
 
   $("#btnListsUpdateAll").addEventListener("click", function(){ updateList("all"); });
+  /* 两处「自动更新」控件（配置页定时表 / 分流清单卡）改完即时生效，不用按保存 */
+  [["lstAutoOn", "lstCycle", "lstHour"], ["scListOn", "scListCycle", "scListHour"]]
+    .forEach(function(ids){
+      var o = $("#" + ids[0]);
+      if (!o) return;
+      ids.forEach(function(id){
+        var el = $("#" + id);
+        if (!el) return;
+        el.addEventListener("change", function(){
+          if (id === ids[1]) syncHour($("#" + ids[1]), $("#" + ids[2]));
+          saveListSched(ids[0], ids[1], ids[2]);
+        });
+      });
+    });
   $("#btnReloadEngine").addEventListener("click", function(){
     api("/api/reload", {method:"POST"}).then(function(){ toast("已请求重载引擎"); })
       .catch(function(err){ toast("重载失败：" + err.message); });
@@ -1637,6 +1807,17 @@
     if (h.auto_disabled) t += ' <span class="tag">已停用</span>';
     return t;
   }
+  /* 这个源的 IP 只喂给哪一路（系列）+ 那一路服务哪个域名 */
+  function routeSel(it){
+    var cur = it.route && ROUTE_META[it.route] ? it.route : "cf";
+    var opts = ROUTES.map(function(r){
+      var m = ROUTE_META[r];
+      return '<option value="' + r + '"' + (r === cur ? " selected" : "") + ">" +
+        "系列 " + escH(m.series) + " → " + escH(m.domain) + "</option>";
+    }).join("");
+    return '<select class="rt" data-act="route" data-key="' + escH(it.key) + '"' +
+      ' title="这个源拉到的 IP 只进这一路的候选池">' + opts + "</select>";
+  }
   function renderSources(){
     var box = $("#srcList");
     var items = (SRC.data && SRC.data.items) || [];
@@ -1653,6 +1834,7 @@
           kindTag(it) +
           (it.from_sub ? '<span class="tag sub">订阅</span>' : '') +
           '<input class="nm" data-act="name" data-key="' + k + '" value="' + escH(it.name) + '">' +
+          routeSel(it) +
           healthTag(it) +
           '<span class="srcnum">' + escH(statText(it)) + "</span>" +
           '<button class="btn" data-act="test" data-key="' + k + '">看有多少IP</button>' +
@@ -1675,6 +1857,7 @@
       var nm = row.querySelector(".nm");
       var u4 = row.querySelector(".u4");
       var u6 = row.querySelector(".u6");
+      var rt = row.querySelector("select.rt");
       var cb = row.querySelector('input[data-act="toggle"]');
       return {
         key: key, name: nm ? nm.value : it.name,
@@ -1682,7 +1865,8 @@
         url_v6: u6 ? u6.value.trim() : it.url_v6,
         enabled: cb ? cb.checked : it.enabled,
         kind: it.kind, note: it.note, from_sub: it.from_sub,
-        last_test: it.last_test, health: it.health, route: it.route
+        last_test: it.last_test, health: it.health,
+        route: rt ? rt.value : (it.route || "cf")
       };
     });
   }
@@ -1736,6 +1920,7 @@
     var N = {cf:"Cloudflare", google:"Google", gt:"翻译", github:"GitHub", ghcr:"ghcr"};
     $("#poolStat").innerHTML = ROUTES.map(function(r){
       var p = pools[r] || {};
+      var meta = ROUTE_META[r] || {series:r, domain:"", use:""};
       var rows = p.by_source || [];
       var show = rows.slice(0, 6);
       var list = show.map(function(s){
@@ -1748,13 +1933,18 @@
           rows.slice(show.length).reduce(function(a, x){ return a + (x.n || 0); }, 0) + " 个 IP</div>";
       }
       var srcBox = rows.length
-        ? '<div class="poolsrc"><div class="h">来源明细</div>' + list + "</div>"
-        : '<div class="poolsrc"><div class="h">来源明细</div>' +
+        ? '<div class="poolsrc"><div class="h">这 ' + (p.total || 0) + " 个 IP 是谁给的</div>" + list + "</div>"
+        : '<div class="poolsrc"><div class="h">这 0 个 IP 是谁给的</div>' +
           '<div class="r"><i>还没有候选，跑一轮优选或拉取源</i></div></div>';
       return '<div class="poolcell">' +
+        '<div class="phead">' +
+          '<span class="chip ser">系列 ' + escH(meta.series || r) + "</span>" +
+          '<b>' + escH(N[r] || r) + "</b>" +
+        "</div>" +
+        '<div class="pdom">只用于 <code>' + escH(meta.domain || "—") + "</code></div>" +
         '<div class="n">' + (p.total || 0) + "</div>" +
-        '<div class="l">' + (N[r] || r) + " · v4 " + (p.v4 || 0) + " / v6 " + (p.v6 || 0) + "</div>" +
-        '<div class="l">已验证 ' + (p.verified || 0) + " · 已拉黑 " + (p.blocked || 0) + "</div>" +
+        '<div class="l">v4 ' + (p.v4 || 0) + " / v6 " + (p.v6 || 0) +
+          " · 已验证 " + (p.verified || 0) + " · 已拉黑 " + (p.blocked || 0) + "</div>" +
         srcBox +
       "</div>";
     }).join("");
@@ -1850,6 +2040,14 @@
         body: JSON.stringify({key:t.dataset.key, enabled:t.checked})})
         .then(function(){ toast(t.checked ? "已启用" : "已停用，下轮不再使用"); })
         .catch(function(err){ toast("操作失败：" + err.message); });
+    }
+    if (t.dataset.act === "route") {
+      // 换了系列就即时保存：这个源以后的 IP 只进新那一路的候选池
+      var m = ROUTE_META[t.value] || {};
+      saveSources().then(function(){
+        toast("已改到系列 " + (m.series || t.value) + " → " + (m.domain || ""));
+        loadSources();
+      }).catch(function(err){ toast("保存失败：" + err.message); });
     }
   });
   $("#btnSrcSave").addEventListener("click", function(){
@@ -2047,15 +2245,10 @@
     if (s.threads !== undefined && document.activeElement !== $("#cfgThreads")) {
       $("#cfgThreads").value = s.threads;
     }
-    if (s.list_auto_update !== undefined) {
-      $("#cfgListAuto").checked = !!s.list_auto_update;
-    }
     if (s.auto_reload !== undefined) {
       $("#cfgAutoReload").checked = !!s.auto_reload;
     }
-    if (s.list_update_hours !== undefined && document.activeElement !== $("#cfgListHours")) {
-      $("#cfgListHours").value = s.list_update_hours;
-    }
+    /* 分流清单的开关/周期/时刻由 applyListSched 统一填（它读的是 /api/lists） */
     if (s.top_n !== undefined && document.activeElement !== $("#cfgTopN")) {
       $("#cfgTopN").value = s.top_n;
     }
@@ -2106,11 +2299,29 @@
       nx.innerHTML = !on.checked
         ? "已关闭，不会自动跑"
         : "上次 <b>" + (cfg.last ? fmtAgo(cfg.last) : "还没跑过") + "</b>" +
-          (cfg.next ? " · 下次 <b>" + fmtTime(cfg.next) + "</b>" : "");
+          (cfg.next ? " · <b>" + fmtNext(cfg.next) + "</b>" : "");
     }
   }
+  /* 清单整体：上次（最近一次检查）/ 下次（最早到点的那一份） */
+  function lstLast(res){
+    var items = (res && res.items) || {}, n = 0;
+    Object.keys(items).forEach(function(k){
+      var t = items[k] && items[k].checked_at;
+      if (t && t > n) n = t;
+    });
+    return n;
+  }
+  function lstNext(res){
+    var items = (res && res.items) || {}, n = 0;
+    Object.keys(items).forEach(function(k){
+      var t = items[k] && items[k].next;
+      if (t && (!n || t < n)) n = t;
+    });
+    return n;
+  }
   function loadSchedule(){
-    return Promise.all([api("/api/status"), api("/api/sources")]).then(function(r){
+    return Promise.all([api("/api/status"), api("/api/sources"), api("/api/lists")])
+      .then(function(r){
       var st = (r[0] && r[0].settings) || {};
       var src = r[1] || {};
 
@@ -2122,13 +2333,13 @@
         ? "运行中 · 每 <b>" + (st.interval_min || 60) + "</b> 分钟一轮；改完保存后下一轮就按新间隔"
         : "已暂停，不会自动跑（「立即执行五路」仍可手动触发）";
 
-      var listOn = st.list_auto_update !== false;
-      $("#cfgListAuto").checked = listOn;
-      if (document.activeElement !== $("#cfgListHours")) $("#cfgListHours").value = st.list_update_hours || 24;
-      $("#cfgListHours").disabled = !listOn;
-      $("#scListNext").innerHTML = listOn
-        ? "每 <b>" + (st.list_update_hours || 24) + "</b> 小时检查一次，未过期不重复下载"
-        : "已关闭，国内网段清单不会被自动更新";
+      var listOn = st.list_upd_enabled !== undefined
+        ? st.list_upd_enabled !== false : st.list_auto_update !== false;
+      var listCyc = st.list_upd_cycle || "daily";
+      var listHour = st.list_upd_hour == null ? 4 : st.list_upd_hour;
+
+      fillSchedRow("scList", {enabled: listOn, cycle: listCyc, hour: listHour,
+                              last: lstLast(r[2]), next: lstNext(r[2])}, 4);
 
       fillSchedRow("scPull", src.pull, 4);
       fillSchedRow("scHealth", src.health, 5);
@@ -2156,8 +2367,9 @@
     api("/api/settings", {method:"POST", body:{
       interval_min: parseInt($("#cfgInterval").value, 10) || 60,
       pref_enabled: $("#scPrefOn").checked,
-      list_auto_update: $("#cfgListAuto").checked,
-      list_update_hours: parseInt($("#cfgListHours").value, 10) || 24,
+      list_upd_enabled: $("#scListOn").checked,
+      list_upd_cycle: $("#scListCycle").value,
+      list_upd_hour: parseInt($("#scListHour").value, 10) || 4,
       watchdog_enabled: $("#scWdOn").checked,
       watchdog_sec: parseInt($("#scWdSec").value, 10) || 180
     }}).then(function(){
@@ -2207,9 +2419,10 @@
       top_n: parseInt($("#cfgTopN").value, 10) || 3,
       ipv6: $("#cfgIpv6").checked,
       verify_https: $("#cfgVerify").checked,
-      list_auto_update: $("#cfgListAuto").checked,
+      list_upd_enabled: $("#scListOn").checked,
+      list_upd_cycle: $("#scListCycle").value,
+      list_upd_hour: parseInt($("#scListHour").value, 10) || 4,
       auto_reload: $("#cfgAutoReload").checked,
-      list_update_hours: parseInt($("#cfgListHours").value, 10) || 24,
       push: {
         enabled: $("#cfgPushOn").checked,
         url: $("#cfgPushUrl").value.trim(),

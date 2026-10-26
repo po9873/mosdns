@@ -542,7 +542,9 @@ class Handler(BaseHTTPRequestHandler):
                     "now": int(time.time()),
                 })
             if path == "/api/lists":
-                return self._send(200, {"items": lists_status()})
+                d = lists_status()
+                return self._send(200, {"items": d.get("items") or {},
+                                        "auto": d.get("sched") or {}})
             if path == "/api/lists/preview":
                 q = parse_qs(u.query)
                 name = (q.get("name") or [""])[0]
@@ -834,6 +836,16 @@ class Handler(BaseHTTPRequestHandler):
                 cur["threads"] = max(0, int(data["threads"]))
             if "list_auto_update" in data:
                 cur["list_auto_update"] = bool(data["list_auto_update"])
+                # 老字段同步成新字段，两边永远一致
+                cur["list_upd_enabled"] = bool(data["list_auto_update"])
+            if "list_upd_enabled" in data:
+                cur["list_upd_enabled"] = bool(data["list_upd_enabled"])
+                cur["list_auto_update"] = bool(data["list_upd_enabled"])
+            if data.get("list_upd_cycle") in ("1h", "2h", "3h", "4h", "6h", "8h",
+                                              "12h", "24h", "daily", "weekly"):
+                cur["list_upd_cycle"] = data["list_upd_cycle"]
+            if isinstance(data.get("list_upd_hour"), (int, float)):
+                cur["list_upd_hour"] = min(23, max(0, int(data["list_upd_hour"])))
             if "auto_reload" in data:
                 cur["auto_reload"] = bool(data["auto_reload"])
             if isinstance(data.get("list_update_hours"), (int, float)):

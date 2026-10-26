@@ -11,18 +11,23 @@ ROUTES="cf google gt github ghcr"
 LISTS_PY="/app/scheduler/lib/lists.py"
 SUB_PY="/app/scheduler/lib/subs.py"
 
-# 清单过期才更新（默认 24 小时）；更新成功才重载引擎
+# 四份清单（国内 IP 段 / 国内域名 / 国外域名 / CDN 网段）按「周期 + 时刻」自动拉一遍。
+# 计划存在 settings.json（list_upd_enabled / list_upd_cycle / list_upd_hour），
+# 只有内容真的变了才重载引擎（没变就不重启，DNS 零中断）。
 maybe_update_lists() {
-  local on hrs
-  on=$(setting list_auto_update)
-  case "$on" in
-    false|False|0) return 0 ;;
-  esac
-  hrs=$(setting list_update_hours)
-  [ -z "$hrs" ] && hrs=24
-  if python3 "$LISTS_PY" auto "$hrs" >>"${PREF_LOG:-$DATA_DIR/pref.log}" 2>&1; then
-    log "分流清单已更新，将在本轮结束时统一重载"
-    : > "$DATA_DIR/.lists_dirty"
+  local out nchk nchg
+  local LOGF="${PREF_LOG:-$DATA_DIR/pref.log}"
+  out=$(python3 "$LISTS_PY" auto 2>>"$LOGF")
+  nchk=$(printf '%s' "$out" | grep -o '"label"' | wc -l | tr -d ' ')
+  nchg=$(jget "$out" changed)
+  if [ -n "${nchg:-}" ] && [ "$nchg" != "0" ]; then
+    log "分流清单自动更新：检查 ${nchk:-0} 份，内容有变化 ${nchg} 份"
+    case "$(setting auto_reload)" in
+      false|False|0) log "已关闭自动重载，新清单将在下次重启容器后生效" ;;
+      *) reload_mosdns && log "新清单已生效（引擎已重载）" ;;
+    esac
+  elif [ "${nchk:-0}" != "0" ]; then
+    log "分流清单自动检查：${nchk} 份已是最新，内容没变不重载"
   fi
 }
 
@@ -94,13 +99,14 @@ daemon_mode() {
     if [ -z "$interval" ] || [ "$interval" -lt 1 ] 2>/dev/null; then
       interval=60
     fi
+    # 清单更新跟优选开关无关：优选暂停了，四份清单也照常自动更新
+    maybe_update_lists
     if [ "$(setting pref_enabled)" = "false" ]; then
       log "定时优选已关闭，本轮跳过（每分钟检查一次开关）"
       sleep 60
       continue
     fi
     run_all
-    maybe_update_lists
     maybe_pull_sources
     log "本轮完成，${interval} 分钟后再次执行"
     sleep $(( interval * 60 ))
