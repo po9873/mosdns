@@ -13,6 +13,8 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -26,6 +28,10 @@ PREF_DIR = os.path.join(DATA_DIR, "prefs")
 PREF_LOG = os.path.join(DATA_DIR, "pref.log")
 MOSDNS_OUT = os.path.join(DATA_DIR, "mosdns.out")
 MOSDNS_PID = os.path.join(DATA_DIR, "mosdns.pid")
+MOSDNS_LOG = os.path.join(DATA_DIR, "mosdns.log")
+MOSDNS_API_PORT = int(os.environ.get("PREF_API_PORT", "9099"))
+CACHE_DUMP = os.path.join(DATA_DIR, "cache.dump")
+CACHE_SIZE = int(os.environ.get("PREF_CACHE_SIZE", "8192"))
 SCHEDULER = "/app/scheduler/scheduler.sh"
 DNSSQ = "/app/scheduler/lib/dnsq.py"
 LISTS_PY = "/app/scheduler/lib/lists.py"
@@ -93,6 +99,137 @@ def mosdns_alive():
         return True
     except Exception:
         return False
+
+
+# 查询日志：mosdns 的 query_summary 插件写入，控制台「实时解析域名」读它
+QTYPE = {1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 12: "PTR", 15: "MX",
+         16: "TXT", 28: "AAAA", 33: "SRV", 64: "SVCB", 65: "HTTPS", 255: "ANY"}
+RCODE = {0: "正常", 2: "服务器失败", 3: "域名不存在", 4: "不支持", 5: "拒绝"}
+CACHE_MS = 5.0   # 耗时 ≤ 该阈值视为命中缓存（cache 插件命中不回源，通常 1ms 内）
+
+
+def rotate_qlog_if_big(max_bytes=32 * 1024 * 1024, keep_bytes=8 * 1024 * 1024):
+    """日志过大时只保留尾部，避免 /data 被写满。"""
+    try:
+        if os.path.getsize(MOSDNS_LOG) <= max_bytes:
+            return
+        with open(MOSDNS_LOG, "rb") as f:
+            f.seek(-keep_bytes, os.SEEK_END)
+            data = f.read()
+        with open(MOSDNS_LOG, "wb") as f:
+            f.write(data)
+    except Exception:
+        pass
+
+
+def read_qlog(limit=30):
+    """从 mosdns 日志尾部解析 query_summary，返回最近若干条 + 命中统计。"""
+    lines = tail(MOSDNS_LOG, 400)
+    items = []
+    for ln in lines:
+        if "query summary" not in ln:
+            continue
+        pos = ln.find("{")
+        if pos < 0:
+            continue
+        try:
+            d = json.loads(ln[pos:])
+        except Exception:
+            continue
+        qname = str(d.get("qname", "")).rstrip(".")
+        if not qname:
+            continue
+        ms = None
+        try:
+            ms = round(float(d.get("elapsed", 0)) * 1000.0, 1)
+        except Exception:
+            pass
+        rcode = d.get("rcode")
+        clock = ""
+        head = ln.split("\t", 1)[0]
+        if "T" in head:
+            clock = head.split("T", 1)[1][:8]
+        items.append({
+            "time": clock,
+            "qname": qname,
+            "qtype": QTYPE.get(d.get("qtype"), str(d.get("qtype", ""))),
+            "rcode": rcode,
+            "status": RCODE.get(rcode, "无响应" if rcode is None else "异常"),
+            "ms": ms,
+            "cached": bool(ms is not None and ms <= CACHE_MS),
+            "client": str(d.get("client", "")).rsplit(":", 1)[0],
+        })
+    recent = items[-limit:][::-1]
+    total = len(items)
+    vals = [x["ms"] for x in items if x["ms"] is not None]
+    cached_n = sum(1 for x in items if x["cached"])
+    failed_n = sum(1 for x in items if x["rcode"] not in (0, None))
+    return {
+        "items": recent,
+        "total": total,
+        "avg": round(sum(vals) / len(vals), 1) if vals else None,
+        "cached": cached_n,
+        "cached_pct": round(cached_n * 100.0 / total, 1) if total else 0,
+        "failed": failed_n,
+        "domains": len({x["qname"] for x in items}),
+        "cache_ms": CACHE_MS,
+        "log_ok": bool(items),
+    }
+
+
+def mosdns_api(path, timeout=3):
+    """调 mosdns 原生 API（只监听环回，不经外网）。"""
+    url = "http://127.0.0.1:%d%s" % (MOSDNS_API_PORT, path)
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return r.read()
+
+
+def _metric(txt, name):
+    for ln in txt.splitlines():
+        if ln.startswith(name):
+            try:
+                return int(float(ln.rsplit(" ", 1)[1]))
+            except Exception:
+                return None
+    return None
+
+
+def cache_info():
+    """缓存用量：条数/上限/累计命中 + 落盘文件与日志体积。"""
+    info = {"size": None, "hit": None, "capacity": CACHE_SIZE,
+            "dump_bytes": 0, "log_bytes": 0, "api_ok": False}
+    try:
+        txt = mosdns_api("/metrics").decode("utf-8", "replace")
+        info["size"] = _metric(txt, "mosdns_cache_size_current")
+        info["hit"] = _metric(txt, "mosdns_cache_hit_total")
+        info["api_ok"] = True
+    except Exception:
+        pass
+    for key, p in (("dump_bytes", CACHE_DUMP), ("log_bytes", MOSDNS_LOG)):
+        try:
+            info[key] = os.path.getsize(p)
+        except Exception:
+            pass
+    return info
+
+
+def cache_flush():
+    """清空 DNS 缓存：调 cache 插件 flush，并删掉落盘副本，避免重启后又被加载回来。"""
+    mosdns_api("/plugins/dns_cache/flush")
+    try:
+        os.remove(CACHE_DUMP)
+    except Exception:
+        pass
+    return True
+
+
+def qlog_clear():
+    try:
+        with open(MOSDNS_LOG, "w"):
+            pass
+    except Exception:
+        pass
+    return True
 
 
 def is_ip(s):
@@ -359,6 +496,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"lines": tail(f, n)})
             if path == "/api/lock":
                 return self._send(200, {"locked": os.path.isdir(os.path.join(DATA_DIR, ".pref.lock"))})
+            if path == "/api/qlog":
+                q = parse_qs(u.query)
+                try:
+                    n = max(1, min(200, int((q.get("n") or ["30"])[0])))
+                except Exception:
+                    n = 30
+                rotate_qlog_if_big()
+                return self._send(200, read_qlog(n))
+            if path == "/api/cache/info":
+                return self._send(200, cache_info())
             return self._send(404, {"error": "not found"})
 
         return self._send(404, {"error": "not found"})
@@ -506,6 +653,20 @@ class Handler(BaseHTTPRequestHandler):
             if not re.match(r"^[A-Za-z0-9_.-]{1,253}$", domain):
                 return self._send(400, {"error": "非法域名"})
             return self._send(200, diag_run(["domain", domain], 60))
+
+        if path == "/api/cache/flush":
+            try:
+                cache_flush()
+            except Exception as e:
+                return self._send(500, {"error": "清空失败：%s" % e})
+            return self._send(200, {"ok": True, "info": cache_info()})
+
+        if path == "/api/qlog/clear":
+            try:
+                qlog_clear()
+            except Exception as e:
+                return self._send(500, {"error": "清空失败：%s" % e})
+            return self._send(200, {"ok": True})
 
         if path == "/api/reload":
             try:

@@ -149,6 +149,24 @@
   .resolve-row input:focus{border-color:var(--blue)}
   .resolve-meta{color:var(--muted);font-size:12px;margin:12px 0 4px}
 
+  /* 实时查询流（读 mosdns query_summary 日志） */
+  .flexhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .qstat{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 10px}
+  .qstat .s{flex:1 1 116px;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:8px 11px}
+  .qstat .s span{display:block;font-size:11px;color:var(--muted)}
+  .qstat .s b{display:block;font-size:17px;margin-top:2px;font-weight:600}
+  .qstat .s b small{font-size:11px;color:var(--muted);font-weight:400}
+  .q-live{max-height:340px;overflow-y:auto;overflow-x:auto;border:1px solid var(--border);border-radius:10px}
+  .q-live table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .q-live th,.q-live td{padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:left}
+  .q-live th{position:sticky;top:0;background:var(--panel);z-index:1;font-size:11.5px}
+  .q-live tbody tr:last-child td{border-bottom:none}
+  .q-live .qname{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:normal;word-break:break-all;max-width:340px}
+  .q-live .qtype{font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin-left:6px}
+  .q-live .q-ok{color:var(--green);font-size:12px}
+  .q-live .q-hit{color:var(--blue2);font-size:12px}
+  .q-live .q-bad{color:var(--red);font-size:12px}
+
   .logbox{
     background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;
     height:calc(100vh - 250px);min-height:320px;overflow:auto;
@@ -287,6 +305,14 @@
     .diag-out .foot .btn{min-height:38px}
     /* 诊断页的三组测试在手机上整块可点，不再需要精确点到小按钮 */
     .diag-out .foot{gap:12px}
+
+    /* 实时查询流在手机上：隐藏客户端列，其余列收窄 */
+    .q-live .col-client{display:none}
+    .q-live th,.q-live td{padding:6px 7px;font-size:11.5px}
+    .q-live .qname{max-width:160px;font-size:11.5px}
+    .qstat .s{flex:1 1 calc(50% - 5px);min-width:0}
+    .qstat .s b{font-size:15px}
+    .inline-form .btn{flex:1 1 calc(50% - 5px);min-width:0}
   }
 </style>
 </head>
@@ -357,13 +383,34 @@
         <div class="grid c5" id="routeCards"></div>
 
         <div class="card" style="margin-top:16px">
-          <h3>实时解析域名</h3>
+          <div class="flexhead">
+            <h3>实时解析域名</h3>
+            <span class="hint" style="margin:0">最近 30 条 · 每 5 秒自动刷新</span>
+          </div>
           <form class="resolve-row" id="resolveForm">
             <input id="resolveInput" placeholder="输入域名，例如 www.google.com" autocomplete="off">
             <button class="btn primary" type="submit">解析</button>
           </form>
           <div class="resolve-meta" id="resolveMeta"></div>
           <div id="resolveResult"></div>
+
+          <div class="qstat" id="qStat"></div>
+          <div id="qLive" class="q-live"><div class="empty">等待引擎处理查询…</div></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="flexhead">
+            <h3>缓存与日志</h3>
+            <span class="hint" style="margin:0">超过上限自动淘汰最旧的，也可以立刻清空</span>
+          </div>
+          <div class="qstat" id="cacheStat"></div>
+          <div class="inline-form" style="margin-top:4px">
+            <button class="btn" id="btnCacheFlush">清空 DNS 缓存</button>
+            <button class="btn" id="btnQlogClear">清空查询日志</button>
+            <button class="btn" id="btnCacheRefresh">刷新用量</button>
+          </div>
+          <p class="hint">缓存按 LRU 自动淘汰，条数不会超过上限（<span id="cacheCap">-</span> 条，可用 PREF_CACHE_SIZE 调整）；
+            清空后后续查询会重新向上游解析。查询日志超过 32MB 会自动只保留尾部 8MB。</p>
         </div>
       </section>
 
@@ -743,6 +790,8 @@
       $("#txtListLines").textContent = (lb.lines || 0).toLocaleString();
       $("#txtListTime").textContent = lb.updated_at ? "· " + fmtAgo(lb.updated_at) : "· 未更新";
       $("#ledList").className = "led " + (lb.lines > 0 ? "ok" : "bad");
+      loadQLive();
+      loadCache();
     }).catch(function(){});
   }
 
@@ -782,6 +831,119 @@
       $("#resolveMeta").textContent = "解析失败：" + err.message;
     });
   });
+
+  /* ---------- 实时查询流（读 mosdns query_summary 日志） ---------- */
+  function msClass(ms){
+    if (ms === null || ms === undefined) return "lat-na";
+    if (ms <= 5) return "lat-good";
+    if (ms <= 80) return "lat-good";
+    if (ms <= 250) return "lat-mid";
+    return "lat-bad";
+  }
+  function renderQLive(d){
+    var box = $("#qLive"), stat = $("#qStat");
+    if (!box) return;
+    var items = (d && d.items) || [];
+    if (!d || !d.log_ok || !items.length) {
+      stat.innerHTML = "";
+      box.innerHTML = '<div class="empty">还没有查询记录（引擎收到 DNS 请求后这里会自动出现）</div>';
+      return;
+    }
+    stat.innerHTML =
+      '<div class="s"><span>最近查询</span><b>' + d.total + '</b></div>' +
+      '<div class="s"><span>涉及域名</span><b>' + d.domains + '</b></div>' +
+      '<div class="s"><span>命中缓存</span><b>' + d.cached + ' <small>' + d.cached_pct + '%</small></b></div>' +
+      '<div class="s"><span>平均耗时</span><b>' + (d.avg === null ? "—" : d.avg + "<small> ms</small>") + '</b></div>' +
+      '<div class="s"><span>失败</span><b>' + d.failed + '</b></div>';
+
+    var t = document.createElement("table");
+    var thead = document.createElement("thead");
+    thead.innerHTML = "<tr><th>时间</th><th>域名</th><th class=\"col-cache\">缓存</th><th>用时</th><th>状态</th><th class=\"col-client\">客户端</th></tr>";
+    var tbody = document.createElement("tbody");
+    items.forEach(function(it){
+      var tr = document.createElement("tr");
+      var td0 = document.createElement("td"); td0.className = "mono"; td0.textContent = it.time || "-";
+      var td1 = document.createElement("td"); td1.className = "qname"; td1.textContent = it.qname;
+      if (it.qtype) { var sp = document.createElement("span"); sp.className = "qtype"; sp.textContent = it.qtype; td1.appendChild(sp); }
+      var td2 = document.createElement("td"); td2.className = "col-cache";
+      var hit = document.createElement("span");
+      hit.className = it.cached ? "q-hit" : "muted";
+      hit.textContent = it.cached ? "命中" : "回源";
+      td2.appendChild(hit);
+      var td3 = document.createElement("td");
+      var pill = document.createElement("span");
+      pill.className = "lat-pill " + msClass(it.ms);
+      pill.textContent = it.ms === null ? "—" : it.ms + " ms";
+      td3.appendChild(pill);
+      var td4 = document.createElement("td");
+      var st = document.createElement("span");
+      var ok = it.rcode === 0;
+      st.className = ok ? "q-ok" : "q-bad";
+      st.textContent = ok ? "正常" : (it.status || "失败");
+      td4.appendChild(st);
+      var td5 = document.createElement("td"); td5.className = "col-client muted"; td5.textContent = it.client || "-";
+      [td0, td1, td2, td3, td4, td5].forEach(function(x){ tr.appendChild(x); });
+      tbody.appendChild(tr);
+    });
+    t.innerHTML = "";
+    t.appendChild(thead); t.appendChild(tbody);
+    box.innerHTML = "";
+    box.appendChild(t);
+  }
+  function loadQLive(){
+    if (!$("#qLive")) return Promise.resolve();
+    return api("/api/qlog?n=30").then(renderQLive).catch(function(){});
+  }
+
+  /* ---------- 缓存与日志 ---------- */
+  function fmtBytes(n){
+    n = n || 0;
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1048576).toFixed(2) + " MB";
+  }
+  function renderCache(d){
+    var s = $("#cacheStat");
+    if (!s) return;
+    d = d || {};
+    var pct = (d.size !== null && d.size !== undefined && d.capacity)
+      ? Math.min(100, Math.round(d.size * 100 / d.capacity)) : null;
+    s.innerHTML =
+      '<div class="s"><span>缓存条数</span><b>' + (d.size === null || d.size === undefined ? "—" : d.size) +
+        (pct === null ? "" : ' <small>/ ' + d.capacity + ' · ' + pct + '%</small>') + '</b></div>' +
+      '<div class="s"><span>累计命中</span><b>' + (d.hit === null || d.hit === undefined ? "—" : d.hit) + '</b></div>' +
+      '<div class="s"><span>缓存落盘</span><b>' + fmtBytes(d.dump_bytes) + '</b></div>' +
+      '<div class="s"><span>查询日志</span><b>' + fmtBytes(d.log_bytes) + '</b></div>';
+    if ($("#cacheCap") && d.capacity) $("#cacheCap").textContent = d.capacity;
+  }
+  function loadCache(){
+    if (!$("#cacheStat")) return Promise.resolve();
+    return api("/api/cache/info").then(renderCache).catch(function(){});
+  }
+  if ($("#btnCacheRefresh")) {
+    $("#btnCacheRefresh").addEventListener("click", function(){ loadCache(); loadQLive(); toast("已刷新"); });
+  }
+  if ($("#btnCacheFlush")) {
+    $("#btnCacheFlush").addEventListener("click", function(){
+      if (!confirm("确定清空 DNS 缓存？之后这些域名会重新向上游解析。")) return;
+      var self = this; self.disabled = true;
+      api("/api/cache/flush", {method:"POST", body:{}}).then(function(r){
+        if (r && r.info) renderCache(r.info);
+        toast("DNS 缓存已清空");
+      }).catch(function(e){ toast("清空失败：" + e.message); })
+        .then(function(){ self.disabled = false; });
+    });
+  }
+  if ($("#btnQlogClear")) {
+    $("#btnQlogClear").addEventListener("click", function(){
+      if (!confirm("确定清空查询日志？「实时解析域名」的历史记录会一并清掉。")) return;
+      var self = this; self.disabled = true;
+      api("/api/qlog/clear", {method:"POST", body:{}}).then(function(){
+        toast("查询日志已清空"); loadQLive(); loadCache();
+      }).catch(function(e){ toast("清空失败：" + e.message); })
+        .then(function(){ self.disabled = false; });
+    });
+  }
 
   /* ---------- 分流清单 ---------- */
   function loadLists(){

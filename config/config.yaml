@@ -22,6 +22,16 @@ plugins:
       files:
         - /data/prefs/all.hosts
 
+  # ---- DNS 缓存（条数上限由 PREF_CACHE_SIZE 注入；控制台可一键清空）----
+  # dump_file 让缓存落盘，重启后仍能复用；控制台「缓存与日志」可看到条数并清空。
+  - tag: dns_cache
+    type: cache
+    args:
+      size: __CACHE_SIZE__
+      lazy_cache_ttl: 0
+      dump_file: /data/cache.dump
+      dump_interval: 600
+
   # ---- 国内上游（DoH，由 PREF_DOMESTIC_DOH 注入）----
   - tag: forward_local
     type: forward
@@ -86,9 +96,13 @@ plugins:
       always_standby: true
 
   # ---- 主处理序列 ----
+  # 第一行 query_summary：把每条查询的 qname/rcode/elapsed 以 INFO 写入日志，
+  # 控制台「实时解析域名」读这个日志生成最近若干条记录（不额外存盘、不写死）。
   - tag: main_sequence
     type: sequence
     args:
+      - exec: query_summary qlog
+      - exec: $dns_cache
       - exec: $pref_hosts
       - matches: has_resp
         exec: accept

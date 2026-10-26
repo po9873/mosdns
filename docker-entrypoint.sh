@@ -16,6 +16,7 @@ FOREIGN_DOH="${PREF_FOREIGN_DOH:-https://1.1.1.1/dns-query}"
 FOREIGN_DOH_BACKUP="${PREF_FOREIGN_DOH_BACKUP:-https://8.8.8.8/dns-query}"
 DOMESTIC_DOH="${PREF_DOMESTIC_DOH:-https://223.5.5.5/dns-query}"
 THREADS="${PREF_THREADS:-}"
+CACHE_SIZE="${PREF_CACHE_SIZE:-8192}"
 
 elog() { echo "[entrypoint] $*"; }
 
@@ -79,6 +80,7 @@ esc() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
 sed \
   -e "s|__DNS_PORT__|$(esc "$DNS_PORT")|g" \
   -e "s|__API_PORT__|$(esc "$API_PORT")|g" \
+  -e "s|__CACHE_SIZE__|$(esc "$CACHE_SIZE")|g" \
   -e "s|__DOMESTIC_DOH__|$(esc "$DOMESTIC_DOH")|g" \
   -e "s|__FOREIGN_DOH__|$(esc "$FOREIGN_DOH")|g" \
   -e "s|__FOREIGN_DOH_BACKUP__|$(esc "$FOREIGN_DOH_BACKUP")|g" \
