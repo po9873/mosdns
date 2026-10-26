@@ -4,7 +4,7 @@
 # 运行时不下载任何东西：工具/种子都固化在镜像里，优选只做 DNS 查询 + TCP 测延迟。
 #
 # 所有版本都可通过 --build-arg 覆盖（由 CI 的 versions.env 注入）
-ARG GOLANG_IMAGE=golang:1.22-alpine
+ARG GOLANG_IMAGE=golang:1.24-alpine
 ARG ALPINE_IMAGE=alpine:3.20
 ARG MOSDNS_VERSION=v5.3.4
 ARG CFT_VERSION=v2.3.5
