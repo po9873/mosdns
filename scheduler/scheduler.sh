@@ -88,6 +88,59 @@ maybe_pull_sources() {
   log "源扫描完成：检查 ${cn} 个，可用 ${gn:-0} 个"
 }
 
+# 五路串行跑一遍，全部跑完只判断一次是否需要重载引擎
+run_all() {
+  local r en fp ok=0 bad=0 names="" rc
+  fp=$(file_sig "$PREF_DIR/all.hosts")
+  for r in $ROUTES; do
+    en=$(setting "routes.$r")
+    case "$en" in
+      true|True|1) ;;
+      *) log "跳过 $r（已在配置中关闭）"; continue ;;
+    esac
+    log "== 开始 $r 路 =="
+    "/app/scheduler/${r}_pref.sh"
+    rc=$?
+    if [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; then
+      ok=$((ok + 1))
+      names="$names $r"
+    else
+      bad=$((bad + 1))
+      if [ "$rc" -eq 3 ]; then
+        log "$r 路：候选全部被校验拒绝，已撤下该路（不使用坏 IP）"
+      else
+        log "$r 路未选出结果"
+      fi
+    fi
+  done
+  # 五路全部跑完，只在这里判断一次是否需要重载
+  reload_if_changed "$fp"
+  notify "round" "五路优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。"
+}
+
+# UI 的「立即执行」走这里：once 单路 或 once all
+once_mode() {
+  local which="${1:-all}" fp
+  if [ "$which" = "all" ]; then
+    run_all
+  else
+    case " $ROUTES " in
+      *" $which "*) ;;
+      *) echo "未知路: $which"; exit 1 ;;
+    esac
+    fp=$(file_sig "$PREF_DIR/all.hosts")
+    "/app/scheduler/${which}_pref.sh" || exit 1
+    reload_if_changed "$fp"
+  fi
+}
+
+# UI 的「更新分流清单」走这里
+lists_mode() {
+  local name="${1:-all}"
+  python3 "$LISTS_PY" update "$name" || true
+  reload_mosdns
+}
+
 daemon_mode() {
   local interval
   log "调度器启动，五路串行"
