@@ -106,7 +106,7 @@
   .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
   .route-card:hover{border-color:var(--blue)}
   .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-  .route-card .rc-name{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .route-card .rc-name{font-size:12.5px;color:var(--muted);letter-spacing:.3px}
   .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;word-break:break-all}
   .route-card .rc-dom{font-size:11.5px;color:var(--muted);margin-top:4px;word-break:break-all}
   .route-card .rc-time{font-size:11px;color:var(--muted);margin-top:6px}
@@ -310,11 +310,11 @@
             <div class="lab">清单更新间隔（小时）<small>默认 24 小时检查一次，未过期不重复下载</small></div>
             <input type="number" id="cfgListHours" min="1" step="1">
           </div>
-          <div class="form-row"><div class="lab">Cloudflare</div><label class="switch"><input type="checkbox" data-route="cf"><span class="slider"></span></label></div>
-          <div class="form-row"><div class="lab">Google</div><label class="switch"><input type="checkbox" data-route="google"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">Cloudflare 优选</div><label class="switch"><input type="checkbox" data-route="cf"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">Google 搜索</div><label class="switch"><input type="checkbox" data-route="google"><span class="slider"></span></label></div>
           <div class="form-row"><div class="lab">Google 翻译</div><label class="switch"><input type="checkbox" data-route="gt"><span class="slider"></span></label></div>
-          <div class="form-row"><div class="lab">GitHub</div><label class="switch"><input type="checkbox" data-route="github"><span class="slider"></span></label></div>
-          <div class="form-row"><div class="lab">ghcr.io</div><label class="switch"><input type="checkbox" data-route="ghcr"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">GitHub 访问</div><label class="switch"><input type="checkbox" data-route="github"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">ghcr 镜像仓库</div><label class="switch"><input type="checkbox" data-route="ghcr"><span class="slider"></span></label></div>
           <div style="display:flex;gap:10px;margin-top:16px">
             <button class="btn primary" id="btnSaveCfg">保存配置</button>
             <button class="btn" id="btnRunAll2">立即执行五路</button>
@@ -345,11 +345,11 @@
 
         <div class="card" style="margin-top:16px">
           <h3>候选源（内置镜像，公开种子）</h3>
-          <div class="kv"><span class="k">Cloudflare</span><span class="mono">/app/config/seeds/cloudflare.txt</span></div>
-          <div class="kv"><span class="k">Google</span><span class="mono">/app/config/seeds/google.txt</span></div>
-          <div class="kv"><span class="k">Google 翻译</span><span class="mono">/app/config/seeds/ghtranslate.txt</span></div>
-          <div class="kv"><span class="k">GitHub</span><span class="mono">/app/config/seeds/github.txt</span></div>
-          <div class="kv"><span class="k">ghcr.io</span><span class="mono">/app/config/seeds/ghcr.txt</span></div>
+          <div class="kv"><span class="k">Cloudflare 优选种子</span><span class="mono">/app/config/seeds/cloudflare.txt</span></div>
+          <div class="kv"><span class="k">Google 搜索种子</span><span class="mono">/app/config/seeds/google.txt</span></div>
+          <div class="kv"><span class="k">Google 翻译种子</span><span class="mono">/app/config/seeds/ghtranslate.txt</span></div>
+          <div class="kv"><span class="k">GitHub 访问种子</span><span class="mono">/app/config/seeds/github.txt</span></div>
+          <div class="kv"><span class="k">ghcr 镜像仓库种子</span><span class="mono">/app/config/seeds/ghcr.txt</span></div>
         </div>
         <div class="card" style="margin-top:16px">
           <h3>工作原理</h3>
@@ -377,7 +377,7 @@
 (function(){
   "use strict";
   var ROUTES = ["cf","google","gt","github","ghcr"];
-  var ROUTE_LABEL = {cf:"Cloudflare",google:"Google",gt:"Google 翻译",github:"GitHub",ghcr:"ghcr.io"};
+  var ROUTE_LABEL = {cf:"Cloudflare 优选",google:"Google 搜索",gt:"Google 翻译",github:"GitHub 访问",ghcr:"ghcr 镜像仓库"};
   var state = { view:"overview", settings:{}, results:{}, logSrc:"pref", timers:[] };
   var $ = function(s){ return document.querySelector(s); };
   var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
@@ -573,6 +573,16 @@
     }).catch(function(){});
   }
 
+  function sourceLabel(it){
+    var s = it.source || "";
+    if (!s || s.indexOf("image:") === 0) return "内置镜像";
+    var h = it.source_host || "";
+    if (/raw\.githubusercontent\.com|github\.com/.test(h)) return "GitHub 公开清单";
+    if (/apnic/.test(h)) return "APNIC 官方";
+    if (/clang\.cn/.test(h)) return "国内镜像源";
+    return h;
+  }
+
   function renderLists(items){
     var host = $("#listsTable");
     host.innerHTML = "";
@@ -592,8 +602,8 @@
       var c4 = document.createElement("td");
       c4.textContent = it.updated_at ? fmtAgo(it.updated_at) : "—";
       c4.title = it.updated_at ? fmtTime(it.updated_at) : "";
-      var c5 = document.createElement("td"); c5.className = "mono"; c5.style.fontSize = "12px";
-      c5.textContent = it.source_host || "内置镜像";
+      var c5 = document.createElement("td"); c5.style.fontSize = "12.5px";
+      c5.textContent = sourceLabel(it);
       if (it.source) c5.title = it.source;
 
       var c6 = document.createElement("td");
@@ -638,7 +648,7 @@
     if (p.dataset.name === name && !p.hidden) { p.hidden = true; p.dataset.name = ""; return; }
     p.hidden = false; p.dataset.name = name; p.textContent = "加载中…";
     api("/api/lists/preview?name=" + encodeURIComponent(name) + "&n=40").then(function(res){
-      p.textContent = "// " + (res.label || name) + "（前 " + (res.lines || []).length + " 行）\n\n" +
+      p.textContent = (res.label || name) + " · 前 " + (res.lines || []).length + " 行\n\n" +
                       (res.lines || []).join("\n");
     }).catch(function(err){ p.textContent = "预览失败：" + err.message; });
   }
