@@ -35,8 +35,9 @@ services:
       PREF_SUB_TTL_DAYS: "14"
       # ---- 官方网段展开时的采样数（每个 CIDR 取几个 IP 去测）----
       PREF_CIDR_SAMPLE: "6"
-      # ---- 失效源处理：连续失败到阈值后直接删除（1=删，0=只停用）----
-      PREF_SRC_DISABLE_AFTER: "3"
+      # ---- 失效源处理：失败几次就处理（默认 1 = 拉不到就删），配合下面的删除开关 ----
+      PREF_SRC_DISABLE_AFTER: "1"
+      # ---- 1=到阈值直接删源（默认），0=只停用保留 ----
       PREF_SRC_AUTO_DELETE: "1"
     volumes:
       - ./data:/data

@@ -97,7 +97,7 @@
   }
   .topbar h1{margin:0;font-size:17px;font-weight:650}
   .topbar .actions{display:flex;gap:8px;align-items:center}
-  .content{padding:22px 24px 40px;max-width:1180px;width:100%}
+  .content{padding:22px 24px 40px;max-width:1900px;width:100%;margin:0 auto}
   .view{display:none}
   .view.active{display:block}
 
@@ -159,9 +159,12 @@
   .poolsrc .r.gone i{color:#e2534b}
   .poolsrc .r.feed i{color:var(--blue)}
   .poolsrc .more{font-size:11px;color:var(--muted);margin-top:2px}
-  .delbox{border:1px solid rgba(226,83,75,.35);border-radius:10px;padding:8px 10px;background:rgba(226,83,75,.06)}
-  .delbox .r{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:1.7;flex-wrap:wrap}
-  .delbox .r i{flex:1;min-width:120px;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 已自动清理的源：中性灰，折叠起来，不刺眼 */
+  .delbox{border:1px solid var(--border);border-radius:10px;padding:6px 10px;background:var(--panel2);margin:0 0 12px}
+  .delbox summary{font-size:11.5px;color:var(--muted);cursor:pointer;outline:none}
+  .delbox summary::-webkit-details-marker{color:var(--muted)}
+  .delbox .r{display:flex;align-items:baseline;gap:8px;font-size:11.5px;line-height:1.7;color:var(--muted);flex-wrap:wrap}
+  .delbox .r i{flex:1;min-width:120px;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
   .tag.official{color:var(--blue);border-color:rgba(59,142,234,.5)}
   .tag.third{color:var(--amber);border-color:rgba(192,125,26,.5)}
   .tag.mirror{color:var(--muted)}
@@ -666,7 +669,7 @@
           </div>
 
           <div class="rowline">
-            <label class="chk" title="开着：连续失败的源直接删掉，列表里不留废源；关掉：只停用，等它自己恢复">
+            <label class="chk" title="开着：拉不到的源直接删掉，列表里不留废源；关掉：只停用，等它自己恢复">
               <input type="checkbox" id="adOn"> 失效自动删除
             </label>
             <span class="muted" id="adHint" style="font-size:12px"></span>
@@ -675,10 +678,10 @@
           </div>
           <p class="muted" style="margin:0 0 12px;font-size:12px">
             体检会逐个拉一次所有源（不只启用中的）。官方源失败只标红——它是权威定义，多半只是临时断网；
-            第三方/镜像源连续失败 <span id="adCnt">3</span> 次就按上面的开关处理：删除（默认）或只停用。
-            删掉的源会从候选池里一并带走它还没验证过的 IP，已验证过、实测能通的 IP 保留。
+            非官方源拉不到就按上面的开关处理：<b>删除</b>（默认，<span id="adCnt">1</span> 次不通过就删）
+            或只停用。删掉的源会从候选池里一并带走它还没验证过的 IP，已验证过、实测能通的 IP 保留。
           </p>
-          <div id="srcDeleted" hidden style="margin:0 0 12px"></div>
+          <details id="srcDeleted" hidden class="delbox"></details>
 
           <div class="rowline" style="align-items:flex-start">
             <label class="grow">源订阅（一行一个清单地址，同步进来的源默认不启用）
@@ -1246,7 +1249,7 @@
     var m = KIND[it.kind] || KIND.custom;
     return '<span class="tag ' + m[0] + '">' + m[1] + "</span>";
   }
-  /* 源体检结果：可用 / 失效 ×N / 未体检；自动停用的额外标出来 */
+  /* 源体检结果：可用（绿）/ 失败（灰，反正马上会被删）/ 未体检；失败不再标红 */
   function healthTag(it){
     var h = it.health;
     if (!h || !h.ts) return '<span class="tag" title="还没体检过，点「立即体检」">未体检</span>';
@@ -1254,8 +1257,8 @@
     if (h.ok) {
       return '<span class="tag hok" title="' + escH(when + " 体检通过") + '">可用</span>';
     }
-    var t = '<span class="tag hbad" title="' + escH((h.error || "") + " · " + when) + '">失效 ×' + (h.fails || 1) + "</span>";
-    if (h.auto_disabled) t += ' <span class="tag hbad">已自动停用</span>';
+    var t = '<span class="tag" title="' + escH((h.error || "") + " · " + when) + '">拉取失败</span>';
+    if (h.auto_disabled) t += ' <span class="tag">已停用</span>';
     return t;
   }
   function renderSources(){
@@ -1333,16 +1336,16 @@
       var hl = d.health || {};
       if ($("#hlOn")) $("#hlOn").checked = !!hl.enabled;
       if ($("#adOn")) $("#adOn").checked = d.auto_delete !== false;
-      if ($("#adCnt")) $("#adCnt").textContent = d.auto_disable_after || 3;
+      if ($("#adCnt")) $("#adCnt").textContent = d.auto_disable_after || 1;
       if ($("#adHint")) {
         $("#adHint").textContent = (d.auto_delete !== false)
-          ? "连续失败的源会被删掉" : "连续失败的源只停用，留在列表里";
+          ? "拉不到就删，列表里不留废源" : "拉不到只停用，留在列表里";
       }
       if ($("#hlNext")) {
         var hb = hl.last_bad;
         $("#hlNext").textContent = hl.enabled
           ? ("每天 " + (hl.hour == null ? 5 : hl.hour) + ":00 · 下次 " + fmtTime(hl.next) +
-             (hl.last ? (" · 上次 " + fmtAgo(hl.last) + (hb ? "（失效 " + hb + " 个）" : "（全部可用）")) : " · 还没体检过"))
+             (hl.last ? (" · 上次 " + fmtAgo(hl.last) + (hb ? "（清掉 " + hb + " 个）" : "（全部可用）")) : " · 还没体检过"))
           : "已关闭";
       }
       renderSources();
@@ -1380,23 +1383,20 @@
       "</div>";
     }).join("");
   }
-  /* 已自动清理的源：删了也要能查、能找回 */
+  /* 已自动清理的源：默认折叠，只用中性色提一句，不再标红 */
   function renderDeleted(d){
     var box = $("#srcDeleted");
     var rows = d.deleted || [];
     if (!box) return;
     if (!rows.length) { box.hidden = true; box.innerHTML = ""; return; }
     box.hidden = false;
-    box.className = "delbox";
-    box.innerHTML = '<div class="h" style="font-size:11.5px;color:#e2534b;margin-bottom:4px">' +
-      "已自动清理的源（" + rows.length + " 个，不再参与拉取）</div>" +
+    box.innerHTML = "<summary>已自动清理 " + rows.length + " 个失效源</summary>" +
       rows.slice(0, 8).map(function(x){
         return '<div class="r"><i title="' + escH(x.url_v4 || x.url_v6 || "") + '">' +
           escH(x.name || x.key) + "</i>" +
-          '<span class="muted" style="font-size:11px">' + escH(x.why || "") + " · " + fmtAgo(x.ts) + "</span></div>";
+          "<span>" + escH(x.why || "") + " · " + fmtAgo(x.ts) + "</span></div>";
       }).join("") +
-      '<div class="muted" style="font-size:11px;margin-top:4px">' +
-      "内置源被删掉后，点「恢复内置源」可以找回来</div>";
+      '<div class="r"><span>内置源被删掉后，点「恢复内置源」可以找回来</span></div>';
   }
   function renderSwaps(evs){
     var box = $("#swapList");
@@ -1537,10 +1537,10 @@
     toast("正在逐个检查所有源，源多时可能要一分钟…");
     api("/api/sources/health", {method:"POST"}).then(function(r){
       if (r && r.skipped) { toast("体检未启用或未到时间"); return; }
-      var bad = r.bad || 0, dis = r.auto_disabled || 0, rmv = r.removed || 0;
-      toast("体检完成：检查 " + (r.checked || 0) + " 个，可用 " + (r.good || 0) +
-            " 个" + (bad ? "，失效 " + bad + " 个" : "") +
-            (rmv ? "（已删除 " + rmv + " 个失效源）" : (dis ? "（已停用 " + dis + " 个）" : "")));
+      var dis = r.auto_disabled || 0, rmv = r.removed || 0;
+      toast("体检完成：检查 " + (r.checked || 0) + " 个，可用 " + (r.good || 0) + " 个" +
+            (rmv ? "，删掉 " + rmv + " 个失效源" : (dis ? "，停用 " + dis + " 个失效源" : "")) +
+            (rmv && r.purged ? "（带走 " + r.purged + " 个未验证 IP）" : ""));
       loadSources();
     }).catch(function(err){ toast("体检失败：" + err.message); })
       .then(function(){ b.disabled = false; b.textContent = "立即体检"; });

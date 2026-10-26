@@ -116,12 +116,12 @@ PRESETS = [
 
 DEFAULT_PULL = {"enabled": True, "cycle": "6h", "hour": 4, "last": 0}
 DEFAULT_DISC = {"enabled": False, "cycle": "daily", "hour": 4, "last": 0, "found": 0}
-# 源体检：默认每天一次。官方源失败只标红，第三方连续失败这么多次就自动停用
+# 源体检：默认每天一次。官方源失败只标红，非官方源失败到阈值就删掉（默认第一次就删）
 DEFAULT_HEALTH = {"enabled": True, "cycle": "daily", "hour": 5, "last": 0, "last_bad": 0}
-AUTO_DISABLE_AFTER = _int("PREF_SRC_DISABLE_AFTER", 3)
+# 失败几次就删：默认 1（一次拉不到就当它废了，界面不堆死源）；怕误删抖动的源可调到 2~3
+AUTO_DISABLE_AFTER = _int("PREF_SRC_DISABLE_AFTER", 1)
 # 失效源处理：1=直接删除（默认，界面上不留垃圾源），0=只停用、留在列表里等它恢复
 AUTO_DELETE_BAD = _int("PREF_SRC_AUTO_DELETE", 1)
-
 
 # ---------------------------------------------------------------- 读写
 def jload(path, dft):
@@ -550,9 +550,10 @@ def _drop_sources(d, keys, why):
 
 
 def cmd_gc():
-    """清理失效源：连续失败达到阈值的非官方源立刻处理（含已停用的）。
+    """清理失效源：把此刻体检失败的非官方源立刻处理（含已停用的）。
 
-    和 health 里的自动处理是同一套规则，区别是这里不看体检时间、立刻执行。
+    「立即清理失效源」是用户主动点的，代表现在就要清干净，所以不看失败次数，
+    只要最近一次体检没过就处理。体检自动处理那条走的是失败次数阈值。
     开关「失效自动删除」开着就删掉，关掉就只停用。
     """
     d = load_src()
@@ -562,7 +563,7 @@ def cmd_gc():
         if it.get("kind") == "official":
             continue
         h = it.get("health") or {}
-        if int(h.get("fails", 0)) < AUTO_DISABLE_AFTER:
+        if not h.get("ts") or h.get("ok", True):
             continue
         if adv:
             keys.append(it.get("key"))
@@ -570,7 +571,7 @@ def cmd_gc():
             it["enabled"] = False
             h["auto_disabled"] = int(time.time())
             stopped += 1
-    n = _drop_sources(d, keys, "连续失败 %d 次" % AUTO_DISABLE_AFTER)
+    n = _drop_sources(d, keys, "体检失败")
     save_src(d)
     return {"ok": True, "removed": n, "stopped": stopped, "keys": keys,
             "purged": _purge_pool_src(set(keys))}
@@ -833,7 +834,7 @@ def cmd_health(force=False, only=None):
                         "key": it.get("key"), "name": it.get("name"),
                         "kind": it.get("kind"), "route": it.get("route", "cf"),
                         "url_v4": it.get("url_v4", ""), "url_v6": it.get("url_v6", ""),
-                        "ts": now, "why": "连续失败 %d 次" % h["fails"],
+                        "ts": now, "why": "拉取失败 ×%d" % h["fails"],
                     }
                     disabled += 1
                 elif it.get("enabled", True):
@@ -852,7 +853,7 @@ def cmd_health(force=False, only=None):
 
     removed = 0
     if drop:
-        removed = _drop_sources(d, set(drop), "连续失败 %d 次" % AUTO_DISABLE_AFTER)
+        removed = _drop_sources(d, set(drop), "拉取失败")
     d["health"]["last"] = now
     d["health"]["last_bad"] = bad
     save_src(d)
