@@ -3,7 +3,7 @@
 services:
   mosdns:
     image: ghcr.io/CHANGE_ME/mosdns:latest
-    container_name: mosdns-pref
+    container_name: mosdns
     restart: unless-stopped
     ports:
       - "53:53/udp"

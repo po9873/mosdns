@@ -42,7 +42,7 @@
 
 ```bash
 docker compose up -d
-docker logs -f mosdns-pref
+docker logs -f mosdns
 ```
 
 ## IP 源（官方 / 第三方 / 镜像，可勾选、可定时扫描）
