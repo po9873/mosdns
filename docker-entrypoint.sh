@@ -40,23 +40,10 @@ if [ -z "$THREADS" ] || [ "$THREADS" = "auto" ]; then
 fi
 elog "优选并发线程: $THREADS"
 
-# ---------- 账号密码：初始 admin/admin，之后以 /data/auth.json 为准 ----------
-# 规则：① 显式传了 PREF_AUTH_USER+PREF_AUTH_PASS → 以环境变量为准（可用来重置）
-#       ② 否则文件不存在 → 写入初始 admin/admin
-#       ③ 否则沿用已保存的（用户在控制台改过的密码，重启不会被冲掉）
-AUTH_USER="${PREF_AUTH_USER:-}"
-AUTH_PASS="${PREF_AUTH_PASS:-}"
-if [ -n "$AUTH_USER" ] && [ -n "$AUTH_PASS" ]; then
-  python3 - "$DATA_DIR/auth.json" "$AUTH_USER" "$AUTH_PASS" <<'PY'
-import json, sys
-p, u, a = sys.argv[1:4]
-tmp = p + ".tmp"
-with open(tmp, "w") as f:
-    json.dump({"user": u, "pass": a, "default": (u == "admin" and a == "admin")}, f, ensure_ascii=False)
-import os; os.replace(tmp, p)
-PY
-  elog "登录账号已按环境变量设置: $AUTH_USER"
-elif [ ! -f "$DATA_DIR/auth.json" ]; then
+# ---------- 账号密码：固定初始 admin/admin，不再读环境变量 ----------
+# 规则：① 已存在 /data/auth.json → 沿用（控制台改过的密码，重启不会被冲掉）
+#       ② 不存在 → 写入 admin/admin；首次登录强制改密（前端不给进，接口也拦）
+if [ ! -f "$DATA_DIR/auth.json" ]; then
   python3 - "$DATA_DIR/auth.json" <<'PY'
 import json, os, sys
 p = sys.argv[1]
@@ -65,9 +52,9 @@ with open(tmp, "w") as f:
     json.dump({"user": "admin", "pass": "admin", "default": True}, f, ensure_ascii=False)
 os.replace(tmp, p)
 PY
-  elog "初始登录账号: admin / admin（进入控制台后可在「配置 → 账号与密码」修改）"
+  elog "初始登录账号: admin / admin（首次登录会强制修改密码）"
 else
-  elog "沿用已保存的登录账号（可在控制台「配置 → 账号与密码」修改）"
+  elog "沿用已保存的登录账号（首次登录若仍是 admin/admin 会被强制改密）"
 fi
 
 # ---------- 默认设置 ----------

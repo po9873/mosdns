@@ -85,14 +85,20 @@ maybe_pull_sources() {
 
 daemon_mode() {
   local interval
-  interval=$(setting interval_min)
-  if [ -z "$interval" ] || [ "$interval" -lt 1 ] 2>/dev/null; then
-    interval=60
-  fi
-  log "调度器启动，间隔 ${interval} 分钟，五路串行"
+  log "调度器启动，五路串行"
   maybe_update_lists
   maybe_pull_sources
   while true; do
+    # 每轮重新读一次设置：界面上改了间隔/开关，不用重启容器就生效
+    interval=$(setting interval_min)
+    if [ -z "$interval" ] || [ "$interval" -lt 1 ] 2>/dev/null; then
+      interval=60
+    fi
+    if [ "$(setting pref_enabled)" = "false" ]; then
+      log "定时优选已关闭，本轮跳过（每分钟检查一次开关）"
+      sleep 60
+      continue
+    fi
     run_all
     maybe_update_lists
     maybe_pull_sources

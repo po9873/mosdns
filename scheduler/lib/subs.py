@@ -631,28 +631,30 @@ def cmd_save(payload):
     dead = {h.get("key") for h in (d.get("deleted") or [])
             if int(h.get("ts", 0)) > since}
     items = []
-    for it in (payload.get("items") or []):
-        key = it.get("key") or ("custom-%d" % int(time.time() * 1000))
-        if key in dead:
-            continue
-        prev = old.get(key, {})
-        items.append({
-            "key": key,
-            "name": it.get("name") or prev.get("name") or "未命名",
-            "note": it.get("note", prev.get("note", "")),
-            "kind": it.get("kind") or prev.get("kind") or "custom",
-            "url_v4": it.get("url_v4", ""),
-            "url_v6": it.get("url_v6", ""),
-            "enabled": bool(it.get("enabled", True)),
-            "route": it.get("route") or prev.get("route") or "cf",
-            "from_sub": it.get("from_sub") or prev.get("from_sub", ""),
-            "last_test": it.get("last_test") or prev.get("last_test"),
-            "last_fetch": prev.get("last_fetch", 0),
-            "status": prev.get("status", ""),
-            # 体检记录必须跟着源走，否则每保存一次就丢一次体检结果
-            "health": it.get("health") or prev.get("health"),
-        })
-    d["items"] = items
+    # 只提交定时设置（不带 items）时不要动源清单，否则会被清空
+    if "items" in payload:
+        for it in (payload.get("items") or []):
+            key = it.get("key") or ("custom-%d" % int(time.time() * 1000))
+            if key in dead:
+                continue
+            prev = old.get(key, {})
+            items.append({
+                "key": key,
+                "name": it.get("name") or prev.get("name") or "未命名",
+                "note": it.get("note", prev.get("note", "")),
+                "kind": it.get("kind") or prev.get("kind") or "custom",
+                "url_v4": it.get("url_v4", ""),
+                "url_v6": it.get("url_v6", ""),
+                "enabled": bool(it.get("enabled", True)),
+                "route": it.get("route") or prev.get("route") or "cf",
+                "from_sub": it.get("from_sub") or prev.get("from_sub", ""),
+                "last_test": it.get("last_test") or prev.get("last_test"),
+                "last_fetch": prev.get("last_fetch", 0),
+                "status": prev.get("status", ""),
+                # 体检记录必须跟着源走，否则每保存一次就丢一次体检结果
+                "health": it.get("health") or prev.get("health"),
+            })
+        d["items"] = items
     if "subs" in payload:
         d["subs"] = [s.strip() for s in (payload.get("subs") or []) if str(s).strip()]
     if "proxy" in payload:

@@ -501,6 +501,16 @@ class Handler(BaseHTTPRequestHandler):
                 return False
             return True
 
+    def _must_change(self, path):
+        """还是初始 admin/admin 时，除了登录/状态/改密/退出，其它接口一律拦下。
+        这样即使绕过前端直接调接口，也进不去。"""
+        if path in ("/api/status", "/api/account", "/api/logout", "/api/login"):
+            return False
+        try:
+            return bool(load_auth()[2])
+        except Exception:
+            return False
+
     def log_message(self, fmt, *args):
         pass
 
@@ -519,6 +529,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             if not self._authed():
                 return self._send(401, {"error": "unauthorized"})
+            if self._must_change(path):
+                return self._send(403, {"error": "首次登录必须修改密码", "must_change": True})
             if path == "/api/status":
                 au, _, is_default = load_auth()
                 return self._send(200, {
@@ -598,6 +610,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authed():
             return self._send(401, {"error": "unauthorized"})
+        if self._must_change(path):
+            return self._send(403, {"error": "首次登录必须修改密码", "must_change": True})
 
         if path == "/api/logout":
             tok = self._cookie()
@@ -621,6 +635,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "新密码至少 4 位"})
             if len(new_pass) > 64:
                 return self._send(400, {"error": "新密码不超过 64 位"})
+            if new_pass == "admin":
+                return self._send(400, {"error": "别再用 admin 当密码"})
             if new_user == cur_user and new_pass == cur_pass:
                 return self._send(400, {"error": "账号和密码都没有变化"})
             saved = save_auth(new_user, new_pass)
@@ -808,6 +824,12 @@ class Handler(BaseHTTPRequestHandler):
             cur = read_json(SETTINGS_FILE, {})
             if isinstance(data.get("interval_min"), (int, float)):
                 cur["interval_min"] = max(1, int(data["interval_min"]))
+            if "pref_enabled" in data:
+                cur["pref_enabled"] = bool(data["pref_enabled"])
+            if "watchdog_enabled" in data:
+                cur["watchdog_enabled"] = bool(data["watchdog_enabled"])
+            if isinstance(data.get("watchdog_sec"), (int, float)):
+                cur["watchdog_sec"] = min(3600, max(30, int(data["watchdog_sec"])))
             if isinstance(data.get("threads"), (int, float)):
                 cur["threads"] = max(0, int(data["threads"]))
             if "list_auto_update" in data:

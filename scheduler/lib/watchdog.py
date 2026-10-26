@@ -35,6 +35,22 @@ INTERVAL = int(os.environ.get("PREF_WATCHDOG_SEC", "180"))
 TIMEOUT = float(os.environ.get("PREF_WATCHDOG_TIMEOUT", "6"))
 MAX_STRIKES = int(os.environ.get("PREF_WATCHDOG_STRIKES", "3"))
 PORT = int(os.environ.get("PREF_WATCHDOG_PORT", "443"))
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+
+
+def runtime_cfg():
+    """巡检间隔/开关可以在界面上改，不用重启容器：每轮重新读 settings.json。"""
+    sec, on = INTERVAL, True
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d.get("watchdog_sec"), (int, float)) and 30 <= int(d["watchdog_sec"]) <= 3600:
+            sec = int(d["watchdog_sec"])
+        if d.get("watchdog_enabled") is False:
+            on = False
+    except Exception:
+        pass
+    return sec, on
 
 HARD = ("cf", "cert")        # 状态名以这些开头 = 明确不可用
 
@@ -247,16 +263,20 @@ def run_once():
 
 def main():
     once = "--once" in sys.argv
-    log("启动，间隔 %d 秒，超时 %.0fs，连不上 %d 次才换" % (INTERVAL, TIMEOUT, MAX_STRIKES))
+    sec, on = runtime_cfg()
+    log("启动，间隔 %d 秒，超时 %.0fs，连不上 %d 次才换%s"
+        % (sec, TIMEOUT, MAX_STRIKES, "" if on else "（当前已关闭巡检）"))
     if once:
         run_once()
         return 0
     while True:
-        try:
-            run_once()
-        except Exception as e:
-            log("异常：%s" % e)
-        time.sleep(max(30, INTERVAL))
+        sec, on = runtime_cfg()
+        if on:
+            try:
+                run_once()
+            except Exception as e:
+                log("异常：%s" % e)
+        time.sleep(max(30, sec))
 
 
 if __name__ == "__main__":
