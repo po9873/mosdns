@@ -25,15 +25,13 @@ mkdir -p "$DATA_DIR/prefs"
 
 # ---------- 初始化运行数据（只在不存在时创建，绝不覆盖用户数据）----------
 [ -f "$DATA_DIR/prefs/all.hosts" ] || : > "$DATA_DIR/prefs/all.hosts"
-if [ ! -f "$DATA_DIR/cn_domains.txt" ]; then
-  cp /app/config/cn_domains.txt "$DATA_DIR/cn_domains.txt" 2>/dev/null || : > "$DATA_DIR/cn_domains.txt"
-fi
-if [ ! -f "$DATA_DIR/gfw_domains.txt" ]; then
-  cp /app/config/gfw_domains.txt "$DATA_DIR/gfw_domains.txt" 2>/dev/null || : > "$DATA_DIR/gfw_domains.txt"
-fi
-if [ ! -f "$DATA_DIR/china_ip.txt" ]; then
-  cp /app/config/china_ip.txt "$DATA_DIR/china_ip.txt" 2>/dev/null || : > "$DATA_DIR/china_ip.txt"
-fi
+# 清单：缺失时从镜像补齐（镜像里是构建时固化的完整版），并写入来源元数据
+python3 /app/scheduler/lib/lists.py init >/dev/null 2>&1 || true
+# 兜底（python 异常时也能保证文件存在）
+[ -f "$DATA_DIR/cn_domains.txt" ] || cp /app/config/cn_domains.txt "$DATA_DIR/cn_domains.txt" 2>/dev/null || : > "$DATA_DIR/cn_domains.txt"
+[ -f "$DATA_DIR/gfw_domains.txt" ] || cp /app/config/gfw_domains.txt "$DATA_DIR/gfw_domains.txt" 2>/dev/null || : > "$DATA_DIR/gfw_domains.txt"
+[ -f "$DATA_DIR/china_ip.txt" ] || cp /app/config/china_ip.txt "$DATA_DIR/china_ip.txt" 2>/dev/null || : > "$DATA_DIR/china_ip.txt"
+elog "分流清单: $(wc -l < "$DATA_DIR/china_ip.txt" 2>/dev/null || echo 0) 条国内 IP 段"
 
 # ---------- 自动线程 ----------
 if [ -z "$THREADS" ] || [ "$THREADS" = "auto" ]; then
@@ -54,7 +52,7 @@ elog "登录账号: $AUTH_USER"
 # ---------- 默认设置 ----------
 if [ ! -f "$DATA_DIR/settings.json" ]; then
   cat > "$DATA_DIR/settings.json" <<EOF
-{"interval_min":60,"threads":$THREADS,"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true}}
+{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true}}
 EOF
 fi
 
@@ -80,7 +78,7 @@ mosdns_loop() {
     pid=""
     [ -f "$DATA_DIR/mosdns.pid" ] && pid=$(cat "$DATA_DIR/mosdns.pid" 2>/dev/null)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      sleep 3
+      sleep 1
       continue
     fi
     start_mosdns

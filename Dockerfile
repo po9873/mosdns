@@ -34,12 +34,22 @@ RUN mkdir -p /opt/gt && \
       && chmod +x /opt/gt/* 2>/dev/null ) \
     || echo "warn: GoogleTranslateIpCheck 未固化，将使用纯脚本探测"
 RUN touch /opt/cft/.keep /opt/gt/.keep
-# 中国 IP 段完整列表（构建时下载并固化；失败则用仓库内置精简种子兜底）
+# 中国 IP 段完整列表（构建时下载并固化；多源兜底 + 条目数校验，失败则用仓库内置精简种子）
 RUN mkdir -p /opt/seed && \
-    ( curl -fsSL --retry 3 "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt" -o /opt/seed/china_ip.txt \
-      && [ -s /opt/seed/china_ip.txt ] ) \
-    || echo "warn: china_ip 完整列表未下载，将使用内置精简种子"
-RUN touch /opt/seed/china_ip.txt
+    ok=0; \
+    for u in \
+      "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt" \
+      "https://ispip.clang.cn/all_cn.txt" \
+      "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china.txt" ; do \
+      if curl -fsSL --retry 2 --max-time 90 "$u" -o /tmp/cip.txt; then \
+        n=$(grep -cE '^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$' /tmp/cip.txt || true); \
+        if [ "${n:-0}" -ge 500 ]; then \
+          mv /tmp/cip.txt /opt/seed/china_ip.txt; ok=1; echo "china_ip 固化成功: ${n} 条 <- $u"; break; \
+        fi; \
+      fi; \
+    done; \
+    [ "$ok" = "1" ] || echo "warn: china_ip 完整列表未下载，使用内置精简种子"; \
+    touch /opt/seed/china_ip.txt
 
 # ---------- 阶段 3：运行时镜像 ----------
 FROM ${ALPINE_IMAGE}

@@ -27,6 +27,8 @@ MOSDNS_OUT = os.path.join(DATA_DIR, "mosdns.out")
 MOSDNS_PID = os.path.join(DATA_DIR, "mosdns.pid")
 SCHEDULER = "/app/scheduler/scheduler.sh"
 DNSSQ = "/app/scheduler/lib/dnsq.py"
+LISTS_PY = "/app/scheduler/lib/lists.py"
+LISTS_META = os.path.join(DATA_DIR, "lists_meta.json")
 
 ROUTES = ["cf", "google", "gt", "github", "ghcr"]
 SESSIONS = {}
@@ -140,6 +142,49 @@ def dns_lookup(domain, port=None, timeout=3):
         return []
 
 
+# ---------- 分流清单 ----------
+def lists_status():
+    try:
+        res = subprocess.run(["python3", LISTS_PY, "status"], capture_output=True, timeout=25)
+        return json.loads(res.stdout.decode("utf-8", "replace") or "{}")
+    except Exception:
+        return {}
+
+
+def count_lines(path):
+    n = 0
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                if line.strip() and not line.lstrip().startswith(b"#"):
+                    n += 1
+    except Exception:
+        return 0
+    return n
+
+
+def lists_brief():
+    """概况页用的轻量摘要：元数据优先，缺失则现数（8000 行约几毫秒）。"""
+    m = read_json(LISTS_META, {}).get("china_ip", {})
+    lines = m.get("lines") or count_lines(os.path.join(DATA_DIR, "china_ip.txt"))
+    return {
+        "china_ip": {
+            "lines": lines,
+            "updated_at": m.get("updated_at", 0),
+            "status": m.get("status", ""),
+            "source_host": m.get("source", ""),
+        }
+    }
+
+
+def list_update_worker(name):
+    try:
+        subprocess.run(["python3", LISTS_PY, "update", name], capture_output=True, timeout=240)
+        subprocess.run([SCHEDULER, "reload"], capture_output=True, timeout=25)
+    except Exception:
+        pass
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "pref-ui/1.0"
 
@@ -211,8 +256,26 @@ class Handler(BaseHTTPRequestHandler):
                     "mosdns": mosdns_alive(),
                     "results": read_results(),
                     "settings": read_json(SETTINGS_FILE, {}),
+                    "lists_brief": lists_brief(),
                     "now": int(time.time()),
                 })
+            if path == "/api/lists":
+                return self._send(200, {"items": lists_status()})
+            if path == "/api/lists/preview":
+                q = parse_qs(u.query)
+                name = (q.get("name") or [""])[0]
+                n = (q.get("n") or ["40"])[0]
+                try:
+                    res = subprocess.run(
+                        ["python3", LISTS_PY, "preview", name, str(int(n))],
+                        capture_output=True, timeout=20,
+                    )
+                    body = res.stdout.decode("utf-8", "replace") or "{}"
+                    if res.returncode != 0:
+                        return self._send(400, {"error": res.stderr.decode("utf-8", "replace")[:200]})
+                    return self._send(200, body)
+                except Exception as e:
+                    return self._send(500, {"error": str(e)})
             if path == "/api/results":
                 return self._send(200, read_results())
             if path == "/api/logs":
@@ -284,6 +347,21 @@ class Handler(BaseHTTPRequestHandler):
             items.sort(key=lambda x: (x["latency"] is None, x["latency"] or 1e9))
             return self._send(200, {"domain": domain, "items": items})
 
+        if path == "/api/lists/update":
+            data = self._body()
+            name = str(data.get("name", "all"))
+            if name != "all" and name not in ("china_ip", "cn_domains", "gfw_domains"):
+                return self._send(400, {"error": "未知清单"})
+            threading.Thread(target=list_update_worker, args=(name,), daemon=True).start()
+            return self._send(200, {"ok": True, "name": name, "started": True})
+
+        if path == "/api/reload":
+            try:
+                subprocess.run([SCHEDULER, "reload"], capture_output=True, timeout=20)
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+            return self._send(200, {"ok": True})
+
         if path == "/api/settings":
             data = self._body()
             cur = read_json(SETTINGS_FILE, {})
@@ -291,6 +369,12 @@ class Handler(BaseHTTPRequestHandler):
                 cur["interval_min"] = max(1, int(data["interval_min"]))
             if isinstance(data.get("threads"), (int, float)):
                 cur["threads"] = max(0, int(data["threads"]))
+            if "list_auto_update" in data:
+                cur["list_auto_update"] = bool(data["list_auto_update"])
+            if "auto_reload" in data:
+                cur["auto_reload"] = bool(data["auto_reload"])
+            if isinstance(data.get("list_update_hours"), (int, float)):
+                cur["list_update_hours"] = max(1, int(data["list_update_hours"]))
             if isinstance(data.get("routes"), dict):
                 r = cur.get("routes", {})
                 for k in ROUTES:

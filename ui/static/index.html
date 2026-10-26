@@ -164,6 +164,12 @@
   }
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .muted{color:var(--muted)}
+  .preview{
+    margin:14px 0 0;padding:12px;background:var(--bg2);border:1px solid var(--border);
+    border-radius:10px;max-height:280px;overflow:auto;font-size:12px;line-height:1.7;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;color:var(--muted);
+  }
+  .pill b{color:var(--text)}
 
   /* ---------- 移动端 ---------- */
   @media (max-width:820px){
@@ -241,6 +247,10 @@
           <span class="pill"><span class="led" id="ledMosdns"></span>DNS 引擎 <b id="txtMosdns">检测中</b></span>
           <span class="pill"><span class="led" id="ledLock"></span><span id="txtLock">空闲</span></span>
           <span class="pill">刷新于 <b id="txtRefresh">-</b></span>
+          <span class="pill" id="pillList" style="cursor:pointer" title="点击查看清单详情">
+            <span class="led" id="ledList"></span>国内 IP 段 <b id="txtListLines">-</b> 条
+            <span id="txtListTime" style="color:var(--muted)"></span>
+          </span>
           <span class="pill" style="margin-left:auto">
             <button class="btn primary" id="btnRunAll">立即执行五路优选</button>
           </span>
@@ -288,6 +298,18 @@
             <div class="lab">并发线程<small>0 = 自动（按 CPU 与虚拟化自适应）</small></div>
             <input type="number" id="cfgThreads" min="0" step="1">
           </div>
+          <div class="form-row">
+            <div class="lab">结果变化后自动重载引擎<small>一轮五路跑完只判断一次；结果和上轮相同则不重启，DNS 零中断</small></div>
+            <label class="switch"><input type="checkbox" id="cfgAutoReload"><span class="slider"></span></label>
+          </div>
+          <div class="form-row">
+            <div class="lab">自动更新国内 IP 段<small>每日拉取最新网段；失败自动保留旧清单，不会把清单弄空</small></div>
+            <label class="switch"><input type="checkbox" id="cfgListAuto"><span class="slider"></span></label>
+          </div>
+          <div class="form-row">
+            <div class="lab">清单更新间隔（小时）<small>默认 24 小时检查一次，未过期不重复下载</small></div>
+            <input type="number" id="cfgListHours" min="1" step="1">
+          </div>
           <div class="form-row"><div class="lab">Cloudflare</div><label class="switch"><input type="checkbox" data-route="cf"><span class="slider"></span></label></div>
           <div class="form-row"><div class="lab">Google</div><label class="switch"><input type="checkbox" data-route="google"><span class="slider"></span></label></div>
           <div class="form-row"><div class="lab">Google 翻译</div><label class="switch"><input type="checkbox" data-route="gt"><span class="slider"></span></label></div>
@@ -311,6 +333,17 @@
       <!-- 源 -->
       <section class="view" id="view-source">
         <div class="card">
+          <h3>分流清单 <span class="muted" style="font-weight:400;font-size:12px">（国内 IP 段随 APNIC 分配变化，可在这里更新）</span></h3>
+          <div id="listsTable"><div class="empty">加载中…</div></div>
+          <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
+            <button class="btn primary" id="btnListsUpdateAll">全部更新</button>
+            <button class="btn" id="btnReloadEngine">重载引擎</button>
+            <span class="muted" style="font-size:12px">更新后自动重载引擎，1~2 秒内生效</span>
+          </div>
+          <pre class="preview" id="listPreview" hidden></pre>
+        </div>
+
+        <div class="card" style="margin-top:16px">
           <h3>候选源（内置镜像，公开种子）</h3>
           <div class="kv"><span class="k">Cloudflare</span><span class="mono">/app/config/seeds/cloudflare.txt</span></div>
           <div class="kv"><span class="k">Google</span><span class="mono">/app/config/seeds/google.txt</span></div>
@@ -426,6 +459,7 @@
     clearTimers();
     if (v === "logs") { loadLogs(); state.timers.push(setInterval(loadLogs, 3000)); }
     if (v === "results") { loadResults(); }
+    if (v === "source") { loadLists(); }
     if (v === "overview") { loadStatus(); state.timers.push(setInterval(loadStatus, 5000)); }
   }
   $("#nav").addEventListener("click", function(e){
@@ -445,6 +479,20 @@
     if (!ts) return "-";
     var d = new Date(ts * 1000);
     return d.toLocaleString("zh-CN", {hour12:false});
+  }
+  function fmtAgo(ts){
+    if (!ts) return "未更新";
+    var d = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (d < 60) return "刚刚";
+    if (d < 3600) return Math.floor(d / 60) + " 分钟前";
+    if (d < 86400) return Math.floor(d / 3600) + " 小时前";
+    return Math.floor(d / 86400) + " 天前";
+  }
+  function fmtBytes(n){
+    if (!n) return "—";
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1048576).toFixed(1) + " MB";
   }
   function renderRouteCards(results){
     var host = $("#routeCards");
@@ -473,6 +521,10 @@
       state.results = s.results || {};
       renderRouteCards(state.results);
       fillConfigForm(state.settings);
+      var lb = (s.lists_brief || {}).china_ip || {};
+      $("#txtListLines").textContent = (lb.lines || 0).toLocaleString();
+      $("#txtListTime").textContent = lb.updated_at ? "· " + fmtAgo(lb.updated_at) : "· 未更新";
+      $("#ledList").className = "led " + (lb.lines > 0 ? "ok" : "bad");
     }).catch(function(){});
   }
 
@@ -512,6 +564,91 @@
       $("#resolveMeta").textContent = "解析失败：" + err.message;
     });
   });
+
+  /* ---------- 分流清单 ---------- */
+  function loadLists(){
+    return api("/api/lists").then(function(res){
+      state.lists = res.items || {};
+      renderLists(state.lists);
+    }).catch(function(){});
+  }
+
+  function renderLists(items){
+    var host = $("#listsTable");
+    host.innerHTML = "";
+    var keys = Object.keys(items || {});
+    if (!keys.length) { host.innerHTML = '<div class="empty">暂无清单</div>'; return; }
+    var t = document.createElement("table");
+    var thead = document.createElement("thead");
+    thead.innerHTML = "<tr><th>清单</th><th>条目</th><th>大小</th><th>更新时间</th><th>来源</th><th>状态</th><th>操作</th></tr>";
+    var tbody = document.createElement("tbody");
+    keys.forEach(function(k){
+      var it = items[k] || {};
+      var tr = document.createElement("tr");
+
+      var c1 = document.createElement("td"); c1.textContent = it.label || k;
+      var c2 = document.createElement("td"); c2.className = "mono"; c2.textContent = (it.lines || 0).toLocaleString();
+      var c3 = document.createElement("td"); c3.textContent = fmtBytes(it.bytes);
+      var c4 = document.createElement("td");
+      c4.textContent = it.updated_at ? fmtAgo(it.updated_at) : "—";
+      c4.title = it.updated_at ? fmtTime(it.updated_at) : "";
+      var c5 = document.createElement("td"); c5.className = "mono"; c5.style.fontSize = "12px";
+      c5.textContent = it.source_host || "内置镜像";
+      if (it.source) c5.title = it.source;
+
+      var c6 = document.createElement("td");
+      var led = document.createElement("span");
+      var st = it.status || "";
+      led.className = "led " + (st === "ok" && it.lines > 0 ? "ok" : (st === "fail" ? "bad" : "busy"));
+      var txt = document.createElement("span");
+      txt.style.marginLeft = "6px";
+      txt.textContent = st === "fail" ? "更新失败" : (it.lines > 0 ? "正常" : "空");
+      if (it.error) c6.title = it.error;
+      c6.appendChild(led); c6.appendChild(txt);
+
+      var c7 = document.createElement("td");
+      var b1 = document.createElement("button");
+      b1.className = "btn"; b1.style.cssText = "padding:4px 10px;font-size:12px;margin-right:6px";
+      b1.textContent = "更新"; b1.onclick = function(){ updateList(k); };
+      var b2 = document.createElement("button");
+      b2.className = "btn"; b2.style.cssText = "padding:4px 10px;font-size:12px";
+      b2.textContent = "预览"; b2.onclick = function(){ previewList(k); };
+      c7.appendChild(b1); c7.appendChild(b2);
+
+      [c1, c2, c3, c4, c5, c6, c7].forEach(function(c){ tr.appendChild(c); });
+      tbody.appendChild(tr);
+    });
+    t.appendChild(thead); t.appendChild(tbody);
+    host.appendChild(t);
+  }
+
+  function updateList(name){
+    toast(name === "all" ? "开始更新全部清单…" : "开始更新清单…");
+    api("/api/lists/update", {method:"POST", body:{name:name}}).then(function(){
+      var n = 0;
+      var tid = setInterval(function(){
+        loadLists(); loadStatus();
+        if (++n >= 10) clearInterval(tid);
+      }, 2500);
+    }).catch(function(err){ toast("更新失败：" + err.message); });
+  }
+
+  function previewList(name){
+    var p = $("#listPreview");
+    if (p.dataset.name === name && !p.hidden) { p.hidden = true; p.dataset.name = ""; return; }
+    p.hidden = false; p.dataset.name = name; p.textContent = "加载中…";
+    api("/api/lists/preview?name=" + encodeURIComponent(name) + "&n=40").then(function(res){
+      p.textContent = "// " + (res.label || name) + "（前 " + (res.lines || []).length + " 行）\n\n" +
+                      (res.lines || []).join("\n");
+    }).catch(function(err){ p.textContent = "预览失败：" + err.message; });
+  }
+
+  $("#btnListsUpdateAll").addEventListener("click", function(){ updateList("all"); });
+  $("#btnReloadEngine").addEventListener("click", function(){
+    api("/api/reload", {method:"POST"}).then(function(){ toast("已请求重载引擎"); })
+      .catch(function(err){ toast("重载失败：" + err.message); });
+  });
+  $("#pillList").addEventListener("click", function(){ switchView("source"); });
 
   /* ---------- 结果 ---------- */
   function loadResults(){
@@ -568,6 +705,15 @@
     if (s.threads !== undefined && document.activeElement !== $("#cfgThreads")) {
       $("#cfgThreads").value = s.threads;
     }
+    if (s.list_auto_update !== undefined) {
+      $("#cfgListAuto").checked = !!s.list_auto_update;
+    }
+    if (s.auto_reload !== undefined) {
+      $("#cfgAutoReload").checked = !!s.auto_reload;
+    }
+    if (s.list_update_hours !== undefined && document.activeElement !== $("#cfgListHours")) {
+      $("#cfgListHours").value = s.list_update_hours;
+    }
     if (s.routes) {
       $$("input[data-route]").forEach(function(cb){
         if (document.activeElement !== cb) cb.checked = !!s.routes[cb.dataset.route];
@@ -580,6 +726,9 @@
     api("/api/settings", {method:"POST", body:{
       interval_min: parseInt($("#cfgInterval").value, 10) || 60,
       threads: parseInt($("#cfgThreads").value, 10) || 0,
+      list_auto_update: $("#cfgListAuto").checked,
+      auto_reload: $("#cfgAutoReload").checked,
+      list_update_hours: parseInt($("#cfgListHours").value, 10) || 24,
       routes: routes
     }}).then(function(res){
       state.settings = res.settings;

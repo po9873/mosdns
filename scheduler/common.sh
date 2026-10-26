@@ -127,14 +127,45 @@ merge_hosts() {
   mv "$PREF_DIR/all.hosts.tmp" "$PREF_DIR/all.hosts"
 }
 
-# 让最新 hosts 生效：杀掉 mosdns，由 entrypoint supervisor 自动重启
+# 让最新 hosts 生效：杀掉 mosdns，由 entrypoint supervisor 自动重启（约 1 秒）
 reload_mosdns() {
   if [ -f "$MOSDNS_PID_FILE" ]; then
     local pid
     pid=$(cat "$MOSDNS_PID_FILE" 2>/dev/null)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null && log "已请求重启 mosdns 以加载最新 hosts"
+      kill "$pid" 2>/dev/null && log "已请求重载 mosdns"
+      return 0
     fi
+  fi
+  return 1
+}
+
+# 文件指纹（用于判断这轮优选结果是否真的变了）
+file_sig() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | awk '{print $1}'
+  else
+    cksum "$1" 2>/dev/null | awk '{print $1"-"$2}'
+  fi
+}
+
+# 只有内容真的变化（或清单被更新）才重启；否则一次都不重启。
+# 一轮五路跑完只调用一次，绝不会"每路重启一次"。
+reload_if_changed() {
+  local before="$1" after
+  case "$(setting auto_reload)" in
+    false|False|0) log "已关闭自动重载，结果将在下次重启后生效"; return 0 ;;
+  esac
+  after=$(file_sig "$PREF_DIR/all.hosts")
+  if [ -f "$DATA_DIR/.lists_dirty" ]; then
+    rm -f "$DATA_DIR/.lists_dirty"
+    reload_mosdns
+    return 0
+  fi
+  if [ "$before" != "$after" ]; then
+    reload_mosdns
+  else
+    log "本轮结果与上轮一致，跳过重启（DNS 零中断）"
   fi
 }
 
