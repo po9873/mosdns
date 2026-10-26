@@ -278,6 +278,15 @@
     .logbox{height:calc(100vh - 300px);min-height:220px}
     .tabs{overflow-x:auto}
     .login-card{margin:14px;padding:22px 18px}
+
+    /* 触控友好：手机上按钮/输入框至少 42px 高，避免误触或点不中 */
+    .btn{min-height:42px}
+    .topbar .btn{min-height:34px}
+    .btn.block{min-height:46px}
+    input:not([type=checkbox]),select{min-height:42px}
+    .diag-out .foot .btn{min-height:38px}
+    /* 诊断页的三组测试在手机上整块可点，不再需要精确点到小按钮 */
+    .diag-out .foot{gap:12px}
   }
 </style>
 </head>
