@@ -275,12 +275,25 @@ def is_ip(s):
         return False
 
 
+# 「明确坏」的校验结果：Cloudflare 10xx 错误页 / 证书不符 / 5xx
+# 这类 IP 绝不允许出现在「优选 IP」里——UI 再兜一道，防止 hosts 里的历史残留被展示出来
+HARD_FAIL = re.compile(r"^(cf\d{3,4}|cert|http5\d\d)$")
+
+
+def is_hard_fail(status):
+    return bool(HARD_FAIL.match((status or "").strip().lower()))
+
+
 def read_results():
-    """读每路结果：域名 + 多个 IP（含延迟），兼容旧格式。"""
+    """读每路结果：域名 + 多个 IP（含延迟）。
+
+    hosts 里理论上只会有通过校验的 IP，但重启/回滚可能留下历史残留，
+    所以这里按 meta 里的校验状态再过滤一次，硬失败的直接剔除并计数。
+    """
     out = {}
     for r in ROUTES:
         p = os.path.join(PREF_DIR, "%s.hosts" % r)
-        entry = {"domain": "", "ip": "", "ips": [], "mtime": 0}
+        entry = {"domain": "", "ip": "", "ips": [], "mtime": 0, "dropped": []}
         lat = {}
         try:
             with open(os.path.join(PREF_DIR, "%s.meta" % r)) as f:
@@ -305,11 +318,16 @@ def read_results():
                             if not is_ip(ip):
                                 continue
                             lt, st = lat.get(ip, (None, ""))
+                            st = st or "ok"
+                            if is_hard_fail(st):
+                                # 1034/证书/5xx 一律不展示，记下来供界面提示「已剔除」
+                                entry["dropped"].append({"ip": ip, "reason": st})
+                                continue
                             ips.append({
                                 "ip": ip,
                                 "family": "v6" if ":" in ip else "v4",
                                 "latency": lt,
-                                "status": st or "ok",
+                                "status": st,
                             })
                         entry["ips"] = ips
                         entry["ip"] = ips[0]["ip"] if ips else ""
@@ -318,6 +336,13 @@ def read_results():
         except Exception:
             pass
         out[r] = entry
+        # 最近一轮的判定结果（ok / degraded / no_valid…），界面据此标「降级使用」
+        st = read_json(os.path.join(PREF_DIR, "%s.state.json" % r), None)
+        if isinstance(st, dict):
+            entry["status"] = st.get("status", "")
+            entry["checked_at"] = st.get("ts", 0)
+            if st.get("domain"):
+                entry["domain"] = st["domain"]
     return out
 
 
@@ -750,6 +775,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/sources/discover":
             r = run_subs(["discover", "--force"], timeout=180)
+            return self._send(200, r)
+
+        if path == "/api/sources/health":
+            # 立即体检：所有源（含停用的第三方）逐个拉一次，只看可用性
+            r = run_subs(["health", "--force"], timeout=300)
             return self._send(200, r)
 
         if path == "/api/sources/prune":

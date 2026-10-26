@@ -35,6 +35,8 @@ services:
       PREF_SUB_TTL_DAYS: "14"
       # ---- 官方网段展开时的采样数（每个 CIDR 取几个 IP 去测）----
       PREF_CIDR_SAMPLE: "6"
+      # ---- 第三方源连续失败几次后自动停用（官方源只标红不停用）----
+      PREF_SRC_DISABLE_AFTER: "3"
     volumes:
       - ./data:/data
     # 若宿主机 53 端口被占用（如 systemd-resolved），改用 "1053:53/udp" 等

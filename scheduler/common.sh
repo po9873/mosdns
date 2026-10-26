@@ -382,6 +382,16 @@ run_route() {
     return 1
   fi
 
+  # ---- 把本轮候选来源回填进池：DNS 实时解析 + 种子兜底 ----
+  # 没有公开订阅源的路线（Google/翻译/GitHub/ghcr）靠这一步积累候选，
+  # 否则池子永远是 0，看门狗想补位也无米可炊。
+  {
+    printf '%s\n' "$v4" | awk 'NF{print $1, "dns"}'
+    printf '%s\n' "$v6" | awk 'NF{print $1, "dns"}'
+    printf '%s\n' "$seed_v4" | awk 'NF{print $1, "seed"}'
+    printf '%s\n' "$seed_v6" | awk 'NF{print $1, "seed"}'
+  } | sub_cli feed "$route" >/dev/null 2>&1
+
   log "$route: 目标 $target，候选 v4 ${n4} / v6 ${n6}（订阅池贡献 ${pool_n}），并发 $conc，每族保留 $top_n"
 
   # ---- 第一步：TCP 粗筛（多取 3 倍，给校验失败留补位余量）----
@@ -472,6 +482,10 @@ run_route() {
   if [ -n "$soft" ]; then
     printf '%s\n' "$soft" | awk 'NF{print $1, "fail"}' | sub_cli bump-many "$route" >/dev/null
   fi
+
+  # 通过 HTTPS 校验的 IP 记进池（verify 来源，权重最高）
+  { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } \
+    | awk 'NF{print $1, "verify"}' | sub_cli feed "$route" >/dev/null 2>&1
 
   write_route "$route" "$target" "$best4" "$best6" || return 1
   write_state "$route" "$target" "$( [ "$downgrade" = "1" ] && echo degraded || echo ok )" \

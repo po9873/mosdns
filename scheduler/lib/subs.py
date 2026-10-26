@@ -90,10 +90,32 @@ PRESETS = [
      "note": "国内可直连的 GitHub 加速前缀",
      "url_v4": "https://ghproxy.net/https://raw.githubusercontent.com/ymyuuu/IPDB/main/BestCF/bestcfv4.txt",
      "url_v6": "", "enabled": False},
+
+    # ---- Google / GitHub 官方公布的 IP 段（供另外四路使用）----
+    # 同一份数据被多路共用，所以按路各建一条，拉取互不影响
+    {"key": "official-goog", "name": "Google 官方 IP 段（IPv4+IPv6）", "kind": "official",
+     "note": "Google 公布的全部网段，搜索与翻译两路共用；只有网段，需采样展开",
+     "route": "google", "url_v4": "https://www.gstatic.com/ipranges/goog.json",
+     "url_v6": "https://www.gstatic.com/ipranges/goog.json", "enabled": True},
+    {"key": "official-goog-gt", "name": "Google 官方 IP 段（翻译路）", "kind": "official",
+     "note": "与搜索路同一份数据，翻译专用域名走这些段",
+     "route": "gt", "url_v4": "https://www.gstatic.com/ipranges/goog.json",
+     "url_v6": "https://www.gstatic.com/ipranges/goog.json", "enabled": True},
+    {"key": "official-github", "name": "GitHub 官方 IP 段（IPv4+IPv6）", "kind": "official",
+     "note": "GitHub 公布的全部网段，访问与 ghcr 两路共用",
+     "route": "github", "url_v4": "https://api.github.com/meta",
+     "url_v6": "https://api.github.com/meta", "enabled": True},
+    {"key": "official-github-ghcr", "name": "GitHub 官方 IP 段（ghcr 路）", "kind": "official",
+     "note": "与访问路同一份数据，镜像仓库专用域名走这些段",
+     "route": "ghcr", "url_v4": "https://api.github.com/meta",
+     "url_v6": "https://api.github.com/meta", "enabled": True},
 ]
 
 DEFAULT_PULL = {"enabled": True, "cycle": "6h", "hour": 4, "last": 0}
 DEFAULT_DISC = {"enabled": False, "cycle": "daily", "hour": 4, "last": 0, "found": 0}
+# 源体检：默认每天一次。官方源失败只标红，第三方连续失败这么多次就自动停用
+DEFAULT_HEALTH = {"enabled": True, "cycle": "daily", "hour": 5, "last": 0, "last_bad": 0}
+AUTO_DISABLE_AFTER = _int("PREF_SRC_DISABLE_AFTER", 3)
 
 
 # ---------------------------------------------------------------- 读写
@@ -124,8 +146,10 @@ def load_src():
     d.setdefault("proxy", "")
     pull = d.get("pull") if isinstance(d.get("pull"), dict) else {}
     disc = d.get("discover") if isinstance(d.get("discover"), dict) else {}
+    hl = d.get("health") if isinstance(d.get("health"), dict) else {}
     d["pull"] = {**DEFAULT_PULL, **pull}
     d["discover"] = {**DEFAULT_DISC, **disc}
+    d["health"] = {**DEFAULT_HEALTH, **hl}
     return d
 
 
@@ -361,7 +385,12 @@ def fetch_item(it, proxy="", merge=True):
     all_ips = []
     errs = []
     # 两个地址都拉，按 IP 实际版本归类（v4 地址里混了 v6 也不会数错）
-    for url, label in ((it.get("url_v4"), "v4"), (it.get("url_v6"), "v6")):
+    # v4/v6 填了同一个地址（如 goog.json、GitHub meta 这种混合源）时只拉一次，
+    # 否则同一份数据会被重复计数，段数翻倍
+    urls = [(it.get("url_v4"), "v4")]
+    if it.get("url_v6") and it.get("url_v6") != it.get("url_v4"):
+        urls.append((it.get("url_v6"), "v6"))
+    for url, label in urls:
         if not url:
             continue
         try:
@@ -506,6 +535,8 @@ def cmd_save(payload):
             "last_test": it.get("last_test") or prev.get("last_test"),
             "last_fetch": prev.get("last_fetch", 0),
             "status": prev.get("status", ""),
+            # 体检记录必须跟着源走，否则每保存一次就丢一次体检结果
+            "health": it.get("health") or prev.get("health"),
         })
     d["items"] = items
     if "subs" in payload:
@@ -516,6 +547,8 @@ def cmd_save(payload):
         d["pull"] = {**d["pull"], **payload["pull"]}
     if isinstance(payload.get("discover"), dict):
         d["discover"] = {**d["discover"], **payload["discover"]}
+    if isinstance(payload.get("health"), dict):
+        d["health"] = {**d["health"], **payload["health"]}
     save_src(d)
     return {"ok": True, "items": len(d["items"])}
 
@@ -635,6 +668,66 @@ def cmd_sync():
     return {"ok": True, "added": added, "updated": updated, "errors": errors}
 
 
+def cmd_health(force=False, only=None):
+    """定时体检：把所有源（含已停用的第三方源）挨个拉一次，只看能不能用，不写池。
+
+    和 discover 的区别：
+      discover = 找「还没测过 / 上次失败」的源，目的是把新源纳进来
+      health   = 定期复检「所有」源，包括一直正常的，目的是及时发现挂掉的源
+
+    官方源（kind=official）失败只标记不改状态——它是权威定义，可能只是临时断网；
+    第三方/镜像源连续失败 AUTO_DISABLE_AFTER 次会自动停用，避免每轮白等超时。
+    """
+    d = load_src()
+    now = int(time.time())
+    if not force and not _due(d["health"], d["health"].get("last", 0), now):
+        return {"ok": True, "skipped": True, "reason": "未到体检时间",
+                "next": _next_ts(d["health"], d["health"].get("last", 0), now)}
+
+    checked = good = bad = disabled = 0
+    results = []
+    for it in d["items"]:
+        if only and it.get("key") != only:
+            continue
+        lt = it.get("last_test") or {}
+        # 已经能正常拉到 IP 的，说明当前就是通的，跳过省流量
+        alive = lt.get("v4", 0) + lt.get("v6", 0) > 0 and not str(it.get("status", "")).startswith("失败")
+        r = fetch_item(it, d.get("proxy", ""), merge=False)
+        checked += 1
+        h = it.setdefault("health", {"fails": 0, "ts": 0, "ok": True})
+        h["ts"] = now
+        if r.get("ok"):
+            good += 1
+            h["fails"] = 0
+            h["ok"] = True
+        else:
+            bad += 1
+            h["fails"] = int(h.get("fails", 0)) + 1
+            h["ok"] = False
+            h["error"] = (r.get("errors") or [""])[0][:100]
+            # 第三方源连续失败就停用；官方源只标红
+            if it.get("kind") != "official" and h["fails"] >= AUTO_DISABLE_AFTER \
+                    and it.get("enabled", True):
+                it["enabled"] = False
+                h["auto_disabled"] = now
+                disabled += 1
+        results.append({
+            "key": it.get("key"), "name": it.get("name"),
+            "kind": it.get("kind"), "ok": bool(r.get("ok")),
+            "v4": r.get("v4", 0), "v6": r.get("v6", 0),
+            "fails": h["fails"], "was_alive": alive,
+            "disabled": not it.get("enabled", True),
+            "error": h.get("error", "") if not r.get("ok") else "",
+        })
+
+    d["health"]["last"] = now
+    d["health"]["last_bad"] = bad
+    save_src(d)
+    return {"ok": True, "checked": checked, "good": good, "bad": bad,
+            "auto_disabled": disabled, "results": results,
+            "next": _next_ts(d["health"], now, now)}
+
+
 def cmd_discover(force=False):
     """扫描：把没测过或上次失败的源挨个试一遍，能拉到 IP 的记为可用。"""
     d = load_src()
@@ -696,6 +789,50 @@ def cmd_pool(route, n=120, smart=False):
     return pick[:n]
 
 
+def cmd_feed(route, entries, cap=None):
+    """把非订阅来源的候选也灌进池子：DNS 实时解析、种子、通过校验的 IP。
+
+    entries: [(ip, 来源)]，来源 = dns / seed / verify
+    这样 Google / 翻译 / GitHub / ghcr 这些没有公开订阅源的路线，池子里也有真实数据。
+    """
+    cap = int(cap or POOL_MAX)
+    bad = _bad_set()
+    pool = load_pool(route)
+    b = pool["ips"]
+    now = int(time.time())
+    added = seen = skipped = 0
+    for ip, src in entries:
+        ip = (ip or "").strip()
+        if not ip or ip in bad:
+            skipped += 1
+            continue
+        try:
+            obj = ipaddress.ip_address(ip)
+        except ValueError:
+            skipped += 1
+            continue
+        if not _public(obj):
+            skipped += 1
+            continue
+        cur = b.get(ip)
+        if cur:
+            cur["a"] = now
+            if src == "verify":
+                cur["ok"] = int(cur.get("ok", 0)) + 1
+            cur.setdefault("src", src)
+            seen += 1
+        else:
+            if len(b) >= cap:
+                skipped += 1
+                continue
+            b[ip] = {"s": "feed:" + src, "a": now, "ok": 0, "fl": 0, "lo": 0,
+                     "src": src}
+            added += 1
+    save_pool(route, pool)
+    return {"route": route, "added": added, "seen": seen,
+            "skipped": skipped, "pool": len(b)}
+
+
 def cmd_bump(route, ip, result):
     pool = load_pool(route)
     b = pool["ips"].get(ip)
@@ -748,6 +885,22 @@ def cmd_prune(route=""):
     return {"ok": True, "report": report, "expired_bad": len(purge_expired_bad())}
 
 
+SRC_LABEL = {"sub": "订阅", "dns": "解析", "seed": "种子"}
+
+
+def _src_split(ips):
+    """按来源统计池内 IP 数量。"""
+    out = {}
+    for ip, v in ips.items():
+        s0 = str(v.get("src") or "")
+        if not s0:
+            s0 = "sub" if not str(v.get("s", "")).startswith("feed:") else \
+                str(v.get("s", ""))[5:]
+        key = s0 if s0 in SRC_LABEL else "sub"
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
 def cmd_status():
     now = int(time.time())
     d = load_src()
@@ -766,6 +919,9 @@ def cmd_status():
             "v4": sum(1 for k in ips if ":" not in k),
             "v6": sum(1 for k in ips if ":" in k),
             "updated": p.get("updated", 0),
+            # 来源拆分：订阅(sub) / DNS 实时解析(dns) / 种子(seed)
+            # 让用户看得清「这个池子的数是从哪来的」
+            "by_src": _src_split(ips),
         }
     ev = jload(EVENT_FILE, {"events": []})
     return {
@@ -774,6 +930,8 @@ def cmd_status():
         "proxy": d.get("proxy", ""),
         "pull": {**d["pull"], "next": _next_ts(d["pull"], d["pull"].get("last", 0), now)},
         "discover": {**d["discover"], "next": _next_ts(d["discover"], d["discover"].get("last", 0), now)},
+        "health": {**d["health"], "next": _next_ts(d["health"], d["health"].get("last", 0), now)},
+        "auto_disable_after": AUTO_DISABLE_AFTER,
         "pools": pools,
         "bad": [{"ip": k, **v} for k, v in sorted(active.items(),
                                                   key=lambda kv: -int(kv[1].get("ts", 0)))],
@@ -805,7 +963,7 @@ def main():
             d["items"].append({
                 "key": p["key"], "name": p["name"], "note": p.get("note", ""),
                 "kind": p["kind"], "url_v4": p["url_v4"], "url_v6": p["url_v6"],
-                "enabled": p.get("enabled", True), "route": "cf",
+                "enabled": p.get("enabled", True), "route": p.get("route", "cf"),
                 "last_fetch": 0, "last_test": None, "status": "",
             })
         save_src(d)
@@ -857,12 +1015,30 @@ def main():
         print(json.dumps(cmd_discover(force="--force" in a), ensure_ascii=False))
         return 0
 
+    if cmd == "health":
+        print(json.dumps(cmd_health(force="--force" in a,
+                                    only=(a[1] if len(a) > 1 and not a[1].startswith("--") else None)),
+                         ensure_ascii=False))
+        return 0
+
     if cmd in ("pool", "take"):
         if not a:
             return 1
         n = int(a[1]) if len(a) > 1 else 120
         for ip in cmd_pool(a[0], n, smart=(cmd == "take")):
             print(ip)
+        return 0
+
+    if cmd == "feed":
+        if not a:
+            print(json.dumps({"ok": False, "error": "用法: feed ROUTE < ip 来源"}))
+            return 1
+        rows = []
+        for ln in sys.stdin:
+            q = ln.split()
+            if q:
+                rows.append((q[0], q[1] if len(q) > 1 else "dns"))
+        print(json.dumps(cmd_feed(a[0], rows), ensure_ascii=False))
         return 0
 
     if cmd == "bump-many":

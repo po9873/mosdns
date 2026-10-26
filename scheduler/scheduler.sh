@@ -28,76 +28,59 @@ maybe_update_lists() {
 
 # IP 源到点就拉（间隔由「源」页配置，默认 6 小时），并顺手清理失效 IP。
 # 这就是「公开精选源要定时扫描」：不拉就会越来越少可用。
+# 从 JSON 里抠一个整数字段（不依赖 jq）
+jget() {
+  printf '%s' "$1" | grep -oE "\"$2\": *[0-9]+" | head -1 | grep -oE '[0-9]+'
+}
+
 maybe_pull_sources() {
-  local out okn tot cn gn
-  out=$(python3 "$SUB_PY" pull-if-due 2>>"${PREF_LOG:-$DATA_DIR/pref.log}")
+  local out okn tot lout cn gn
+  local LOGF="${PREF_LOG:-$DATA_DIR/pref.log}"
+
+  # ---- 1) 定时拉取启用中的源（把新 IP 收进候选池）----
+  out=$(python3 "$SUB_PY" pull-if-due 2>>"$LOGF")
+  case "$out" in
+    *'"skipped": true'*) ;;
+    *)
+      okn=$(jget "$out" succeeded)
+      tot=$(jget "$out" sources)
+      log "IP 源定时拉取：成功 ${okn:-0} / 共 ${tot:-0} 个源"
+      python3 "$SUB_PY" prune >>"$LOGF" 2>&1 || true
+      ;;
+  esac
+
+  # ---- 2) 源体检：官方 + 第三方全部复检一遍 ----
+  # 官方源失败只标红（它是权威定义，多半是临时断网）；
+  # 第三方源连续失败会自动停用，避免每轮白等超时。
+  out=$(python3 "$SUB_PY" health 2>>"$LOGF")
+  case "$out" in
+    *'"skipped": true'*) ;;
+    *)
+      cn=$(jget "$out" checked)
+      gn=$(jget "$out" good)
+      tot=$(jget "$out" bad)
+      lout=$(jget "$out" auto_disabled)
+      if [ -n "$cn" ] && [ "$cn" != "0" ]; then
+        log "源体检完成：检查 ${cn} 个，可用 ${gn:-0} 个，失效 ${tot:-0} 个，自动停用 ${lout:-0} 个"
+        if [ "${tot:-0}" != "0" ]; then
+          notify "warn" "IP 源体检有失效" \
+            "共检查 ${cn} 个源，可用 ${gn:-0} 个，失效 ${tot} 个（连续失败 3 次的第三方源已自动停用）。控制台「源」页可查看详情并重新启用。"
+        fi
+      fi
+      ;;
+  esac
+
+  # ---- 3) 扫描还没测过的源（默认关闭，可在「源」页打开）----
+  out=$(python3 "$SUB_PY" discover 2>>"$LOGF")
   case "$out" in
     *'"skipped": true'*) return 0 ;;
   esac
-  okn=$(printf '%s' "$out" | sed -n 's/.*"succeeded": *\([0-9]*\).*/\1/p')
-  tot=$(printf '%s' "$out" | sed -n 's/.*"sources": *\([0-9]*\).*/\1/p')
-  if [ -n "$okn" ]; then
-    log "IP 源定时拉取：成功 ${okn:-0} / 共 ${tot:-0} 个源"
-  fi
-  python3 "$SUB_PY" prune >>"${PREF_LOG:-$DATA_DIR/pref.log}" 2>&1 || true
-  # 定时扫描新源（默认关闭，可在「源」页打开）
-  out=$(python3 "$SUB_PY" discover 2>>"${PREF_LOG:-$DATA_DIR/pref.log}")
-  case "$out" in
-    *'"checked": 0'*|*'"skipped": true'*) return 0 ;;
+  cn=$(jget "$out" checked)
+  gn=$(jget "$out" good)
+  case "${cn:-0}" in
+    0|"") return 0 ;;
   esac
-  cn=$(printf '%s' "$out" | sed -n 's/.*"checked": *\([0-9]*\).*/\1/p')
-  gn=$(printf '%s' "$out" | sed -n 's/.*"good": *\([0-9]*\).*/\1/p')
-  log "源扫描完成：检查 ${cn:-0} 个，可用 ${gn:-0} 个"
-}
-
-run_all() {
-  local r en fp ok=0 bad=0 names="" rc
-  fp=$(file_sig "$PREF_DIR/all.hosts")
-  for r in $ROUTES; do
-    en=$(setting "routes.$r")
-    case "$en" in
-      true|True|1) ;;
-      *) log "跳过 $r（已在配置中关闭）"; continue ;;
-    esac
-    log "== 开始 $r 路 =="
-    "/app/scheduler/${r}_pref.sh"
-    rc=$?
-    if [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; then
-      ok=$((ok + 1))
-      names="$names $r"
-    else
-      bad=$((bad + 1))
-      if [ "$rc" -eq 3 ]; then
-        log "$r 路：候选全部被校验拒绝，已撤下该路（不使用坏 IP）"
-      else
-        log "$r 路未选出结果"
-      fi
-    fi
-  done
-  # 五路全部跑完，只在这里判断一次是否需要重载
-  reload_if_changed "$fp"
-  notify "round" "五路优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。"
-}
-
-once_mode() {
-  local which="${1:-all}" fp
-  if [ "$which" = "all" ]; then
-    run_all
-  else
-    case " $ROUTES " in
-      *" $which "*) ;;
-      *) echo "未知路: $which"; exit 1 ;;
-    esac
-    fp=$(file_sig "$PREF_DIR/all.hosts")
-    "/app/scheduler/${which}_pref.sh" || exit 1
-    reload_if_changed "$fp"
-  fi
-}
-
-lists_mode() {
-  local name="${1:-all}"
-  python3 "$LISTS_PY" update "$name" || true
-  reload_mosdns
+  log "源扫描完成：检查 ${cn} 个，可用 ${gn:-0} 个"
 }
 
 daemon_mode() {
@@ -127,9 +110,10 @@ case "${1:-daemon}" in
       pull)   python3 "$SUB_PY" pull --force ;;
       sync)   python3 "$SUB_PY" sync ;;
       disc*)  python3 "$SUB_PY" discover --force ;;
+      health) python3 "$SUB_PY" health --force ;;
       prune)  python3 "$SUB_PY" prune ;;
       test)   python3 "$SUB_PY" test "$3" ;;
-      *)      echo "用法: $0 sources {pull|sync|discover|prune|test KEY}" ;;
+      *)      echo "用法: $0 sources {pull|sync|discover|health|prune|test KEY}" ;;
     esac
     ;;
   reload) reload_mosdns ;;

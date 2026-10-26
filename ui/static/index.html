@@ -119,6 +119,15 @@
   .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
   .route-card .rc-name{font-size:12.5px;color:var(--muted);letter-spacing:.3px}
   .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;word-break:break-all}
+  /* 卡片里直接列出每个 IP，不再只说「共 N 个」 */
+  .route-card .rc-list{margin:2px 0 0;display:flex;flex-direction:column;gap:3px}
+  .route-card .rc-line{display:flex;align-items:center;gap:7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px;font-weight:600;line-height:1.5}
+  .route-card .rc-line .n{color:var(--muted);font-weight:400;font-size:10.5px;min-width:12px}
+  .route-card .rc-line .ip{word-break:break-all;min-width:0}
+  .route-card .rc-line .ip.v6ip{font-size:11.5px;letter-spacing:-.2px}
+  .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:11px;margin-left:auto;white-space:nowrap}
+  .route-card .rc-more{font-size:11px;color:var(--muted);margin-top:2px}
+  .rc-cut{font-size:11px;color:#e2534b;margin-top:4px}
   .route-card .rc-dom{font-size:11.5px;color:var(--muted);margin-top:4px;word-break:break-all}
   .route-card .rc-sub{font-size:11px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .tag{display:inline-block;font-size:10px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
@@ -146,6 +155,8 @@
   .tag.mirror{color:var(--muted)}
   .tag.custom{color:var(--green);border-color:rgba(47,158,99,.45)}
   .tag.sub{color:#8b5cf6;border-color:rgba(139,92,246,.45)}
+  .tag.hok{color:var(--green);border-color:rgba(47,158,99,.45)}
+  .tag.hbad{color:#e2534b;border-color:rgba(226,83,75,.5)}
   .iplist{display:flex;flex-direction:column;gap:3px}
   .iplist .row{display:flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
   .iplist .lat{color:var(--muted);font-size:11px}
@@ -271,10 +282,14 @@
     .status-strip > .pill:has(#btnRunAll){width:100%}
     #btnRunAll{width:100%;justify-content:center;padding:11px 12px}
 
-    .grid.c5{grid-template-columns:repeat(2,1fr);gap:10px}
-    .grid.c5 > :last-child:nth-child(odd){grid-column:span 2}
+    /* 手机上单列：卡片里要列出每个 IP 和延迟，两列挤不下 IPv6 长地址 */
+    .grid.c5{grid-template-columns:1fr;gap:10px}
+    .grid.c5 > :last-child:nth-child(odd){grid-column:auto}
     .grid.c2{grid-template-columns:1fr}
     .route-card{padding:12px}
+    .route-card .rc-line{font-size:12.5px;gap:5px}
+    .route-card .rc-line .ip.v6ip{font-size:12px}
+    .route-card .rc-line .ms{font-size:10.5px}
 
     .card{padding:14px}
     /* 表格在手机上变卡片列表，避免"操作"列被挤出屏幕 */
@@ -630,6 +645,18 @@
             </label>
           </div>
 
+          <div class="rowline">
+            <label class="chk" title="每天把所有源（含已停用的第三方）拉一遍，确认还能用">
+              <input type="checkbox" id="hlOn"> 定时体检
+            </label>
+            <span class="muted" id="hlNext" style="font-size:12px"></span>
+            <button class="btn" id="btnSrcHealth" style="margin-left:auto">立即体检</button>
+          </div>
+          <p class="muted" style="margin:0 0 12px;font-size:12px">
+            体检会逐个拉一次所有源（不只启用中的）。官方源失败只标红——它是权威定义，多半只是临时断网；
+            第三方/镜像源连续失败 3 次自动停用，避免每轮白等超时，恢复后手动勾回即可。
+          </p>
+
           <div class="rowline" style="align-items:flex-start">
             <label class="grow">源订阅（一行一个清单地址，同步进来的源默认不启用）
               <textarea id="subBox" rows="2" placeholder="https://example.com/my-cf-sources.json"></textarea>
@@ -833,25 +860,68 @@
       var name = document.createElement("div"); name.className = "rc-name"; name.textContent = ROUTE_LABEL[r];
       var led = document.createElement("span"); led.className = "led " + (ips.length ? "ok" : "");
       top.appendChild(name); top.appendChild(led);
-      var ip = document.createElement("div"); ip.className = "rc-ip"; ip.textContent = ips.length ? ips[0].ip : "—";
+      div.appendChild(top);
+
+      /* 直接把每个 IP 列出来（最多 4 个，多的折成「还有 N 个」） */
+      if (ips.length) {
+        var list = document.createElement("div"); list.className = "rc-list";
+        ips.slice(0, 4).forEach(function(x){
+          var ln = document.createElement("div"); ln.className = "rc-line";
+          var ipEl = document.createElement("span");
+          ipEl.className = "ip" + (x.family === "v6" ? " v6ip" : "");
+          ipEl.textContent = x.ip;
+          ln.appendChild(ipEl);
+          if (x.family === "v6") {
+            var t = document.createElement("span"); t.className = "tag v6"; t.textContent = "v6";
+            ln.appendChild(t);
+          }
+          var ms = document.createElement("span"); ms.className = "ms";
+          ms.textContent = x.latency != null ? Math.round(x.latency) + " ms" : "—";
+          ln.appendChild(ms);
+          list.appendChild(ln);
+        });
+        div.appendChild(list);
+        if (ips.length > 4) {
+          var more = document.createElement("div"); more.className = "rc-more";
+          more.textContent = "还有 " + (ips.length - 4) + " 个，见「结果」页";
+          div.appendChild(more);
+        }
+      } else {
+        var none = document.createElement("div"); none.className = "rc-ip"; none.textContent = "—";
+        div.appendChild(none);
+      }
+
       var dom = document.createElement("div"); dom.className = "rc-dom"; dom.textContent = item.domain || "";
+      if (item.domain) div.appendChild(dom);
+
       var sub = document.createElement("div"); sub.className = "rc-sub";
       if (ips.length) {
-        var c = document.createElement("span"); c.textContent = "共 " + ips.length + " 个 IP";
+        var c = document.createElement("span");
+        c.textContent = "共 " + ips.length + " 个 IP";
         sub.appendChild(c);
-        if (ips[0].latency != null) {
-          var l = document.createElement("span"); l.textContent = Math.round(ips[0].latency) + " ms";
-          sub.appendChild(l);
-        }
         if (ips.some(function(x){ return x.family === "v6"; })) {
-          var t = document.createElement("span"); t.className = "tag v6"; t.textContent = "IPv6";
+          var t = document.createElement("span"); t.className = "tag v6"; t.textContent = "含 IPv6";
           sub.appendChild(t);
         }
+        if (item.status === "degraded") {
+          var dg = document.createElement("span"); dg.className = "tag"; dg.textContent = "降级使用";
+          dg.title = "没有 IP 通过 HTTPS 校验（仅超时/连不上），暂用 TCP 结果，延迟标 —";
+          sub.appendChild(dg);
+        }
       }
+      if (sub.childNodes.length) div.appendChild(sub);
+
+      /* 被 1034/证书/5xx 剔除的 IP 单独说明，避免"触发了却没换"的错觉 */
+      var dropped = item.dropped || [];
+      if (dropped.length) {
+        var cut = document.createElement("div"); cut.className = "rc-cut";
+        var rs = dropped.map(function(d){ return d.reason; }).filter(function(v, i, a){ return a.indexOf(v) === i; });
+        cut.textContent = "已剔除 " + dropped.length + " 个（" + rs.join("/") + "）";
+        cut.title = dropped.map(function(d){ return d.ip + " " + d.reason; }).join("\n");
+        div.appendChild(cut);
+      }
+
       var tm = document.createElement("div"); tm.className = "rc-time"; tm.textContent = item.mtime ? fmtTime(item.mtime) : "未优选";
-      div.appendChild(top); div.appendChild(ip);
-      if (item.domain) div.appendChild(dom);
-      if (ips.length) div.appendChild(sub);
       div.appendChild(tm);
       host.appendChild(div);
     });
@@ -1153,6 +1223,18 @@
     var m = KIND[it.kind] || KIND.custom;
     return '<span class="tag ' + m[0] + '">' + m[1] + "</span>";
   }
+  /* 源体检结果：可用 / 失效 ×N / 未体检；自动停用的额外标出来 */
+  function healthTag(it){
+    var h = it.health;
+    if (!h || !h.ts) return '<span class="tag" title="还没体检过，点「立即体检」">未体检</span>';
+    var when = fmtAgo(h.ts);
+    if (h.ok) {
+      return '<span class="tag hok" title="' + escH(when + " 体检通过") + '">可用</span>';
+    }
+    var t = '<span class="tag hbad" title="' + escH((h.error || "") + " · " + when) + '">失效 ×' + (h.fails || 1) + "</span>";
+    if (h.auto_disabled) t += ' <span class="tag hbad">已自动停用</span>';
+    return t;
+  }
   function renderSources(){
     var box = $("#srcList");
     var items = (SRC.data && SRC.data.items) || [];
@@ -1169,6 +1251,7 @@
           kindTag(it) +
           (it.from_sub ? '<span class="tag sub">订阅</span>' : '') +
           '<input class="nm" data-act="name" data-key="' + k + '" value="' + escH(it.name) + '">' +
+          healthTag(it) +
           '<span class="srcnum">' + escH(statText(it)) + "</span>" +
           '<button class="btn" data-act="test" data-key="' + k + '">看有多少IP</button>' +
           '<button class="btn" data-act="del" data-key="' + k + '">删除</button>' +
@@ -1197,7 +1280,7 @@
         url_v6: u6 ? u6.value.trim() : it.url_v6,
         enabled: cb ? cb.checked : it.enabled,
         kind: it.kind, note: it.note, from_sub: it.from_sub,
-        last_test: it.last_test, route: it.route
+        last_test: it.last_test, health: it.health, route: it.route
       };
     });
   }
@@ -1223,6 +1306,15 @@
       $("#spNext").textContent = pull.enabled
         ? ("下次 " + fmtTime(pull.next))
         : "已关闭";
+      var hl = d.health || {};
+      if ($("#hlOn")) $("#hlOn").checked = !!hl.enabled;
+      if ($("#hlNext")) {
+        var hb = hl.last_bad;
+        $("#hlNext").textContent = hl.enabled
+          ? ("每天 " + (hl.hour == null ? 5 : hl.hour) + ":00 · 下次 " + fmtTime(hl.next) +
+             (hl.last ? (" · 上次 " + fmtAgo(hl.last) + (hb ? "（失效 " + hb + " 个）" : "（全部可用）")) : " · 还没体检过"))
+          : "已关闭";
+      }
       renderSources();
       renderPool(d.pools || {});
       renderSwaps(d.events || []);
@@ -1234,10 +1326,19 @@
     var N = {cf:"Cloudflare", google:"Google", gt:"翻译", github:"GitHub", ghcr:"ghcr"};
     $("#poolStat").innerHTML = ROUTES.map(function(r){
       var p = pools[r] || {};
+      var bs = p.by_src || {};
+      var parts = [];
+      if (bs.sub) parts.push("订阅 " + bs.sub);
+      if (bs.dns) parts.push("解析 " + bs.dns);
+      if (bs.seed) parts.push("种子 " + bs.seed);
+      var srcLine = parts.length
+        ? '<div class="l">' + parts.join(" · ") + "</div>"
+        : '<div class="l">还没有候选，跑一轮优选或拉取源</div>';
       return '<div class="poolcell">' +
         '<div class="n">' + (p.total || 0) + "</div>" +
         '<div class="l">' + (N[r] || r) + " · v4 " + (p.v4 || 0) + " / v6 " + (p.v6 || 0) + "</div>" +
         '<div class="l">已验证 ' + (p.verified || 0) + " · 已拉黑 " + (p.blocked || 0) + "</div>" +
+        srcLine +
       "</div>";
     }).join("");
   }
@@ -1270,6 +1371,14 @@
       enabled: $("#spOn").checked,
       cycle: $("#spCycle").value,
       hour: parseInt($("#spHour").value, 10) || 4
+    };
+    var hlCur = (SRC.data && SRC.data.health) || {};
+    payload.health = {
+      enabled: $("#hlOn") ? $("#hlOn").checked : !!hlCur.enabled,
+      cycle: hlCur.cycle || "daily",
+      hour: hlCur.hour == null ? 5 : hlCur.hour,
+      last: hlCur.last || 0,
+      last_bad: hlCur.last_bad || 0
     };
     if (extra) Object.keys(extra).forEach(function(k){ payload[k] = extra[k]; });
     return api("/api/sources", {method:"POST", body: JSON.stringify(payload)});
@@ -1363,6 +1472,24 @@
       loadSources();
     }).catch(function(err){ toast("扫描失败：" + err.message); });
   });
+  $("#btnSrcHealth").addEventListener("click", function(){
+    var b = $("#btnSrcHealth");
+    b.disabled = true; b.textContent = "体检中…";
+    toast("正在逐个检查所有源，源多时可能要一分钟…");
+    api("/api/sources/health", {method:"POST"}).then(function(r){
+      if (r && r.skipped) { toast("体检未启用或未到时间"); return; }
+      var bad = r.bad || 0, dis = r.auto_disabled || 0;
+      toast("体检完成：检查 " + (r.checked || 0) + " 个，可用 " + (r.good || 0) +
+            " 个" + (bad ? "，失效 " + bad + " 个" : "") +
+            (dis ? "（已自动停用 " + dis + " 个）" : ""));
+      loadSources();
+    }).catch(function(err){ toast("体检失败：" + err.message); })
+      .then(function(){ b.disabled = false; b.textContent = "立即体检"; });
+  });
+  $("#hlOn").addEventListener("change", function(){
+    saveSources().then(function(){ toast("体检设置已保存"); loadSources(); })
+      .catch(function(err){ toast("保存失败：" + err.message); });
+  });
   $("#btnPoolPrune").addEventListener("click", function(){
     api("/api/sources/prune", {method:"POST"}).then(function(r){
       var n = 0;
@@ -1399,6 +1526,8 @@
         if (ips.length) {
           var box = document.createElement("div"); box.className = "iplist";
           ips.forEach(function(x){
+            /* 兜底：1034/证书/5xx 的 IP 绝不显示为「优选 IP」 */
+            if (x.status && /^(cf\d{3,4}|cert|http5\d\d)$/i.test(x.status)) return;
             var row = document.createElement("div"); row.className = "row";
             var a = document.createElement("span"); a.textContent = x.ip; row.appendChild(a);
             if (x.family === "v6") {
@@ -1409,18 +1538,23 @@
             }
             if (x.status && x.status !== "ok") {
               var st = document.createElement("span");
-              st.className = "tag " + (x.status === "unverified" ? "" : "bad");
-              st.style.color = x.status === "unverified" ? "" : "#e2534b";
-              st.style.borderColor = x.status === "unverified" ? "" : "rgba(226,83,75,.5)";
+              st.className = "tag";
               st.textContent = x.status === "unverified" ? "未校验" : x.status;
-              st.title = x.status === "cf1034"
-                ? "Cloudflare 1034：该 IP 无法解析此域名，已降级保留"
-                : "该 IP 未通过 HTTPS 校验";
+              st.title = "该 IP 只有 TCP 连通，未通过 HTTPS 校验";
               row.appendChild(st);
             }
             box.appendChild(row);
           });
           c3.appendChild(box);
+          var dropped = it.dropped || [];
+          if (dropped.length) {
+            var cut = document.createElement("div");
+            cut.className = "rc-cut";
+            var rs = dropped.map(function(d){ return d.reason; }).filter(function(v, i, a){ return a.indexOf(v) === i; });
+            cut.textContent = "已剔除 " + dropped.length + " 个（" + rs.join("/") + "），已换 IP";
+            cut.title = dropped.map(function(d){ return d.ip + " " + d.reason; }).join("\n");
+            c3.appendChild(cut);
+          }
         } else {
           c3.textContent = "—";
         }
