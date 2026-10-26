@@ -70,7 +70,7 @@ RUN { : > /opt/seed/cdn_ranges.txt; \
       fi; \
       n=$(wc -l < /opt/seed/cdn_ranges.txt 2>/dev/null || echo 0); \
       echo "cdn_ranges 固化: ${n} 条"; \
-      [ "${n:-0}" -ge 20 ] || : > /opt/seed/cdn_ranges.txt }
+      [ "${n:-0}" -ge 20 ] || : > /opt/seed/cdn_ranges.txt; }
 
 # ---------- 阶段 3：运行时镜像 ----------
 FROM ${ALPINE_IMAGE}
@@ -107,8 +107,6 @@ ENV PREF_UI_PORT=80 \
     PREF_FOREIGN_DOH=https://1.1.1.1/dns-query \
     PREF_FOREIGN_DOH_BACKUP=https://8.8.8.8/dns-query \
     PREF_DOMESTIC_DOH=https://223.5.5.5/dns-query \
-    PREF_AUTH_USER=admin \
-    PREF_AUTH_PASS="" \
     PREF_THREADS="" \
     PREF_DATA_DIR=/data
 
