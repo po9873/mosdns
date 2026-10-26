@@ -1,0 +1,19 @@
+# 审计/本地分析产物（绝不进仓库）
+101-home.html
+*.audit
+/tmp/
+/audit/
+
+# 运行时数据（由容器在 /data 生成，不进仓库）
+/data/
+*.log
+
+# 系统/编辑器
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc

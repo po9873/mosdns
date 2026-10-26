@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MosDNS 智能优选</title>
+<style>
+  :root{
+    --bg:#0f1419; --bg2:#0b0f14; --panel:#161b22; --panel2:#1c232c;
+    --border:#242c38; --text:#e6edf3; --muted:#8b98a8;
+    --blue:#3b8eea; --blue2:#5aa2f0; --green:#3fb950; --red:#f85149; --amber:#d29922;
+    --radius:12px; --shadow:0 6px 24px rgba(0,0,0,.28);
+  }
+  html[data-theme="light"]{
+    --bg:#f4f6fa; --bg2:#eef1f6; --panel:#ffffff; --panel2:#f7f9fc;
+    --border:#e2e8f0; --text:#1b2430; --muted:#5c6878;
+    --blue:#2f7de1; --blue2:#1f6bd0; --green:#1a9e4b; --red:#d33b32; --amber:#b07d0a;
+    --shadow:0 6px 24px rgba(20,40,80,.10);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit;cursor:pointer}
+  input,select{font-family:inherit}
+
+  /* ---------- 登录 ---------- */
+  .login-mask{
+    position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(1200px 600px at 50% -10%, rgba(59,142,234,.16), transparent 60%), var(--bg);
+    padding:20px;
+  }
+  .login-mask.hide{display:none}
+  .login-card{
+    width:100%; max-width:360px; background:var(--panel); border:1px solid var(--border);
+    border-radius:16px; padding:28px; box-shadow:var(--shadow);
+  }
+  .login-card .brand{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .dot-logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--blue),#7b5cff);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px}
+  .login-card h2{margin:6px 0 18px;font-size:18px;font-weight:650}
+  .login-card p.sub{margin:0 0 18px;color:var(--muted);font-size:12.5px}
+  .field{margin-bottom:12px}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .field input{
+    width:100%; padding:10px 12px; border-radius:9px; border:1px solid var(--border);
+    background:var(--panel2); color:var(--text); font-size:14px; outline:none;
+  }
+  .field input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,142,234,.16)}
+  .btn{
+    border:1px solid var(--border); background:var(--panel2); color:var(--text);
+    padding:9px 14px; border-radius:9px; font-size:13px; transition:.15s;
+  }
+  .btn:hover{border-color:var(--blue);color:var(--blue2)}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn.primary:hover{background:var(--blue2);color:#fff}
+  .btn.block{width:100%;padding:11px}
+  .err{color:var(--red);font-size:12.5px;min-height:18px;margin-top:8px}
+
+  /* ---------- 布局 ---------- */
+  .app{display:flex;min-height:100vh}
+  .app[hidden]{display:none!important}
+  .sidebar{
+    width:216px; flex:0 0 216px; background:var(--bg2); border-right:1px solid var(--border);
+    display:flex; flex-direction:column; padding:18px 12px; position:sticky; top:0; height:100vh;
+  }
+  .side-brand{display:flex;align-items:center;gap:10px;padding:6px 8px 18px}
+  .side-brand b{font-size:15px;letter-spacing:.3px}
+  .side-brand b span{color:var(--blue2)}
+  nav{display:flex;flex-direction:column;gap:4px}
+  nav a{
+    display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;
+    color:var(--muted);text-decoration:none;font-size:13.5px;transition:.15s;cursor:pointer;
+  }
+  nav a:hover{background:var(--panel);color:var(--text)}
+  nav a.active{background:var(--panel);color:var(--blue2);font-weight:600}
+  nav a i{width:16px;height:16px;display:inline-block;border-radius:4px;background:currentColor;opacity:.5}
+  .side-foot{margin-top:auto;padding:12px 8px 4px;color:var(--muted);font-size:11.5px;border-top:1px solid var(--border)}
+  .side-foot .row{display:flex;justify-content:space-between;margin-top:6px}
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:16px 24px; border-bottom:1px solid var(--border); background:var(--bg);
+    position:sticky; top:0; z-index:10;
+  }
+  .topbar h1{margin:0;font-size:17px;font-weight:650}
+  .topbar .actions{display:flex;gap:8px;align-items:center}
+  .content{padding:22px 24px 40px;max-width:1180px;width:100%}
+  .view{display:none}
+  .view.active{display:block}
+
+  /* ---------- 卡片 ---------- */
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
+  .card h3{margin:0 0 14px;font-size:14px;font-weight:650;display:flex;align-items:center;gap:8px}
+  .grid{display:grid;gap:14px}
+  .grid.c5{grid-template-columns:repeat(5,1fr)}
+  .grid.c2{grid-template-columns:1fr 1fr}
+  .status-strip{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:16px}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted)}
+  .led{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
+  .led.ok{background:var(--green);box-shadow:0 0 0 3px rgba(63,185,80,.15)}
+  .led.bad{background:var(--red);box-shadow:0 0 0 3px rgba(248,81,73,.15)}
+  .led.busy{background:var(--amber);box-shadow:0 0 0 3px rgba(210,153,34,.15)}
+
+  .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
+  .route-card:hover{border-color:var(--blue)}
+  .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .route-card .rc-name{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;word-break:break-all}
+  .route-card .rc-dom{font-size:11.5px;color:var(--muted);margin-top:4px;word-break:break-all}
+  .route-card .rc-time{font-size:11px;color:var(--muted);margin-top:6px}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+  th{color:var(--muted);font-weight:500;font-size:12px}
+  td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  tbody tr:hover{background:var(--panel2)}
+  .empty{color:var(--muted);text-align:center;padding:26px 0;font-size:13px}
+
+  .lat-pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-family:ui-monospace,monospace}
+  .lat-good{background:rgba(63,185,80,.14);color:var(--green)}
+  .lat-mid{background:rgba(210,153,34,.14);color:var(--amber)}
+  .lat-bad{background:rgba(248,81,73,.14);color:var(--red)}
+  .lat-na{background:var(--panel2);color:var(--muted)}
+
+  .resolve-row{display:flex;gap:10px;flex-wrap:wrap}
+  .resolve-row input{
+    flex:1;min-width:200px;padding:10px 12px;border-radius:9px;border:1px solid var(--border);
+    background:var(--panel2);color:var(--text);font-size:14px;outline:none;
+  }
+  .resolve-row input:focus{border-color:var(--blue)}
+  .resolve-meta{color:var(--muted);font-size:12px;margin:12px 0 4px}
+
+  .logbox{
+    background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;
+    height:calc(100vh - 250px);min-height:320px;overflow:auto;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-all;
+  }
+  .tabs{display:flex;gap:6px;margin-bottom:12px}
+  .tab{padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12.5px}
+  .tab.active{background:var(--panel2);color:var(--blue2);border-color:var(--blue)}
+
+  .form-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--border)}
+  .form-row:last-child{border-bottom:none}
+  .form-row .lab{font-size:13px}
+  .form-row .lab small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;font-weight:400}
+  .form-row input[type=number]{width:130px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none}
+  .switch{position:relative;width:44px;height:24px;flex:0 0 auto}
+  .switch input{opacity:0;width:0;height:0}
+  .slider{position:absolute;inset:0;background:var(--border);border-radius:20px;transition:.2s}
+  .slider:before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+  .switch input:checked + .slider{background:var(--blue)}
+  .switch input:checked + .slider:before{transform:translateX(20px)}
+  .kv{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--border);font-size:13px}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--muted)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .toast{
+    position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
+    background:var(--panel);border:1px solid var(--border);color:var(--text);
+    padding:10px 18px;border-radius:10px;font-size:13px;box-shadow:var(--shadow);
+    opacity:0;pointer-events:none;transition:.25s;z-index:100
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .muted{color:var(--muted)}
+
+  /* ---------- 移动端 ---------- */
+  @media (max-width:820px){
+    .app{flex-direction:column}
+    .sidebar{
+      position:fixed;left:0;right:0;bottom:0;top:auto;width:100%;height:auto;
+      flex-direction:row;border-right:none;border-top:1px solid var(--border);
+      padding:6px 6px calc(6px + env(safe-area-inset-bottom));z-index:30;
+    }
+    .side-brand,.side-foot{display:none}
+    nav{flex-direction:row;width:100%;justify-content:space-around;gap:0}
+    nav a{flex-direction:column;gap:4px;font-size:10.5px;padding:6px 4px;flex:1;text-align:center}
+    nav a i{width:14px;height:14px}
+    .main{padding-bottom:68px}
+    .topbar{padding:13px 16px}
+    .content{padding:16px 14px 24px}
+    .grid.c5{grid-template-columns:repeat(2,1fr)}
+    .grid.c2{grid-template-columns:1fr}
+    .logbox{height:calc(100vh - 300px)}
+    th,td{padding:8px 8px;font-size:12px}
+  }
+</style>
+</head>
+<body>
+
+<!-- 登录 -->
+<div class="login-mask" id="loginMask">
+  <form class="login-card" id="loginForm" autocomplete="off">
+    <div class="brand"><div class="dot-logo">M</div><b style="font-size:15px">MosDNS</b></div>
+    <h2>登录智能优选控制台</h2>
+    <p class="sub">账号密码由容器环境变量 PREF_AUTH_USER / PREF_AUTH_PASS 设定</p>
+    <div class="field">
+      <label>账号</label>
+      <input id="loginUser" placeholder="账号" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <input id="loginPass" type="password" placeholder="密码" autocomplete="current-password">
+    </div>
+    <button class="btn primary block" type="submit">登 录</button>
+    <div class="err" id="loginErr"></div>
+  </form>
+</div>
+
+<!-- 主界面 -->
+<div class="app" id="app" hidden>
+  <aside class="sidebar">
+    <div class="side-brand"><div class="dot-logo">M</div><b>MosDNS <span>优选</span></b></div>
+    <nav id="nav">
+      <a data-view="overview" class="active"><i></i>概况</a>
+      <a data-view="results"><i></i>结果</a>
+      <a data-view="logs"><i></i>日志</a>
+      <a data-view="config"><i></i>配置</a>
+      <a data-view="source"><i></i>源</a>
+    </nav>
+    <div class="side-foot">
+      <div class="row"><span>引擎</span><span id="footEngine">mosdns</span></div>
+      <div class="row"><span>版本</span><span>v5 自建</span></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <h1 id="viewTitle">概况</h1>
+      <div class="actions">
+        <button class="btn" id="themeBtn" title="切换主题">主题：暗</button>
+        <button class="btn" id="logoutBtn">退出</button>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- 概况 -->
+      <section class="view active" id="view-overview">
+        <div class="status-strip">
+          <span class="pill"><span class="led" id="ledMosdns"></span>DNS 引擎 <b id="txtMosdns">检测中</b></span>
+          <span class="pill"><span class="led" id="ledLock"></span><span id="txtLock">空闲</span></span>
+          <span class="pill">刷新于 <b id="txtRefresh">-</b></span>
+          <span class="pill" style="margin-left:auto">
+            <button class="btn primary" id="btnRunAll">立即执行五路优选</button>
+          </span>
+        </div>
+
+        <div class="grid c5" id="routeCards"></div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>实时解析域名</h3>
+          <form class="resolve-row" id="resolveForm">
+            <input id="resolveInput" placeholder="输入域名，例如 www.google.com" autocomplete="off">
+            <button class="btn primary" type="submit">解析</button>
+          </form>
+          <div class="resolve-meta" id="resolveMeta"></div>
+          <div id="resolveResult"></div>
+        </div>
+      </section>
+
+      <!-- 结果 -->
+      <section class="view" id="view-results">
+        <div class="card">
+          <h3>五路优选结果 <span class="muted" style="font-weight:400;font-size:12px">（写入 /data/prefs，重启引擎后生效）</span></h3>
+          <div id="resultsTable"><div class="empty">加载中…</div></div>
+        </div>
+      </section>
+
+      <!-- 日志 -->
+      <section class="view" id="view-logs">
+        <div class="tabs">
+          <button class="tab active" data-src="pref">优选日志</button>
+          <button class="tab" data-src="mosdns">引擎输出</button>
+        </div>
+        <div class="logbox" id="logbox">加载中…</div>
+      </section>
+
+      <!-- 配置 -->
+      <section class="view" id="view-config">
+        <div class="card">
+          <h3>自动干活</h3>
+          <div class="form-row">
+            <div class="lab">采集间隔（分钟）<small>每轮五路执行完后的等待时间</small></div>
+            <input type="number" id="cfgInterval" min="1" step="1">
+          </div>
+          <div class="form-row">
+            <div class="lab">并发线程<small>0 = 自动（按 CPU 与虚拟化自适应）</small></div>
+            <input type="number" id="cfgThreads" min="0" step="1">
+          </div>
+          <div class="form-row"><div class="lab">Cloudflare</div><label class="switch"><input type="checkbox" data-route="cf"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">Google</div><label class="switch"><input type="checkbox" data-route="google"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">Google 翻译</div><label class="switch"><input type="checkbox" data-route="gt"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">GitHub</div><label class="switch"><input type="checkbox" data-route="github"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">ghcr.io</div><label class="switch"><input type="checkbox" data-route="ghcr"><span class="slider"></span></label></div>
+          <div style="display:flex;gap:10px;margin-top:16px">
+            <button class="btn primary" id="btnSaveCfg">保存配置</button>
+            <button class="btn" id="btnRunAll2">立即执行五路</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>运行信息</h3>
+          <div class="kv"><span class="k">账号</span><span class="mono" id="infoUser">-</span></div>
+          <div class="kv"><span class="k">五路串行</span><span>全局锁，任一时刻只跑一路</span></div>
+          <div class="kv"><span class="k">上游</span><span class="mono" style="font-size:12px">国外 DoH 直连（无代理）</span></div>
+          <div class="kv"><span class="k">数据目录</span><span class="mono">/data</span></div>
+        </div>
+      </section>
+
+      <!-- 源 -->
+      <section class="view" id="view-source">
+        <div class="card">
+          <h3>候选源（内置镜像，公开种子）</h3>
+          <div class="kv"><span class="k">Cloudflare</span><span class="mono">/app/config/seeds/cloudflare.txt</span></div>
+          <div class="kv"><span class="k">Google</span><span class="mono">/app/config/seeds/google.txt</span></div>
+          <div class="kv"><span class="k">Google 翻译</span><span class="mono">/app/config/seeds/ghtranslate.txt</span></div>
+          <div class="kv"><span class="k">GitHub</span><span class="mono">/app/config/seeds/github.txt</span></div>
+          <div class="kv"><span class="k">ghcr.io</span><span class="mono">/app/config/seeds/ghcr.txt</span></div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>工作原理</h3>
+          <p class="muted" style="margin:0">
+            候选 IP = 运行时向本机 mosdns 实时解析目标域名所得的真实 IP + 种子兜底 IP；
+            再对每个候选做 TCP 直连延迟探测，选最低者写入 hosts。
+            全程不依赖任何外部下载或代理，因此不会出现"拉不下来"。
+          </p>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h3>覆盖方式</h3>
+          <p class="muted" style="margin:0">
+            将自定义种子挂载到容器内对应路径即可覆盖；或在 /data 卷保留长期运行数据。
+            镜像本身只含公开种子，不含任何个人数据。
+          </p>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+  var ROUTES = ["cf","google","gt","github","ghcr"];
+  var ROUTE_LABEL = {cf:"Cloudflare",google:"Google",gt:"Google 翻译",github:"GitHub",ghcr:"ghcr.io"};
+  var state = { view:"overview", settings:{}, results:{}, logSrc:"pref", timers:[] };
+  var $ = function(s){ return document.querySelector(s); };
+  var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
+
+  function api(path, opts){
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    if (opts.body && typeof opts.body !== "string") {
+      opts.body = JSON.stringify(opts.body);
+      opts.headers["Content-Type"] = "application/json";
+    }
+    return fetch(path, opts).then(function(r){
+      if (r.status === 401) { showLogin(); throw new Error("unauthorized"); }
+      return r.json().then(function(j){
+        if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+        return j;
+      });
+    });
+  }
+
+  function toast(msg){
+    var t = $("#toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(t._tid);
+    t._tid = setTimeout(function(){ t.classList.remove("show"); }, 2200);
+  }
+
+  /* ---------- 登录 ---------- */
+  function showLogin(){ $("#loginMask").classList.remove("hide"); $("#app").hidden = true; }
+  function hideLogin(){ $("#loginMask").classList.add("hide"); $("#app").hidden = false; }
+
+  $("#loginForm").addEventListener("submit", function(e){
+    e.preventDefault();
+    $("#loginErr").textContent = "";
+    api("/api/login", {method:"POST", body:{
+      user: $("#loginUser").value.trim(),
+      pass: $("#loginPass").value
+    }}).then(function(){
+      hideLogin(); boot();
+    }).catch(function(err){
+      $("#loginErr").textContent = err.message === "unauthorized" ? "账号或密码错误" : err.message;
+    });
+  });
+
+  $("#logoutBtn").addEventListener("click", function(){
+    api("/api/logout", {method:"POST"}).catch(function(){}).then(function(){
+      location.reload();
+    });
+  });
+
+  /* ---------- 主题 ---------- */
+  var THEMES = ["light","dark","system"];
+  var THEME_LABEL = {light:"亮",dark:"暗",system:"系统"};
+  function applyTheme(t){
+    if (t === "system") {
+      var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    } else {
+      document.documentElement.setAttribute("data-theme", t);
+    }
+    $("#themeBtn").textContent = "主题：" + THEME_LABEL[t];
+    localStorage.setItem("pref_theme", t);
+  }
+  var curTheme = localStorage.getItem("pref_theme") || "dark";
+  applyTheme(curTheme);
+  $("#themeBtn").addEventListener("click", function(){
+    curTheme = THEMES[(THEMES.indexOf(curTheme) + 1) % THEMES.length];
+    applyTheme(curTheme);
+  });
+
+  /* ---------- 视图切换 ---------- */
+  function switchView(v){
+    state.view = v;
+    $$("#nav a").forEach(function(a){ a.classList.toggle("active", a.dataset.view === v); });
+    $$(".view").forEach(function(s){ s.classList.remove("active"); });
+    var el = document.getElementById("view-" + v);
+    if (el) el.classList.add("active");
+    var titles = {overview:"概况",results:"结果",logs:"日志",config:"配置",source:"源"};
+    $("#viewTitle").textContent = titles[v] || v;
+    clearTimers();
+    if (v === "logs") { loadLogs(); state.timers.push(setInterval(loadLogs, 3000)); }
+    if (v === "results") { loadResults(); }
+    if (v === "overview") { loadStatus(); state.timers.push(setInterval(loadStatus, 5000)); }
+  }
+  $("#nav").addEventListener("click", function(e){
+    var a = e.target.closest("a[data-view]");
+    if (a) switchView(a.dataset.view);
+  });
+  function clearTimers(){ state.timers.forEach(clearInterval); state.timers = []; }
+
+  /* ---------- 概况 ---------- */
+  function latClass(ms){
+    if (ms === null || ms === undefined) return "lat-na";
+    if (ms < 100) return "lat-good";
+    if (ms < 300) return "lat-mid";
+    return "lat-bad";
+  }
+  function fmtTime(ts){
+    if (!ts) return "-";
+    var d = new Date(ts * 1000);
+    return d.toLocaleString("zh-CN", {hour12:false});
+  }
+  function renderRouteCards(results){
+    var host = $("#routeCards");
+    host.innerHTML = "";
+    ROUTES.forEach(function(r){
+      var item = results[r] || {};
+      var div = document.createElement("div");
+      div.className = "route-card";
+      var top = document.createElement("div"); top.className = "rc-top";
+      var name = document.createElement("div"); name.className = "rc-name"; name.textContent = ROUTE_LABEL[r];
+      var led = document.createElement("span"); led.className = "led " + (item.ip ? "ok" : "");
+      top.appendChild(name); top.appendChild(led);
+      var ip = document.createElement("div"); ip.className = "rc-ip"; ip.textContent = item.ip || "—";
+      var dom = document.createElement("div"); dom.className = "rc-dom"; dom.textContent = item.domain || "";
+      var tm = document.createElement("div"); tm.className = "rc-time"; tm.textContent = item.mtime ? fmtTime(item.mtime) : "未优选";
+      div.appendChild(top); div.appendChild(ip); div.appendChild(dom); div.appendChild(tm);
+      host.appendChild(div);
+    });
+  }
+  function loadStatus(){
+    return api("/api/status").then(function(s){
+      $("#ledMosdns").className = "led " + (s.mosdns ? "ok" : "bad");
+      $("#txtMosdns").textContent = s.mosdns ? "运行中" : "未运行";
+      $("#txtRefresh").textContent = new Date().toLocaleTimeString("zh-CN", {hour12:false});
+      state.settings = s.settings || {};
+      state.results = s.results || {};
+      renderRouteCards(state.results);
+      fillConfigForm(state.settings);
+    }).catch(function(){});
+  }
+
+  /* ---------- 实时解析 ---------- */
+  $("#resolveForm").addEventListener("submit", function(e){
+    e.preventDefault();
+    var domain = $("#resolveInput").value.trim();
+    if (!domain) return;
+    $("#resolveMeta").textContent = "解析中…";
+    $("#resolveResult").innerHTML = "";
+    api("/api/resolve", {method:"POST", body:{domain:domain}}).then(function(res){
+      $("#resolveMeta").textContent = res.domain + " 解析到 " + res.items.length + " 个 IP（按延迟排序）";
+      if (!res.items.length) {
+        $("#resolveResult").innerHTML = '<div class="empty">无解析结果（检查域名或引擎状态）</div>';
+        return;
+      }
+      var t = document.createElement("table");
+      var thead = document.createElement("thead");
+      thead.innerHTML = "<tr><th>#</th><th>IP</th><th>TCP 延迟</th></tr>";
+      var tbody = document.createElement("tbody");
+      res.items.forEach(function(it, i){
+        var tr = document.createElement("tr");
+        var td1 = document.createElement("td"); td1.textContent = i + 1;
+        var td2 = document.createElement("td"); td2.className = "mono"; td2.textContent = it.ip;
+        var td3 = document.createElement("td");
+        var span = document.createElement("span");
+        span.className = "lat-pill " + latClass(it.latency);
+        span.textContent = it.latency === null ? "超时" : it.latency + " ms";
+        td3.appendChild(span);
+        tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+        tbody.appendChild(tr);
+      });
+      t.appendChild(thead); t.appendChild(tbody);
+      $("#resolveResult").innerHTML = "";
+      $("#resolveResult").appendChild(t);
+    }).catch(function(err){
+      $("#resolveMeta").textContent = "解析失败：" + err.message;
+    });
+  });
+
+  /* ---------- 结果 ---------- */
+  function loadResults(){
+    api("/api/results").then(function(results){
+      var host = $("#resultsTable");
+      host.innerHTML = "";
+      var t = document.createElement("table");
+      var thead = document.createElement("thead");
+      thead.innerHTML = "<tr><th>路</th><th>目标域名</th><th>最优 IP</th><th>更新时间</th></tr>";
+      var tbody = document.createElement("tbody");
+      ROUTES.forEach(function(r){
+        var it = results[r] || {};
+        var tr = document.createElement("tr");
+        var c1 = document.createElement("td"); c1.textContent = ROUTE_LABEL[r];
+        var c2 = document.createElement("td"); c2.className = "mono"; c2.textContent = it.domain || "—";
+        var c3 = document.createElement("td"); c3.className = "mono"; c3.textContent = it.ip || "—";
+        var c4 = document.createElement("td"); c4.textContent = it.mtime ? fmtTime(it.mtime) : "未优选";
+        tr.appendChild(c1); tr.appendChild(c2); tr.appendChild(c3); tr.appendChild(c4);
+        tbody.appendChild(tr);
+      });
+      t.appendChild(thead); t.appendChild(tbody);
+      host.appendChild(t);
+    }).catch(function(){});
+  }
+
+  /* ---------- 日志 ---------- */
+  function loadLogs(){
+    api("/api/logs?n=300&src=" + state.logSrc).then(function(res){
+      var box = $("#logbox");
+      var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+      box.textContent = (res.lines || []).join("\n") || "暂无日志";
+      if (atBottom) box.scrollTop = box.scrollHeight;
+      api("/api/lock").then(function(l){
+        $("#ledLock").className = "led " + (l.locked ? "busy" : "");
+        $("#txtLock").textContent = l.locked ? "优选执行中" : "空闲";
+      }).catch(function(){});
+    }).catch(function(){});
+  }
+  $$(".tab").forEach(function(tab){
+    tab.addEventListener("click", function(){
+      $$(".tab").forEach(function(t){ t.classList.remove("active"); });
+      tab.classList.add("active");
+      state.logSrc = tab.dataset.src;
+      loadLogs();
+    });
+  });
+
+  /* ---------- 配置 ---------- */
+  function fillConfigForm(s){
+    if (!s) return;
+    if (s.interval_min !== undefined && document.activeElement !== $("#cfgInterval")) {
+      $("#cfgInterval").value = s.interval_min;
+    }
+    if (s.threads !== undefined && document.activeElement !== $("#cfgThreads")) {
+      $("#cfgThreads").value = s.threads;
+    }
+    if (s.routes) {
+      $$("input[data-route]").forEach(function(cb){
+        if (document.activeElement !== cb) cb.checked = !!s.routes[cb.dataset.route];
+      });
+    }
+  }
+  $("#btnSaveCfg").addEventListener("click", function(){
+    var routes = {};
+    $$("input[data-route]").forEach(function(cb){ routes[cb.dataset.route] = cb.checked; });
+    api("/api/settings", {method:"POST", body:{
+      interval_min: parseInt($("#cfgInterval").value, 10) || 60,
+      threads: parseInt($("#cfgThreads").value, 10) || 0,
+      routes: routes
+    }}).then(function(res){
+      state.settings = res.settings;
+      toast("配置已保存");
+    }).catch(function(err){ toast("保存失败：" + err.message); });
+  });
+
+  function trigger(route){
+    api("/api/trigger", {method:"POST", body:{route:route}}).then(function(){
+      toast("已开始执行" + (route === "all" ? "五路优选" : "：" + ROUTE_LABEL[route]));
+      setTimeout(loadStatus, 1500);
+    }).catch(function(err){
+      toast(err.message);
+    });
+  }
+  $("#btnRunAll").addEventListener("click", function(){ trigger("all"); });
+  $("#btnRunAll2").addEventListener("click", function(){ trigger("all"); });
+
+  /* ---------- 启动 ---------- */
+  function boot(){
+    loadStatus();
+    state.timers.push(setInterval(loadStatus, 5000));
+    api("/api/status").then(function(s){
+      if (s && s.settings) fillConfigForm(s.settings);
+    }).catch(function(){});
+  }
+
+  // 初始：先探测是否已登录
+  fetch("/api/status").then(function(r){
+    if (r.status === 401) { showLogin(); }
+    else { hideLogin(); boot(); switchView("overview"); }
+  }).catch(function(){ showLogin(); });
+})();
+</script>
+</body>
+</html>

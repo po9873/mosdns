@@ -1,0 +1,116 @@
+# MosDNS v5 配置模板（由 entrypoint 在启动时按环境变量渲染）
+# 分流策略（国内优先 + IP 归属检测）：
+#   1) 优选 hosts 命中 -> 直接返回
+#   2) 国外/GFW 清单 -> 强制走国外 DoH（避开污染）
+#   3) 国内清单     -> 直接走国内 DoH
+#   4) 其余未知域名 -> 先国内；仅当返回 IP 属于国内段才采用，否则丢弃并转国外；
+#                      国内超时/失败同样转国外。
+# 本文件不含任何个人运行数据；优选结果由 scheduler 写入 /data/prefs/all.hosts。
+log:
+  level: info
+  file: /data/mosdns.log
+
+# 原生 API（仅监听环回，由自建 UI 反代到外部）
+api:
+  http: "127.0.0.1:__API_PORT__"
+
+plugins:
+  # ---- 优选 hosts：scheduler 运行时生成的覆盖记录（entrypoint 保证文件存在）----
+  - tag: pref_hosts
+    type: hosts
+    args:
+      files:
+        - /data/prefs/all.hosts
+
+  # ---- 国内上游（DoH，由 PREF_DOMESTIC_DOH 注入）----
+  - tag: forward_local
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "__DOMESTIC_DOH__"
+
+  # ---- 国外上游（DoH 直连，不依赖 socks5；由 PREF_FOREIGN_DOH 注入）----
+  - tag: forward_remote
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "__FOREIGN_DOH__"
+        - addr: "__FOREIGN_DOH_BACKUP__"
+
+  # ---- 国外/GFW 域名集合（强制走国外，避开国内污染）----
+  - tag: gfw_domains
+    type: domain_set
+    args:
+      files:
+        - /data/gfw_domains.txt
+
+  # ---- 国内域名集合 ----
+  - tag: cn_domains
+    type: domain_set
+    args:
+      files:
+        - /data/cn_domains.txt
+
+  # ---- 国内 IP 段集合（用于判断响应 IP 归属）----
+  - tag: china_ip
+    type: ip_set
+    args:
+      files:
+        - /data/china_ip.txt
+
+  # ---- 国内优先序列：只有返回的 IP 属于国内段才采用，否则丢弃 ----
+  - tag: local_seq
+    type: sequence
+    args:
+      - exec: $forward_local
+      - matches: resp_ip $china_ip
+        exec: accept
+      - exec: drop_resp
+
+  # ---- 国外备援序列 ----
+  - tag: remote_seq
+    type: sequence
+    args:
+      - exec: $forward_remote
+      - exec: accept
+
+  # ---- 默认策略：先国内（带 IP 归属判断）；失败/被丢弃则转国外 ----
+  - tag: fallback_main
+    type: fallback
+    args:
+      primary: local_seq
+      secondary: remote_seq
+      threshold: 500
+      always_standby: true
+
+  # ---- 主处理序列 ----
+  - tag: main_sequence
+    type: sequence
+    args:
+      - exec: $pref_hosts
+      - matches: has_resp
+        exec: accept
+      - matches: qname $gfw_domains
+        exec: $forward_remote
+      - matches: has_resp
+        exec: accept
+      - matches: qname $cn_domains
+        exec: $forward_local
+      - matches: has_resp
+        exec: accept
+      - exec: $fallback_main
+
+  # ---- 监听（DNS 端口由 PREF_DNS_PORT 注入）----
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: ":__DNS_PORT__"
+
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: ":__DNS_PORT__"

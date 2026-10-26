@@ -1,0 +1,205 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      mosdns_version:
+        description: "指定 mosdns 版本（留空则用 versions.env）"
+        required: false
+        default: ""
+      auto_update:
+        description: "自动探测所有上游最新版（含 golang/alpine 大版本）"
+        type: boolean
+        default: false
+      push_latest:
+        description: "是否更新 latest 标签"
+        type: boolean
+        default: true
+  schedule:
+    - cron: "0 3 * * 1"   # 每周一 03:00 UTC 自动探测
+  push:
+    branches: [main]
+    paths:
+      - "scheduler/**"
+      - "ui/**"
+      - "config/**"
+      - "Dockerfile"
+      - "docker-entrypoint.sh"
+      - "versions.env"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  AUTO: ${{ github.event.inputs.auto_update || 'false' }}
+  MV: ${{ github.event.inputs.mosdns_version || '' }}
+  PUSH_LATEST: ${{ github.event.inputs.push_latest || 'true' }}
+  EVENT: ${{ github.event_name }}
+  DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+  DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------- 1. 解析版本（支持自动探测最新，含大版本）----------
+      - id: ver
+        name: 解析上游版本
+        run: |
+          set -uo pipefail
+          set -a; . ./versions.env; set +a
+          MOSDNS="${MOSDNS_VERSION}"; CFT="${CFT_VERSION}"; GT="${GT_VERSION}"
+          GOLANG="${GOLANG_IMAGE}"; ALPINE="${ALPINE_IMAGE}"
+
+          if [ "$AUTO" = "true" ] || [ "$EVENT" = "schedule" ]; then
+            echo "== 自动探测上游最新版 =="
+            L=$(curl -fsSL --retry 3 https://api.github.com/repos/IrineSistiana/mosdns/releases/latest | jq -r '.tag_name // empty' || true)
+            [ -n "$L" ] && MOSDNS="$L"
+            L=$(curl -fsSL --retry 3 https://api.github.com/repos/XIU2/CloudflareSpeedTest/releases/latest | jq -r '.tag_name // empty' || true)
+            [ -n "$L" ] && CFT="$L"
+            L=$(curl -fsSL --retry 3 https://api.github.com/repos/Ponderfly/GoogleTranslateIpCheck/releases/latest | jq -r '.tag_name // empty' || true)
+            [ -n "$L" ] && GT="$L"
+            GOLANG="golang:alpine"
+            ALPINE="alpine:latest"
+          fi
+          [ -n "$MV" ] && MOSDNS="$MV"
+
+          echo "mosdns=$MOSDNS"   >> "$GITHUB_OUTPUT"
+          echo "cft=$CFT"         >> "$GITHUB_OUTPUT"
+          echo "gt=$GT"           >> "$GITHUB_OUTPUT"
+          echo "golang=$GOLANG"   >> "$GITHUB_OUTPUT"
+          echo "alpine=$ALPINE"   >> "$GITHUB_OUTPUT"
+          SAFE=$(echo "$MOSDNS" | tr '/ :' '---')
+          echo "tag=${SAFE}-$(date +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "本次使用: mosdns=$MOSDNS cft=$CFT gt=$GT golang=$GOLANG alpine=$ALPINE"
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      # ---------- 2. 构建 + 自检 + 推送（失败自动回退 known-good）----------
+      - name: 构建 / 自检 / 推送
+        id: build
+        env:
+          MOSDNS: ${{ steps.ver.outputs.mosdns }}
+          CFT: ${{ steps.ver.outputs.cft }}
+          GT: ${{ steps.ver.outputs.gt }}
+          GOLANG: ${{ steps.ver.outputs.golang }}
+          ALPINE: ${{ steps.ver.outputs.alpine }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -uo pipefail
+          GHCR="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mosdns"
+          DOCKERHUB=""
+          [ -n "${DH_USER:-}" ] && DOCKERHUB="docker.io/${DH_USER}/mosdns"
+          TEST_IMAGE="mosdns-pref:test"
+
+          echo "== 登录 GHCR =="
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          if [ -n "${DH_USER:-}" ] && [ -n "${DH_TOKEN:-}" ]; then
+            echo "== 登录 Docker Hub =="
+            echo "$DH_TOKEN" | docker login docker.io -u "$DH_USER" --password-stdin || echo "warn: Docker Hub 登录失败，跳过"
+          else
+            echo "== 未配置 Docker Hub 凭证，仅推 GHCR =="
+          fi
+
+          build_and_test() {
+            local m=$1 c=$2 g=$3 gl=$4 al=$5
+            echo "== 构建 mosdns=$m cft=$c gt=$g golang=$gl alpine=$al =="
+            docker buildx build --load \
+              --build-arg MOSDNS_VERSION="$m" \
+              --build-arg CFT_VERSION="$c" \
+              --build-arg GT_VERSION="$g" \
+              --build-arg GOLANG_IMAGE="$gl" \
+              --build-arg ALPINE_IMAGE="$al" \
+              -t "$TEST_IMAGE" . || { echo "构建失败"; return 1; }
+
+            echo "== 自检门禁 =="
+            docker rm -f mtest >/dev/null 2>&1 || true
+            docker run -d --name mtest -p 18080:80 "$TEST_IMAGE" || { echo "启动失败"; return 1; }
+            local ok=0
+            for i in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:18080/ >/dev/null 2>&1; then ok=1; break; fi
+              if ! docker ps --filter name=mtest --filter status=running --format '{{.Names}}' | grep -q mtest; then
+                echo "容器已退出"; docker logs mtest || true; break
+              fi
+              sleep 2
+            done
+            if [ "$ok" != "1" ]; then
+              echo "UI 健康检查未通过"; docker logs mtest || true; docker rm -f mtest >/dev/null 2>&1 || true; return 1
+            fi
+            docker exec mtest mosdns version >/dev/null 2>&1 || { echo "mosdns 无法执行"; docker rm -f mtest >/dev/null 2>&1; return 1; }
+            docker exec mtest sh -c 'test -s /data/config.yaml && test -f /data/prefs/all.hosts' \
+              || { echo "配置/hosts 未生成"; docker rm -f mtest >/dev/null 2>&1; return 1; }
+            docker rm -f mtest >/dev/null 2>&1 || true
+            echo "自检通过"
+            return 0
+          }
+
+          push_image() {
+            docker tag "$TEST_IMAGE" "$GHCR:$TAG"; docker push "$GHCR:$TAG" || return 1
+            if [ -n "$DOCKERHUB" ]; then
+              docker tag "$TEST_IMAGE" "$DOCKERHUB:$TAG"; docker push "$DOCKERHUB:$TAG" || return 1
+            fi
+            if [ "$PUSH_LATEST" = "true" ]; then
+              docker tag "$TEST_IMAGE" "$GHCR:latest"; docker push "$GHCR:latest" || return 1
+              if [ -n "$DOCKERHUB" ]; then
+                docker tag "$TEST_IMAGE" "$DOCKERHUB:latest"; docker push "$DOCKERHUB:latest" || return 1
+              fi
+            fi
+            return 0
+          }
+
+          if build_and_test "$MOSDNS" "$CFT" "$GT" "$GOLANG" "$ALPINE"; then
+            push_image || { echo "::error::推送失败"; exit 1; }
+            echo "== 构建并推送成功: $GHCR:$TAG =="
+            if [ "$AUTO" = "true" ] || [ "$EVENT" = "schedule" ]; then
+              cat > known-good.env <<EOF
+          MOSDNS_VERSION=$MOSDNS
+          CFT_VERSION=$CFT
+          GT_VERSION=$GT
+          GOLANG_IMAGE=$GOLANG
+          ALPINE_IMAGE=$ALPINE
+          EOF
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git add known-good.env
+              if ! git diff --cached --quiet; then
+                git commit -m "chore: known-good -> mosdns $MOSDNS" || true
+                git push || true
+              fi
+            fi
+          else
+            echo "::error::新版本构建或自检失败，回退到 known-good 组合重建"
+            set -a; . ./known-good.env; set +a
+            if build_and_test "$MOSDNS_VERSION" "$CFT_VERSION" "$GT_VERSION" "$GOLANG_IMAGE" "$ALPINE_IMAGE"; then
+              push_image || true
+              echo "::warning::已用 known-good 组合出包，请检查上游是否有 breaking change"
+            else
+              echo "::error::known-good 组合也失败，请人工介入"
+            fi
+            echo "### 上游更新失败报告" >> "$GITHUB_STEP_SUMMARY"
+            echo "- 尝试组合: mosdns=$MOSDNS golang=$GOLANG alpine=$ALPINE" >> "$GITHUB_STEP_SUMMARY"
+            echo "- 已回退到 known-good 并报警" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # ---------- 3. CVE 扫描（只报告，不阻断）----------
+      - name: CVE 扫描（trivy）
+        if: always()
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: "mosdns-pref:test"
+          format: "table"
+          severity: "HIGH,CRITICAL"
+          exit-code: "0"
+          ignore-unfixed: true

@@ -1,0 +1,11 @@
+# GitHub 路候选种子（公开、极小、不会变）
+github.com
+api.github.com
+objects.githubusercontent.com
+20.205.243.166
+140.82.0.1
+143.55.0.1
+151.101.0.1
+192.30.0.1
+20.40.0.1
+20.41.0.1
