@@ -157,6 +157,42 @@ stat_mtime() {
   python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$1" 2>/dev/null
 }
 
+# ---------- 失败退避 ----------
+# 为什么需要：某一路的 IP 在当地整层不通时（比如 Google 的 IP 被墙），
+# 每轮全量探测都要白跑 2~3 分钟，最后仍然「TCP 探测全部失败」。
+# 既然这条路本来就走上游解析、能用，就不该反复折腾。
+# 规则：连续失败 → 退避 1h → 2h → 4h → 6h（封顶）；一旦选出结果立即清零。
+# 手动「立即执行」走 PREF_FORCE=1，忽略退避。
+retry_next() {   # 打印下次可重试的时间戳；无退避则打印 0
+  python3 - "$PREF_DIR/$1.retry" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(int(d.get("next", 0)))
+except Exception:
+    print(0)
+PY
+}
+
+retry_fail() {   # 记一次失败：次数+1，按 1/2/4/6h 递增退避
+  python3 - "$PREF_DIR/$1.retry" <<'PY'
+import json, sys, time
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+except Exception:
+    d = {"fails": 0, "next": 0}
+n = int(d.get("fails", 0)) + 1
+step = [3600, 7200, 14400, 21600][min(n - 1, 3)]
+now = int(time.time())
+d = {"fails": n, "next": now + step, "last": now, "wait": step}
+json.dump(d, open(p, "w"))
+print("%d %d" % (n, step))
+PY
+}
+
+retry_clear() { rm -f "$PREF_DIR/$1.retry" 2>/dev/null; }
+
 # 从候选里排除已经试过的一批
 exclude_ips() {
   local all="$1" drop="$2" a b
@@ -402,6 +438,19 @@ run_route() {
     return 1
   fi
 
+  # ---- 失败退避：这一路当地整层不通时，别每轮白跑几分钟 ----
+  local rnext rnow rleft
+  if [ "${PREF_FORCE:-0}" != "1" ]; then
+    rnow=$(date +%s)
+    rnext=$(retry_next "$route")
+    if [ -n "$rnext" ] && [ "${rnext:-0}" -gt "$rnow" ] 2>/dev/null; then
+      rleft=$(( (rnext - rnow + 59) / 60 ))
+      log "$route: 当地直连整层不通，暂停优选（${rleft} 分钟后再试；当前域名走上游解析，照常可用）"
+      write_state "$route" "$target" "paused" "" "" 0 0 0
+      return 0
+    fi
+  fi
+
   conc=$(setting threads)
   if [ -z "$conc" ] || [ "$conc" = "0" ] || [ "$conc" -lt 1 ] 2>/dev/null; then
     conc=$(detect_threads)
@@ -419,27 +468,53 @@ run_route() {
   esac
 
   # ---- 稳定模式：守住已选 IP，不全量重探（多源池仅作「切换依据」）----
-  # 若本路已有选中结果、且近 stable_hours 内刚全量优选过、且当前 IP 轻量存活检测通过，
-  # 则跳过本轮全量重探直接沿用——IP 稳定不抖动、速度快。只有看门狗发现当前 IP 退化
-  # （1034/超时）或 stable 窗口到期时，才再触发全量重探，从多源候选池里重新选/换。
+  # 判据不是「TCP 通」，而是「真能打开页面且不慢」：
+  #   对当前选中的 IP 发真实 HTTPS 请求（SNI/Host=目标域名），拿到 TTFB 和吞吐。
+  #   - 全部打不开（1034/证书/5xx/超时）→ 说明实际已坏，立刻全量重探换 IP
+  #   - 能打开但 TTFB 超过 stable_ttfb_ms，或实测吞吐低于 stable_speed_kbps → 变慢了，重探
+  #   - 能打开且不慢 → 完事，不动它（stable_hours 内不再全量扫）
+  # TCP 延时为什么不算数：握手快不代表能用，Cloudflare 1034、证书错、5xx 都是
+  # 「TCP 通但页面打不开」，只测 TCP 会把坏 IP 当好的继续用。
   local rhf="$PREF_DIR/$route.hosts" stable_hours mnow mprev cur live_out live_n
+  local st_ttfb st_speed vchk vok vbest vspeed
   stable_hours=$(setting stable_hours)
   case "$stable_hours" in ''|*[!0-9]*) stable_hours=6 ;; esac
+  st_ttfb=$(setting stable_ttfb_ms); case "$st_ttfb" in ''|*[!0-9]*) st_ttfb=1200 ;; esac
+  st_speed=$(setting stable_speed_kbps); case "$st_speed" in ''|*[!0-9]*) st_speed=200 ;; esac
   if [ "${stable_hours:-0}" -gt 0 ] && [ -s "$rhf" ] && [ "$(setting pref_stable)" != "false" ]; then
     mnow=$(date +%s)
     mprev=$(stat_mtime "$rhf")
-    if [ -n "$mprev" ] && [ $(( (mnow - ${mprev:-0}) / 60 )) -lt "$stable_hours" ]; then
+    # 注意单位：mprev 是秒，stable_hours 是小时 → 必须换算成秒再比。
+    # （早先写成「分钟数 < 小时数」，导致 24 分钟就被判成窗口过期、每轮都全量重扫。）
+    if [ -n "$mprev" ] && [ $(( mnow - ${mprev:-0} )) -lt $(( stable_hours * 3600 )) ]; then
       cur=$(awk 'NR==1{for(i=2;i<=NF;i++) print $i}' "$rhf" | grep -E '^[0-9a-fA-F:.]+$')
       if [ -n "$cur" ]; then
-        live_out=$(probe_top "$cur" "$port" "$conc" 2 $((top_n)) 2>/dev/null | awk 'NF')
+        case "$(setting verify_https)" in
+          false|False|0) vchk=$(printf '%s\n' "$cur" | awk '{print $1, "ok", "?", "-"}') ;;
+          *) vchk=$(printf '%s\n' "$cur" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 "$conc" 2>/dev/null) ;;
+        esac
+        live_out=$(printf '%s\n' "$vchk" | awk '$2=="ok"')
         live_n=$(printf '%s\n' "$live_out" | awk 'NF' | wc -l | tr -d ' ')
         if [ "${live_n:-0}" -ge 1 ]; then
-          log "$route: 稳定模式，当前 ${live_n} 个 IP 仍存活，跳过全量重探（约 $(( (mnow - mprev) / 60 )) 分钟前优选过）"
-          # 把本轮实测的存活 IP + 延迟一并写回，界面「已选 IP」不会因为跳过重探而变空
-          write_state "$route" "$target" "stable" "$live_out" "" "${live_n}" 0 0
-          return 0
+          # 最快那个就是这一路的实际体验：TTFB 看响应快慢，speed 看吞吐（拿不到时为空）
+          vbest=$(printf '%s\n' "$live_out" | awk '$3!="-"{print $3}' | sort -n | head -1)
+          vspeed=$(printf '%s\n' "$live_out" | awk '$4!="-"{print $4}' | sort -n | tail -1)
+          local slow="" why=""
+          if [ -n "$vbest" ] && [ "${vbest%%.*}" -gt "$st_ttfb" ] 2>/dev/null; then
+            slow=1; why="响应 ${vbest%.*}ms 超过 ${st_ttfb}ms"
+          elif [ -n "$vspeed" ] && [ "${vspeed%%.*}" -lt "$st_speed" ] 2>/dev/null; then
+            slow=1; why="吞吐 ${vspeed%.*}KB/s 低于 ${st_speed}KB/s"
+          fi
+          if [ -z "$slow" ]; then
+            log "$route: 稳定模式，${live_n} 个 IP 能打开且不慢（响应 ${vbest:-?}ms${vspeed:+ / ${vspeed%.*}KB/s}），跳过全量重探（约 $(( (mnow - mprev) / 60 )) 分钟前优选过）"
+            # 把本轮实测结果写回，界面「已选 IP + 速度」不会因为跳过重探而变空
+            write_state "$route" "$target" "stable" \
+              "$(printf '%s\n' "$live_out" | awk '{print $1, $3, "ok", $4}')" "" "${live_n}" 0 0
+            return 0
+          fi
+          log "$route: 稳定模式检测到变慢（$why），触发全量重探"
         else
-          log "$route: 稳定模式轻量存活检测失败，触发全量重探"
+          log "$route: 稳定模式实测打不开（1034/证书/5xx/超时），触发全量重探换 IP"
         fi
       fi
     fi
@@ -477,6 +552,7 @@ run_route() {
   if [ "${n4:-0}" = "0" ] && [ "${n6:-0}" = "0" ]; then
     log "$route: 无候选 IP（DNS 未就绪、订阅池为空且无兜底）"
     write_state "$route" "$target" "no_candidate" "" "" 0 0 0
+    log "$route: 无候选 IP（$(retry_fail "$route" | awk "{print \"第 \"\$1\" 次失败，\"\$2/3600\" 小时后重试\"}")）"
     return 1
   fi
 
@@ -500,13 +576,14 @@ run_route() {
   if [ -z "$batch" ]; then
     log "$route: TCP 探测全部失败"
     write_state "$route" "$target" "no_tcp" "" "" 0 0 0
+    log "$route: 候选全部 TCP 不通（$(retry_fail "$route" | awk "{print \"第 \"\$1\" 次失败，\"\$2/3600\" 小时后重试\"}")）"
     return 1
   fi
 
   # ---- 第二步：真实 HTTPS 校验（SNI/Host = 目标域名）----
   case "$(setting verify_https)" in
     false|False|0)
-      vres=$(printf '%s\n' "$batch" | awk '{print $1, "ok", $2}')
+      vres=$(printf '%s\n' "$batch" | awk '{print $1, "ok", $2, "-"}')
       ;;
     *)
       vres=$(printf '%s\n' "$batch" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 2>/dev/null)
@@ -525,7 +602,8 @@ run_route() {
       ;;
   esac
 
-  ok=$(printf '%s\n' "$vres" | awk '$2=="ok"{print $1, $3, "ok"}' | sort -k2 -n)
+  # 通过校验的：ip TTFB ok 吞吐（TTFB 排序，界面显示的就是这个真实响应时间）
+  ok=$(printf '%s\n' "$vres" | awk '$2=="ok"{print $1, $3, "ok", ($4==""?"-":$4)}' | sort -k2 -n)
   # 明确不可用：1034/1010/1020、证书不符、5xx
   hard=$(printf '%s\n' "$vres" | awk '$2!="ok" && $2!="timeout" && $2!="fail"{print $1" "$2}')
   # 不确定（可能只是网络抖动）：超时、连接失败
@@ -557,8 +635,8 @@ run_route() {
     if [ -n "$soft" ]; then
       # 只有超时/连不上，没有明确拒绝 → 允许降级，但标 unverified
       downgrade=1
-      best4=$(printf '%s\n' "$soft" | awk '!/:/{print $1, "?", "unverified"}' | head -n "$top_n")
-      best6=$(printf '%s\n' "$soft" | awk '/:/{print $1, "?", "unverified"}' | head -n "$top_n")
+      best4=$(printf '%s\n' "$soft" | awk '!/:/{print $1, "?", "unverified", "-"}' | head -n "$top_n")
+      best6=$(printf '%s\n' "$soft" | awk '/:/{print $1, "?", "unverified", "-"}' | head -n "$top_n")
       total=$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF' | wc -l | tr -d ' ' )
       log "$route: 无 IP 通过校验（仅超时/连接失败），降级用 TCP 结果并标记 unverified"
       notify "warn" "$route 路优选降级" "无 IP 通过 HTTPS 校验（仅超时），已降级使用 TCP 结果，控制台显示为 unverified。"
@@ -569,6 +647,7 @@ run_route() {
       write_state "$route" "$target" "no_valid" "" "$hard" "${n4:-0}" 0 "${pool_n}"
       log "$route: 全部候选被拒绝（$(printf '%s' "$hard" | awk '{print $2}' | sort -u | tr '\n' ' ')），已撤下该路 hosts，域名回退上游解析"
       notify "warn" "$route 路无可用 IP" "全部候选被 HTTPS 校验拒绝（1034/证书/5xx），已撤下该路 hosts，回退上游解析，不使用任何坏 IP。"
+      log "$route: 已进入退避（$(retry_fail "$route" | awk "{print \"第 \"\$1\" 次失败\"}")），期间不再空跑"
       return 3
     fi
   fi
@@ -585,6 +664,7 @@ run_route() {
   { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } \
     | awk 'NF{print $1, "verify"}' | sub_cli feed "$route" >/dev/null 2>&1
 
+  retry_clear "$route"
   write_route "$route" "$target" "$best4" "$best6" || return 1
   write_state "$route" "$target" "$( [ "$downgrade" = "1" ] && echo degraded || echo ok )" \
               "$(printf '%s\n%s\n' "$best4" "$best6")" "$hard" "${n4:-0}" 0 "${pool_n}"

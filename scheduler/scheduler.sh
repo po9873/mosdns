@@ -121,6 +121,8 @@ run_all() {
 # UI 的「立即执行」走这里：once 单路 或 once all
 once_mode() {
   local which="${1:-all}" fp
+  # 手动点「立即执行」= 我说了算：忽略失败退避，立刻真跑
+  export PREF_FORCE=1
   if [ "$which" = "all" ]; then
     run_all
   else

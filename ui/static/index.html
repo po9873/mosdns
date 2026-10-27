@@ -135,21 +135,21 @@
   .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
   .route-card:hover{border-color:var(--blue)}
   .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-  .route-card .rc-name{font-size:12.5px;color:var(--muted);letter-spacing:.3px}
-  .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;word-break:break-all}
+  .route-card .rc-name{font-size:14px;color:var(--muted);letter-spacing:.3px}
+  .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:17px;font-weight:600;word-break:break-all}
   /* 卡片里直接列出每个 IP，不再只说「共 N 个」 */
   .route-card .rc-list{margin:2px 0 0;display:flex;flex-direction:column;gap:3px}
-  .route-card .rc-line{display:flex;align-items:center;gap:7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px;font-weight:600;line-height:1.5}
-  .route-card .rc-line .n{color:var(--muted);font-weight:400;font-size:10.5px;min-width:12px}
+  .route-card .rc-line{display:flex;align-items:center;gap:7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15.5px;font-weight:600;line-height:1.55}
+  .route-card .rc-line .n{color:var(--muted);font-weight:400;font-size:12px;min-width:12px}
   .route-card .rc-line .ip{word-break:normal;overflow-wrap:anywhere;min-width:0}
-  .route-card .rc-line .ip.v6ip{font-size:11.5px;letter-spacing:-.2px}
-  .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:11px;margin-left:auto;white-space:nowrap}
-  .route-card .rc-more{font-size:11px;color:var(--muted);margin-top:2px}
-  .route-card .rc-time{font-size:11px;color:var(--muted);margin-top:6px}
-  .route-card .rc-dom{font-size:11.5px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-  .route-card .rc-src{font-size:10px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
-  .route-card .rc-host{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--text);opacity:.85}
-  .route-card .rc-sub{font-size:11px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .route-card .rc-line .ip.v6ip{font-size:13px;letter-spacing:-.2px}
+  .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:13px;margin-left:auto;white-space:nowrap}
+  .route-card .rc-more{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .route-card .rc-time{font-size:12.5px;color:var(--muted);margin-top:6px}
+  .route-card .rc-dom{font-size:13px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .route-card .rc-src{font-size:11.5px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
+  .route-card .rc-host{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;color:var(--text);opacity:.85}
+  .route-card .rc-sub{font-size:12.5px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .tag{display:inline-block;font-size:10px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
   .tag.v6{color:#3b8eea;border-color:rgba(59,142,234,.45)}
   /* ---------- 源管理 ---------- */
@@ -243,8 +243,8 @@
   .tag.hbad{color:#e2534b;border-color:rgba(226,83,75,.5)}
   .iplist{display:flex;flex-direction:column;gap:3px}
   .iplist .row{display:flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
-  .iplist .lat{color:var(--muted);font-size:11px}
-  .route-card .rc-time{font-size:11px;color:var(--muted);margin-top:6px}
+  .iplist .lat{color:var(--muted);font-size:12px}
+  .route-card .rc-time{font-size:12.5px;color:var(--muted);margin-top:6px}
 
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
@@ -371,9 +371,9 @@
     .grid.c5 > :last-child:nth-child(odd){grid-column:auto}
     .grid.c2{grid-template-columns:1fr}
     .route-card{padding:12px}
-    .route-card .rc-line{font-size:12.5px;gap:5px}
-    .route-card .rc-line .ip.v6ip{font-size:12px}
-    .route-card .rc-line .ms{font-size:10.5px}
+    .route-card .rc-line{font-size:15px;gap:6px}
+    .route-card .rc-line .ip.v6ip{font-size:13px}
+    .route-card .rc-line .ms{font-size:12.5px}
 
     .card{padding:14px}
     /* 表格在手机上变卡片列表，避免"操作"列被挤出屏幕 */
@@ -935,6 +935,18 @@
             <label class="switch"><input type="checkbox" id="cfgVerify"><span class="slider"></span></label>
           </div>
           <div class="form-row">
+            <div class="lab">稳定期小时数<small>这段时间内当前 IP 能打开且不慢就不再全量优选；0 = 每轮都重扫</small></div>
+            <input type="number" id="cfgStableHours" min="0" max="72" step="1" style="width:96px;text-align:center">
+          </div>
+          <div class="form-row">
+            <div class="lab">慢到什么程度就换<small>真实 HTTPS 响应时间超过这个值（毫秒）就重新优选；默认 1200</small></div>
+            <input type="number" id="cfgStableTtfb" min="0" max="10000" step="100" style="width:96px;text-align:center">
+          </div>
+          <div class="form-row">
+            <div class="lab">吞吐下限<small>实测下载低于这个值（KB/s）也算变慢；0 = 不看吞吐，默认 200</small></div>
+            <input type="number" id="cfgStableSpeed" min="0" max="102400" step="50" style="width:96px;text-align:center">
+          </div>
+          <div class="form-row">
             <div class="lab">结果变化后自动重载引擎<small>一轮五路跑完只判断一次；结果和上轮相同则不重启，DNS 零中断</small></div>
             <label class="switch"><input type="checkbox" id="cfgAutoReload"><span class="slider"></span></label>
           </div>
@@ -1406,7 +1418,8 @@
             ln.appendChild(t);
           }
           var ms = document.createElement("span"); ms.className = "ms";
-          ms.textContent = x.latency != null ? Math.round(x.latency) + " ms" : "—";
+          ms.textContent = speedText(x);
+          ms.title = "真实 HTTPS 响应时间" + (x.speed != null ? " / 实测下载吞吐" : "") + (x.status && x.status !== "ok" ? "（" + errText(x.status) + "）" : "");
           ln.appendChild(ms);
           list.appendChild(ln);
         });
@@ -1806,6 +1819,66 @@
     var s = escH(ip);
     if (!isV6) return s;
     return s.replace(/:/g, ":<wbr>");
+  }
+
+  /* ---------- 速度与错误码 ---------- */
+  /* latency 现在是「真实 HTTPS 响应时间」(TTFB)：含 TCP+TLS+发出请求到收到首字节。
+     比 TCP 握手时间可信——握手快不代表能用（1034/证书/5xx 都是 TCP 通但页面打不开）。
+     speed 是实测下载吞吐(KB/s)，响应体太小（<4KB）时拿不到，显示为空。 */
+  function speedText(x, opt){
+    opt = opt || {};
+    var out = "";
+    if (x.latency != null) out = Math.round(x.latency) + (opt.space ? " ms" : "ms");
+    else out = "—";
+    if (x.speed != null) {
+      var s = x.speed >= 1024 ? (x.speed / 1024).toFixed(1) + " MB/s" : Math.round(x.speed) + " KB/s";
+      out += " · " + s;
+    }
+    return out;
+  }
+  /* 实测会遇到的失败原因，统一翻成人话（不只 Cloudflare 1034） */
+  var ERRTXT = {
+    cf1034: "Cloudflare 无法解析源站（回源失败），这个 IP 用不了",
+    cf1016: "Cloudflare 找不到源站 DNS 记录",
+    cf1020: "Cloudflare 拒绝了本次访问（防火墙/规则）",
+    cf1015: "Cloudflare 限速（请求过多）",
+    cf1023: "Cloudflare 主机不可达",
+    cert:    "证书不匹配或已过期（疑似被劫持 / SNI 不对）",
+    timeout: "连接或响应超时",
+    fail:    "连接被重置或握手失败",
+    unverified: "只测到 TCP 能连，没通过 HTTPS 校验（页面可能打不开）"
+  };
+  function errText(st){
+    if (!st || st === "ok") return "";
+    if (ERRTXT[st]) return ERRTXT[st];
+    if (/^cf10\d\d$/.test(st)) return "Cloudflare 错误 " + st.slice(2) + "（节点异常）";
+    if (/^http5\d\d$/.test(st)) return "源站/中间层返回 " + st.slice(4) + "，服务端故障";
+    return st;
+  }
+  /* 没结果时要说清楚「为什么」，别让人以为坏了 */
+  function emptyReason(it){
+    switch (it.status) {
+      case "paused":
+        return "当地直连整层不通：已暂停全量优选，域名照常走上游解析（能用）。到点会自动重试，想立刻试就点「立即执行五路优选」。";
+      case "no_valid":
+        return "上一轮全部候选被拒绝（1034 / 证书不符 / 5xx），已撤下换回上游解析，不使用坏 IP。";
+      case "no_tcp":
+        return "上一轮候选全部连不上（当地网络到这批 IP 不通），已进入退避，稍后自动重试。";
+      case "no_candidate":
+        return "这一路没有候选 IP：去「源」页加一个源，或检查已有源是否拉取失败。";
+      default:
+        return "这一路还没有优选结果，点「立即执行五路优选」跑一轮。";
+    }
+  }
+  function errLabel(st){
+    if (!st || st === "ok") return "";
+    if (st === "unverified") return "未校验";
+    if (/^cf(\d+)$/.test(st)) return "CF " + st.slice(2);
+    if (/^http5(\d\d)$/.test(st)) return "HTTP 5" + st.slice(6);
+    if (st === "cert") return "证书错";
+    if (st === "timeout") return "超时";
+    if (st === "fail") return "连不上";
+    return st;
   }
   function fmtBig(n){
     if (!n || n <= 0) return "0";
@@ -2251,6 +2324,7 @@
           '<span class="chip">' + (ips.length ? ips.length + " 个 IP" : "未优选") + "</span>" +
           (hasV6 ? '<span class="chip">含 IPv6</span>' : "") +
           (it.status === "degraded" ? '<span class="chip">降级使用</span>' : "") +
+          (it.status === "paused" ? '<span class="chip" title="这条路的 IP 在当地整层不通，已暂停全量优选；域名自动走上游解析，不影响正常上网">已暂停优选</span>' : "") +
           "</div>";
 
         var use = '<div class="use">只用于 <code>' + escH(host0) + "</code>" +
@@ -2264,13 +2338,13 @@
                 '<span class="ip">' + ipHtml(x.ip, x.family === "v6") + "</span>" +
                 (x.family === "v6" ? '<span class="tag v6">v6</span>' : "") +
                 (x.status && x.status !== "ok"
-                  ? '<span class="tag" title="该 IP 只有 TCP 连通，未通过 HTTPS 校验">' +
-                    (x.status === "unverified" ? "未校验" : escH(x.status)) + "</span>"
+                  ? '<span class="tag" title="' + escH(errText(x.status)) + '">' + escH(errLabel(x.status)) + "</span>"
                   : "") +
-                '<span class="ms">' + (x.latency != null ? Math.round(x.latency) + " ms" : "—") + "</span>" +
+                '<span class="ms" title="响应=真实 HTTPS 首字节时间；有吞吐说明响应体够大能测速">' +
+                  speedText(x) + "</span>" +
                 "</div>";
             }).join("") + "</div>"
-          : '<div class="none">这一路还没有优选结果，点「立即执行五路优选」</div>';
+          : '<div class="none">' + escH(emptyReason(it)) + "</div>";
 
         return '<div class="rcard">' + hd + use + body + "</div>";
       }).join("");
@@ -2317,6 +2391,9 @@
     }
     if (s.ipv6 !== undefined) { $("#cfgIpv6").checked = !!s.ipv6; }
     if (s.verify_https !== undefined) { $("#cfgVerify").checked = !!s.verify_https; }
+    $("#cfgStableHours").value = s.stable_hours != null ? s.stable_hours : 6;
+    $("#cfgStableTtfb").value  = s.stable_ttfb_ms != null ? s.stable_ttfb_ms : 1200;
+    $("#cfgStableSpeed").value = s.stable_speed_kbps != null ? s.stable_speed_kbps : 200;
     if (s.push) {
       if (document.activeElement !== $("#cfgPushUrl")) $("#cfgPushUrl").value = s.push.url || "";
       if (document.activeElement !== $("#cfgPushEvents")) $("#cfgPushEvents").value = s.push.events || "";
@@ -2482,6 +2559,9 @@
       top_n: parseInt($("#cfgTopN").value, 10) || 3,
       ipv6: $("#cfgIpv6").checked,
       verify_https: $("#cfgVerify").checked,
+      stable_hours: Number($("#cfgStableHours").value || 0),
+      stable_ttfb_ms: Number($("#cfgStableTtfb").value || 0),
+      stable_speed_kbps: Number($("#cfgStableSpeed").value || 0),
       list_upd_enabled: $("#scListOn").checked,
       list_upd_cycle: $("#scListCycle").value,
       list_upd_hour: parseInt($("#scListHour").value, 10) || 4,

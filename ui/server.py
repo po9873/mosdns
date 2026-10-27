@@ -302,7 +302,13 @@ def read_results():
                     if len(parts) >= 2:
                         try:
                             st = parts[2] if len(parts) > 2 else ""
-                            lat[parts[0]] = (float(parts[1]), st)
+                            sp = None
+                            if len(parts) > 3 and parts[3] not in ("-", ""):
+                                try:
+                                    sp = float(parts[3])
+                                except Exception:
+                                    sp = None
+                            lat[parts[0]] = (float(parts[1]), st, sp)
                         except Exception:
                             pass
         except Exception:
@@ -317,7 +323,7 @@ def read_results():
                         for ip in parts[1:]:
                             if not is_ip(ip):
                                 continue
-                            lt, st = lat.get(ip, (None, ""))
+                            lt, st, sp = lat.get(ip, (None, "", None))
                             st = st or "ok"
                             if is_hard_fail(st):
                                 # 1034/证书/5xx 一律不展示，记下来供界面提示「已剔除」
@@ -326,7 +332,9 @@ def read_results():
                             ips.append({
                                 "ip": ip,
                                 "family": "v6" if ":" in ip else "v4",
+                                # latency 现在是真实 HTTPS 响应时间（TTFB），不再是 TCP 握手
                                 "latency": lt,
+                                "speed": sp,          # KB/s；拿不到（响应体太小）时为 null
                                 "status": st,
                             })
                         entry["ips"] = ips
@@ -856,6 +864,15 @@ class Handler(BaseHTTPRequestHandler):
                 cur["ipv6"] = bool(data["ipv6"])
             if "verify_https" in data:
                 cur["verify_https"] = bool(data["verify_https"])
+            # 稳定模式的「别重扫」门槛：多久内不重扫 + 慢到什么程度才重扫
+            if isinstance(data.get("stable_hours"), (int, float)):
+                cur["stable_hours"] = min(72, max(0, int(data["stable_hours"])))
+            if isinstance(data.get("stable_ttfb_ms"), (int, float)):
+                cur["stable_ttfb_ms"] = min(10000, max(0, int(data["stable_ttfb_ms"])))
+            if isinstance(data.get("stable_speed_kbps"), (int, float)):
+                cur["stable_speed_kbps"] = min(102400, max(0, int(data["stable_speed_kbps"])))
+            if "pref_stable" in data:
+                cur["pref_stable"] = bool(data["pref_stable"])
             if isinstance(data.get("push"), dict):
                 p = cur.get("push") or {}
                 src = data["push"]

@@ -112,6 +112,30 @@ PRESETS = [
      "note": "与访问路同一份数据，镜像仓库专用域名走这些段",
      "route": "ghcr", "url_v4": "https://api.github.com/meta",
      "url_v6": "https://api.github.com/meta", "enabled": True},
+
+    # ---- Google 网段的镜像 ----
+    # 为什么需要：官方 goog.json 在 www.gstatic.com 上，本机常拉不到（实测 443 超时），
+    # 那样 google/gt 两路就等于「没有源」，只能靠临时解析出的几个 IP。
+    # 下面这份由 GitHub Actions 每天从官方 goog.json 转成纯文本，托管在 GitHub，
+    # 国内可直连（raw.githubusercontent 可达），内容与官方一致（85 段 v4 / 15 段 v6）。
+    {"key": "mirror-goog-list", "name": "Google 网段镜像 · GitHub（goog.json 转文本）", "kind": "mirror",
+     "note": "官方 gstatic 拉不到时用这份：每日自动转换自官方 goog.json，含 142.250 等真实前端段",
+     "route": "google",
+     "url_v4": "https://raw.githubusercontent.com/RPDJF/google-ip-range/main/google-ip-range-ipv4.txt",
+     "url_v6": "https://raw.githubusercontent.com/RPDJF/google-ip-range/main/google-ip-range-ipv6.txt",
+     "enabled": True},
+    {"key": "mirror-goog-list-gt", "name": "Google 网段镜像 · GitHub（翻译路）", "kind": "mirror",
+     "note": "同一份镜像，翻译路单独一条，拉取互不影响",
+     "route": "gt",
+     "url_v4": "https://raw.githubusercontent.com/RPDJF/google-ip-range/main/google-ip-range-ipv4.txt",
+     "url_v6": "https://raw.githubusercontent.com/RPDJF/google-ip-range/main/google-ip-range-ipv6.txt",
+     "enabled": True},
+    {"key": "mirror-goog-list-jsd", "name": "Google 网段镜像 · jsDelivr", "kind": "mirror",
+     "note": "同上数据的 CDN 镜像，raw.githubusercontent 慢或被挡时打开这个",
+     "route": "google",
+     "url_v4": "https://cdn.jsdelivr.net/gh/RPDJF/google-ip-range@main/google-ip-range-ipv4.txt",
+     "url_v6": "https://cdn.jsdelivr.net/gh/RPDJF/google-ip-range@main/google-ip-range-ipv6.txt",
+     "enabled": False},
 ]
 
 DEFAULT_PULL = {"enabled": True, "cycle": "6h", "hour": 4, "last": 0}
