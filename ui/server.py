@@ -157,9 +157,34 @@ def rotate_qlog_if_big(max_bytes=32 * 1024 * 1024, keep_bytes=8 * 1024 * 1024):
         pass
 
 
+_PREF_DOM_CACHE = {"mtime": 0, "domains": set()}
+
+
+def pref_domains():
+    """优选 hosts 里写了哪些域名（按文件 mtime 缓存，没必要每行都重读）。"""
+    p = os.path.join(PREF_DIR, "all.hosts")
+    try:
+        mt = os.path.getmtime(p)
+    except Exception:
+        return set()
+    if mt != _PREF_DOM_CACHE["mtime"]:
+        ds = set()
+        try:
+            with open(p, encoding="utf-8") as f:
+                for ln in f:
+                    parts = ln.split()
+                    if parts and not parts[0].startswith("#"):
+                        ds.add(parts[0].rstrip(".").lower())
+        except Exception:
+            pass
+        _PREF_DOM_CACHE["mtime"] = mt
+        _PREF_DOM_CACHE["domains"] = ds
+    return _PREF_DOM_CACHE["domains"]
+
+
 def read_qlog(limit=30):
     """从 mosdns 日志尾部解析 query_summary，返回最近若干条 + 命中统计。"""
-    lines = tail(MOSDNS_LOG, 400)
+    lines = tail(MOSDNS_LOG, 2000)
     items = []
     for ln in lines:
         if "query summary" not in ln:
@@ -199,6 +224,18 @@ def read_qlog(limit=30):
     vals = [x["ms"] for x in items if x["ms"] is not None]
     cached_n = sum(1 for x in items if x["cached"])
     failed_n = sum(1 for x in items if x["rcode"] not in (0, None))
+    # 规则命中情况：域名写进了优选 hosts 就是被规则覆盖，否则走上游解析。
+    # 只看「几路成功」看不出效果，这里把命中/没命中分别计数。
+    pref = pref_domains()
+    hit = miss = 0
+    hit_d, miss_d = set(), set()
+    for x in items:
+        if x["qname"] in pref:
+            hit += 1
+            hit_d.add(x["qname"])
+        else:
+            miss += 1
+            miss_d.add(x["qname"])
     return {
         "items": recent,
         "total": total,
@@ -207,6 +244,12 @@ def read_qlog(limit=30):
         "cached_pct": round(cached_n * 100.0 / total, 1) if total else 0,
         "failed": failed_n,
         "domains": len({x["qname"] for x in items}),
+        "pref_hit": hit,
+        "pref_hit_pct": round(hit * 100.0 / total, 1) if total else 0,
+        "pref_hit_domains": len(hit_d),
+        "pref_miss": miss,
+        "pref_miss_domains": len(miss_d),
+        "pref_total_domains": len(pref),
         "cache_ms": CACHE_MS,
         "log_ok": bool(items),
     }
@@ -374,6 +417,16 @@ def diag_run(args, timeout=30):
         return json.loads(r.stdout.decode("utf-8", "replace") or "{}")
     except Exception as e:
         return {"error": str(e)}
+
+
+def push_brief():
+    """每路当前生效的域名和 IP 整理成一段文本（推送正文 + 控制台预览共用）。"""
+    try:
+        r = subprocess.run(["python3", "/app/scheduler/lib/route_brief.py", PREF_DIR],
+                           capture_output=True, timeout=10)
+        return (r.stdout or b"").decode("utf-8", "replace").strip()
+    except Exception:
+        return ""
 
 
 def push_event(ev, title, body):
@@ -604,6 +657,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, cache_info())
             if path == "/api/sources":
                 return self._send(200, sources_status())
+            if path == "/api/push/preview":
+                return self._send(200, {"text": push_brief()})
             return self._send(404, {"error": "not found"})
 
         return self._send(404, {"error": "not found"})
@@ -717,10 +772,12 @@ class Handler(BaseHTTPRequestHandler):
             url = str(data.get("url", "")).strip()
             if not url.startswith(("http://", "https://")):
                 return self._send(400, {"error": "Webhook 地址需以 http:// 或 https:// 开头"})
+            brief = push_brief()
             try:
                 r = subprocess.run(
                     ["python3", PUSH_PY, url, "测试消息",
-                     "这是一条来自控制台的测试推送，收到即说明配置正确。"],
+                     "这是一条来自控制台的测试推送，收到即说明配置正确。"
+                     + ("\n\n当前各路生效 IP：\n" + brief if brief else "")],
                     capture_output=True, timeout=15)
             except Exception as e:
                 return self._send(500, {"error": str(e)})

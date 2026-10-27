@@ -125,6 +125,11 @@
   .grid{display:grid;gap:14px}
   .grid.c5{grid-template-columns:repeat(5,1fr)}
   .grid.c2{grid-template-columns:1fr 1fr}
+  /* 七路卡片：用 flex 而不是固定 5 列网格。
+     固定列数时七张卡必然排成 5+2，右边空出三格很难看；
+     flex 换行后最后一行的卡会自动拉宽填满，任何时候都不留空档。 */
+  .grid.route{display:flex;flex-wrap:wrap;gap:14px;align-items:stretch}
+  .grid.route > .route-card{flex:1 1 300px;min-width:280px}
   .status-strip{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:16px}
   .pill{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--muted)}
   .led{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
@@ -138,12 +143,12 @@
   .route-card .rc-name{font-size:15px;color:var(--muted);letter-spacing:.3px}
   .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;word-break:break-all}
   /* 卡片里直接列出每个 IP，不再只说「共 N 个」 */
-  .route-card .rc-list{margin:2px 0 0;display:flex;flex-direction:column;gap:3px}
-  .route-card .rc-line{display:flex;align-items:center;gap:7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:16.5px;font-weight:600;line-height:1.55}
-  .route-card .rc-line .n{color:var(--muted);font-weight:400;font-size:13px;min-width:12px}
+  .route-card .rc-list{margin:8px 0 0;display:flex;flex-direction:column;gap:6px}
+  .route-card .rc-line{display:flex;align-items:baseline;gap:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15.5px;font-weight:600;line-height:1.5}
+  .route-card .rc-line .n{color:var(--muted);font-weight:400;font-size:12.5px;min-width:12px;flex:none}
   .route-card .rc-line .ip{word-break:normal;overflow-wrap:anywhere;min-width:0}
-  .route-card .rc-line .ip.v6ip{font-size:14px;letter-spacing:-.2px}
-  .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:14px;margin-left:auto;white-space:nowrap}
+  .route-card .rc-line .ip.v6ip{font-size:13.5px;letter-spacing:-.2px}
+  .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:13.5px;margin-left:auto;padding-left:10px;white-space:nowrap;flex:none}
   .route-card .rc-more{font-size:13.5px;color:var(--muted);margin-top:2px}
   .route-card .rc-time{font-size:13.5px;color:var(--muted);margin-top:6px}
   .route-card .rc-dom{font-size:14px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -156,6 +161,13 @@
     background:rgba(255,255,255,.08);border-radius:6px;padding:1px 6px;word-break:break-all;
   }
   html[data-theme="light"] .route-card .rc-extra code{background:rgba(20,40,80,.07)}
+  /* 推送正文预览：原样展示会发出去的那段文本 */
+  .pushprev{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:8px 11px}
+  .pushprev summary{font-size:12.5px;color:var(--muted);cursor:pointer;outline:none}
+  .pushprev pre{
+    margin:9px 0 2px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.75;
+    color:var(--text);white-space:pre-wrap;word-break:break-word;max-height:340px;overflow:auto;
+  }
   .route-card .rc-sub{font-size:13.5px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .tag{display:inline-block;font-size:11px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
   .tag.v6{color:#3b8eea;border-color:rgba(59,142,234,.45)}
@@ -377,6 +389,8 @@
     .grid.c5{grid-template-columns:1fr;gap:10px}
     .grid.c5 > :last-child:nth-child(odd){grid-column:auto}
     .grid.c2{grid-template-columns:1fr}
+    .grid.route{gap:10px}
+    .grid.route > .route-card{flex:1 1 100%;min-width:0}
     .route-card{padding:12px}
     .route-card .rc-line{font-size:16px;gap:6px}
     .route-card .rc-line .ip.v6ip{font-size:14px}
@@ -790,7 +804,7 @@
           </span>
         </div>
 
-        <div class="grid c5" id="routeCards"></div>
+        <div class="grid route" id="routeCards"></div>
 
         <div class="card" style="margin-top:16px">
           <div class="flexhead">
@@ -984,7 +998,7 @@
 
         <div class="card" style="margin-top:16px">
           <h3>消息推送</h3>
-          <p class="sub">企业微信 / 钉钉 / 飞书 群机器人 Webhook；只推事件，不推任何域名或 IP 明细</p>
+          <p class="sub">企业微信 / 钉钉 / 飞书 群机器人 Webhook；每轮完成会带上各路当前生效的域名和 IP</p>
           <div class="form-row">
             <div class="lab">开启推送</div>
             <label class="switch"><input type="checkbox" id="cfgPushOn"><span class="slider"></span></label>
@@ -1002,6 +1016,11 @@
             <button class="btn" id="btnPushTest">发送测试</button>
             <span class="sub" style="margin:0">改完要点保存，否则刷新会还原</span>
           </div>
+          <!-- 推送出去到底是什么样：这里直接把正文摊开，不用等一轮跑完才知道 -->
+          <details class="pushprev" id="pushPrevBox">
+            <summary>预览推送内容（各路当前生效 IP）</summary>
+            <pre id="pushPreview">加载中…</pre>
+          </details>
         </div>
 
         <div class="card" style="margin-top:16px">
@@ -1602,9 +1621,15 @@
       box.innerHTML = '<div class="empty">还没有查询记录（引擎收到 DNS 请求后这里会自动出现）</div>';
       return;
     }
+    /* 解析了多少、规则命中了多少、没命中多少——这三个数字最能说明优选有没有在干活 */
     stat.innerHTML =
-      '<div class="s"><span>最近查询</span><b>' + d.total + '</b></div>' +
-      '<div class="s"><span>涉及域名</span><b>' + d.domains + '</b></div>' +
+      '<div class="s"><span>解析域名数</span><b>' + d.domains + ' <small>个</small></b></div>' +
+      '<div class="s" title="查询的域名写在优选 hosts 里、由优选 IP 直接应答"><span>规则命中</span><b>' +
+        (d.pref_hit || 0) + ' <small>' + (d.pref_hit_pct || 0) + '%</small></b></div>' +
+      '<div class="s" title="没写进优选 hosts，按分流规则走上游 DoH"><span>没命中规则</span><b>' +
+        (d.pref_miss || 0) + ' <small>' + (d.pref_miss_domains || 0) + ' 个域名</small></b></div>' +
+      '<div class="s" title="优选 hosts 里当前一共写了多少个域名"><span>优选覆盖</span><b>' +
+        (d.pref_total_domains || 0) + ' <small>个域名</small></b></div>' +
       '<div class="s"><span>命中缓存</span><b>' + d.cached + ' <small>' + d.cached_pct + '%</small></b></div>' +
       '<div class="s"><span>平均耗时</span><b>' + (d.avg === null ? "—" : d.avg + "<small> ms</small>") + '</b></div>' +
       '<div class="s"><span>失败</span><b>' + d.failed + '</b></div>';
@@ -2732,6 +2757,20 @@
       toast("测试消息已发送");
     }).catch(function(err){ toast("发送失败：" + err.message); });
   });
+
+  // 预览：展开时才去取，取一次就够（内容是每轮优选后才变的，别一直轮询）
+  (function(){
+    var box = $("#pushPrevBox");
+    if (!box) return;
+    var loaded = false;
+    function load(){
+      api("/api/push/preview").then(function(r){
+        $("#pushPreview").textContent = r.text || "（还没有优选结果，跑一轮后就有了）";
+      }).catch(function(){ $("#pushPreview").textContent = "加载失败"; });
+    }
+    box.addEventListener("toggle", function(){ if (box.open && !loaded) { loaded = true; load(); } });
+    $("#btnPushTest").addEventListener("click", function(){ if (box.open) load(); });
+  })();
 
   function trigger(route){
     api("/api/trigger", {method:"POST", body:{route:route}}).then(function(){

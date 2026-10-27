@@ -116,7 +116,10 @@ run_all() {
   done
   # 七路全部跑完，只在这里判断一次是否需要重载
   reload_if_changed "$fp"
-  notify "round" "七路优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。"
+  # 推送正文带上每路当前生效的域名和 IP：只报「几路成功」看不出到底用了什么
+  local brief
+  brief=$(route_brief)
+  notify "round" "七路优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。${brief:+$'\n'}${brief}"
 }
 
 # UI 的「立即执行」走这里：once 单路 或 once all

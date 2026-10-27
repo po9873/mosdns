@@ -431,6 +431,12 @@ PY
 }
 
 # ---------- 消息推送（企业微信 / 钉钉 / 飞书 机器人）----------
+# 每路当前生效的域名和 IP，整理成纯文本（推消息时带上，控制台也用它预览）。
+# 只说「几路成功」等于什么都没说——收到的人看不到现在到底在用哪些 IP。
+route_brief() {
+  timeout 8 python3 "$SELF_DIR/lib/route_brief.py" "${PREF_DIR:-/data/prefs}" 2>/dev/null
+}
+
 notify() {
   local ev="$1" title="$2" body="$3"
   case "$(setting push.enabled)" in
