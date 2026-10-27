@@ -418,8 +418,9 @@
     .kv .mono,.kv span:last-child{word-break:break-all}
     /* 日志页占满可视高度，跟其他页面一样长，不要短一截 */
     #view-logs.active{display:flex;flex-direction:column;min-height:calc(100dvh - 180px)}
-    /* 手机上给日志框固定高度，超出就在框里滚动——不要跟着内容无限拉长整页 */
-    .logbox{height:52vh;max-height:52vh;min-height:220px;flex:0 0 auto;
+    /* 手机上日志框高度 = 屏幕剩余空间（JS 算），既不无限拉长、也不会短一截留大片空白 */
+    body.loglock{overflow:hidden}
+    .logbox{height:auto;min-height:240px;max-height:none;flex:1 1 auto;
       overflow-y:auto;-webkit-overflow-scrolling:touch;
       font-size:14px;line-height:1.75;padding:10px}
     .tabs{overflow-x:auto;flex:none}
@@ -1312,6 +1313,7 @@
   /* ---------- 视图切换 ---------- */
   function switchView(v){
     state.view = v;
+    document.body.classList.remove("loglock");
     $$("#nav a").forEach(function(a){ a.classList.toggle("active", a.dataset.view === v); });
     $$(".view").forEach(function(s){ s.classList.remove("active"); });
     var el = document.getElementById("view-" + v);
@@ -1319,7 +1321,7 @@
     var titles = {overview:"概况",results:"结果",diag:"诊断",logs:"日志",config:"配置",source:"源"};
     $("#viewTitle").textContent = titles[v] || v;
     clearTimers();
-    if (v === "logs") { loadLogs(); state.timers.push(setInterval(loadLogs, 3000)); }
+    if (v === "logs") { fitLogBox(); loadLogs(); state.timers.push(setInterval(loadLogs, 3000)); }
     if (v === "results") { loadResults(); }
     if (v === "source") { loadSources(); loadLists(); }
     if (v === "config") { loadStatus(); loadSchedule(); }
@@ -1330,6 +1332,23 @@
     if (a) switchView(a.dataset.view);
   });
   function clearTimers(){ state.timers.forEach(clearInterval); state.timers = []; }
+
+  /* 日志框高度 = 视口高度 − 框顶部位置 − 底部导航高度 − 留白。
+     手机/桌面都算一次：桌面原本是 calc(100vh-250px)，这里用实测值更准。 */
+  function fitLogBox(){
+    var box = document.getElementById("logbox");
+    var view = document.getElementById("view-logs");
+    if (!box || !view || !view.classList.contains("active")) return;
+    var top = box.getBoundingClientRect().top;
+    var nav = document.querySelector(".sidebar");
+    var navH = (nav && getComputedStyle(nav).position === "fixed") ? nav.getBoundingClientRect().height : 0;
+    var h = Math.round(window.innerHeight - top - navH - 18);
+    box.style.height = Math.max(240, h) + "px";
+    // 日志页整屏锁住，只有日志框自己滚——不然页面还会被底部内边距顶出一点多余滚动
+    document.body.classList.add("loglock");
+  }
+  window.addEventListener("resize", fitLogBox);
+  window.addEventListener("orientationchange", function(){ setTimeout(fitLogBox, 250); });
 
   /* ---------- 概况 ---------- */
   function latClass(ms){
