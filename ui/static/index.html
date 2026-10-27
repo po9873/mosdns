@@ -79,22 +79,22 @@
   .app{display:flex;min-height:100vh}
   .app[hidden]{display:none!important}
   .sidebar{
-    width:216px; flex:0 0 216px; background:var(--bg2); border-right:1px solid var(--border);
-    display:flex; flex-direction:column; padding:18px 12px; position:sticky; top:0; height:100vh;
+    width:244px; flex:0 0 244px; background:var(--bg2); border-right:1px solid var(--border);
+    display:flex; flex-direction:column; padding:20px 14px; position:sticky; top:0; height:100vh;
   }
-  .side-brand{display:flex;align-items:center;gap:10px;padding:6px 8px 18px}
-  .side-brand b{font-size:16px;letter-spacing:.3px}
+  .side-brand{display:flex;align-items:center;gap:11px;padding:6px 8px 20px}
+  .side-brand b{font-size:17px;letter-spacing:.3px}
   .side-brand b span{color:var(--blue2)}
-  nav{display:flex;flex-direction:column;gap:4px}
+  nav{display:flex;flex-direction:column;gap:6px}
   nav a{
-    display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;
-    color:var(--muted);text-decoration:none;font-size:14.5px;transition:.15s;cursor:pointer;
+    display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;
+    color:var(--muted);text-decoration:none;font-size:15.5px;transition:.15s;cursor:pointer;
   }
   nav a:hover{background:var(--panel);color:var(--text)}
   nav a.active{background:var(--panel);color:var(--blue2);font-weight:600}
   nav a i{
     --icon:none;
-    width:16px;height:16px;display:inline-block;flex:0 0 auto;background:currentColor;
+    width:18px;height:18px;display:inline-block;flex:0 0 auto;background:currentColor;
     -webkit-mask:var(--icon) center/contain no-repeat;
     mask:var(--icon) center/contain no-repeat;
     opacity:.8;
@@ -104,8 +104,9 @@
   nav a[data-view=diag] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 12h-4l-3 9L9 3l-3 9H2'/%3E%3C/svg%3E")}
   nav a[data-view=config] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='4' y1='21' x2='4' y2='14'/%3E%3Cline x1='4' y1='10' x2='4' y2='3'/%3E%3Cline x1='12' y1='21' x2='12' y2='12'/%3E%3Cline x1='12' y1='8' x2='12' y2='3'/%3E%3Cline x1='20' y1='21' x2='20' y2='16'/%3E%3Cline x1='20' y1='12' x2='20' y2='3'/%3E%3Cline x1='1' y1='14' x2='7' y2='14'/%3E%3Cline x1='9' y1='8' x2='15' y2='8'/%3E%3Cline x1='17' y1='16' x2='23' y2='16'/%3E%3C/svg%3E")}
   nav a[data-view=source] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cellipse cx='12' cy='5' rx='9' ry='3'/%3E%3Cpath d='M21 12c0 1.66-4 3-9 3s-9-1.34-9-3'/%3E%3Cpath d='M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5'/%3E%3C/svg%3E")}
-  .side-foot{margin-top:auto;padding:12px 8px 4px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--border)}
-  .side-foot .row{display:flex;justify-content:space-between;margin-top:6px}
+  .side-foot{margin-top:auto;padding:14px 10px 6px;color:var(--muted);font-size:13px;border-top:1px solid var(--border)}
+  .side-foot .row{display:flex;justify-content:space-between;margin-top:8px}
+  .side-foot .row span:last-child{color:var(--text);opacity:.8}
   .main{flex:1;min-width:0;display:flex;flex-direction:column}
   .topbar{
     display:flex;align-items:center;justify-content:space-between;gap:12px;
@@ -135,27 +136,24 @@
   /* 左列和右列各占一半：域名最长也就三十来个字符，一半足够；
      右边一半放 IP 和数值，位置固定，不用挤也不用拉伸。 */
   .route-card .rc-l{flex:0 0 50%;min-width:0;padding-right:22px;border-right:1px solid var(--border)}
-  .route-card .rc-r{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:6px}
-  /* 右列：IP 分栏但不许拉伸。每栏宽度卡在 210–250px，用不完就靠左排，
-     不会像 1fr 那样被拉成一条横贯整张卡的长条。 */
-  .route-card .rc-iplist{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,290px));column-gap:28px;row-gap:9px;align-items:baseline;justify-content:start}
-  /* 冒号前那一段是 IP 列，固定 16ch（等宽字体下正好放下 255.255.255.255），
-     所以每一行的延时都从同一条竖线上开始，不受 IP 长短影响 */
-  .rc-iprow{display:grid;grid-template-columns:16.5ch minmax(0,1fr);column-gap:12px;align-items:baseline;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px}
-  /* IPv6 太长，独占一整行；数值排到它下面一行，既不挤断地址，
-     也不会把延时推到卡片最右边 */
-  .rc-iprow.v6ip{grid-column:1/-1;grid-template-columns:minmax(0,1fr);row-gap:2px}
-  .rc-iprow.v6ip .ms{grid-column:1;justify-self:start}
+  .route-card .rc-r{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;gap:6px}
+  /* 右列：整张卡共用一个两列网格——第一列放 IP、第二列放延迟/速率。
+     所有行共用同一列宽，所以不管 IP 是 9 个字还是 40 个字，
+     延时都从同一条竖线开始，一个 IP 一行、从上往下按顺序读。
+     以前是「每行各自一个网格 + 自动折行成多列」，IPv6 太长被迫独占整行，
+     IP 顺序就被拆成 左V4/右V4/整行V6/左V4/右V4，看着就是跳来跳去。 */
+  .route-card .rc-iplist{display:grid;grid-template-columns:minmax(15.5ch,26ch) max-content;
+    column-gap:18px;row-gap:8px;align-items:baseline;justify-content:start}
+  /* 行容器不参与布局，把 IP 和数值直接交给上面那个网格对齐 */
+  .rc-iprow{display:contents;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px}
   .rc-iprow .ipcell{display:flex;align-items:baseline;gap:6px;white-space:nowrap;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;
     font-variant-numeric:tabular-nums}
-  .rc-iprow .ms{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:400;
+  .rc-iprow .ms{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;font-weight:400;
     color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:.2px}
   .rc-iprow .tag{align-self:center}
-  /* IPv6 只在冒号处换行（ipHtml 已经插了 <wbr>），不会把 737f 这种字段从中间劈开；
-     宽度够时整条一行放下 */
-  .rc-iprow.v6ip .ipcell{font-size:13px;letter-spacing:-.3px;white-space:normal;word-break:normal;overflow-wrap:break-word}
+  /* IPv6 只在冒号处换行（ipHtml 已经插了 <wbr>），不会把 737f 这种字段从中间劈开 */
+  .rc-iprow.v6ip .ipcell{font-size:14px;letter-spacing:-.3px;white-space:normal;word-break:normal;overflow-wrap:break-word}
   .status-strip{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:16px}
   .pill{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--muted)}
   .led{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
@@ -168,16 +166,17 @@
   .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
   .route-card .rc-name{font-size:17px;font-weight:600;color:var(--text);opacity:.9;letter-spacing:.2px}
   .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;word-break:break-all}
-  .route-card .rc-time{font-size:13px;color:var(--muted);margin-top:10px;font-variant-numeric:tabular-nums}
+  .route-card .rc-time{font-size:12.5px;color:var(--muted);margin-top:10px;font-variant-numeric:tabular-nums}
   .route-card .rc-src{font-size:13px;line-height:1.6;padding:0 7px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
-  /* 域名一行一个，全部顶格左对齐：主域名用实色加粗区分，
-     其余域名同缩进、不加任何前缀符号 */
-  .route-card .rc-doms{margin-top:8px;display:flex;flex-direction:column;gap:3px;min-width:0}
+  /* 域名一行一个，全部顶格左对齐。
+     字号/字重全部一样——主域名只用略亮的颜色区分，
+     加粗会让等宽字体看起来「大一号」，整列就不齐了 */
+  .route-card .rc-doms{margin-top:8px;display:flex;flex-direction:column;gap:4px;min-width:0}
   .route-card .rc-d{
-    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;line-height:1.62;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;line-height:1.6;font-weight:400;
     color:var(--muted);word-break:break-all;
   }
-  .route-card .rc-d.primary{color:var(--text);font-weight:600;opacity:.95}
+  .route-card .rc-d.primary{color:var(--text);opacity:.92}
   /* 推送正文预览：原样展示会发出去的那段文本 */
   .pushprev{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:8px 11px}
   .pushprev summary{font-size:12.5px;color:var(--muted);cursor:pointer;outline:none}
@@ -387,8 +386,8 @@
     }
     .side-brand,.side-foot{display:none}
     nav{flex-direction:row;width:100%;justify-content:space-around;gap:0;min-width:0}
-    nav a{flex-direction:column;gap:4px;font-size:11.5px;padding:6px 2px;flex:1 1 0;min-width:0;text-align:center}
-    nav a i{width:14px;height:14px}
+    nav a{flex-direction:column;gap:5px;font-size:12.5px;padding:7px 2px;flex:1 1 0;min-width:0;text-align:center}
+    nav a i{width:17px;height:17px}
     .main{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 
     .topbar{padding:12px 14px;gap:8px}
@@ -410,8 +409,10 @@
     .route-card .rc-body{flex-direction:column;gap:12px}
     .route-card .rc-l{flex:none;width:100%;max-width:100%;padding:0 0 12px;border-right:0;border-bottom:1px solid var(--border)}
     .route-card .rc-r{flex:none;width:100%;align-items:stretch}
-    .route-card .rc-iplist{grid-template-columns:1fr;column-gap:0}
-    .rc-iprow{grid-template-columns:16.5ch minmax(0,1fr)}
+    .rc-iprow{grid-template-columns:15.5ch minmax(0,1fr);column-gap:12px}
+    /* 手机宽度放不下 IPv6 + 数值，数值折到下一行（仍在这一行内部，不跑最右） */
+    .rc-iprow.v6ip{grid-template-columns:minmax(0,1fr)}
+    .rc-iprow.v6ip .ms{justify-self:start}
     .rc-iprow.v6ip .ipcell{font-size:13px}
     .route-card{padding:14px}
     .route-card .rc-d{font-size:14px}
@@ -1474,7 +1475,15 @@
       var right = document.createElement("div"); right.className = "rc-r";
       if (ips.length) {
         var list = document.createElement("div"); list.className = "rc-iplist";
-        ips.forEach(function(x){
+        /* 固定顺序：先全部 IPv4，再全部 IPv6；同族里按延时从快到慢。
+           以前直接按数据顺序渲染，V4/V6 混着来，看着就是乱七八糟。 */
+        var ordered = ips.slice().sort(function(a, b){
+          var fa = a.family === "v6" ? 1 : 0, fb = b.family === "v6" ? 1 : 0;
+          if (fa !== fb) return fa - fb;
+          var la = a.latency == null ? 1e9 : a.latency, lb = b.latency == null ? 1e9 : b.latency;
+          return la - lb;
+        });
+        ordered.forEach(function(x){
           var row = document.createElement("div");
           row.className = "rc-iprow" + (x.family === "v6" ? " v6ip" : "");
           var cell = document.createElement("span"); cell.className = "ipcell";
@@ -1497,13 +1506,8 @@
 
       var sub = document.createElement("div"); sub.className = "rc-sub";
       if (ips.length) {
-        var c = document.createElement("span");
-        c.textContent = "共 " + ips.length + " 个 IP";
-        sub.appendChild(c);
-        if (ips.some(function(x){ return x.family === "v6"; })) {
-          var t = document.createElement("span"); t.className = "tag v6"; t.textContent = "含 IPv6";
-          sub.appendChild(t);
-        }
+        /* 「共 N 个 IP」「含 IPv6」这类统计不再显示：IP 已经全部列出来了，
+           多一行字只是把卡片撑高、还让人以为有几个藏着没显示 */
         if (item.status === "degraded") {
           var dg = document.createElement("span"); dg.className = "tag"; dg.textContent = "降级使用";
           dg.title = "没有 IP 通过 HTTPS 校验（仅超时/连不上），暂用 TCP 结果，延迟标 —";
