@@ -225,14 +225,15 @@ mosdns 没有热重载接口，改 hosts / 清单只能重启进程。为了不�
 | `/data/doh_remote_candidates.txt` | 国外 DoH 候选（强制走国外解析时使用） |
 | `/data/doh_local_candidates.txt` | 国内 DoH 候选（国内域名解析） |
 
-每行格式：`<DoH地址> [bootstrap IP]`，`#` 开头为注释。例如：
+每行格式：`<DoH地址> [连接 IP]`，`#` 开头为注释。例如：
 
 ```
 https://dns.controld.com/dns-query 76.76.2.2
 https://dns.nextdns.io/dns-query 45.90.28.1
 ```
 
-- `bootstrap IP` 可选：指定实际连接的 IP，避免解析上游域名造成自循环；mosdns 会跳过证书校验（裸 IP / 自签必然对不上）。
+- `连接 IP` 可选：让 TLS 的 SNI 仍用域名、但实际连这个 IP（mosdns 的 `dial_addr`），避免再解析上游域名造成自循环；同时跳过证书校验（裸 IP / 自签必然对不上）。
+- 探测与运行时用同一种方式（POST + `application/dns-message`）验证，并要求返回 `rcode=0` 且有答案，避免"HTTP 200 但其实解析不了"的假可用。
 - **怎么加自己的**：把能用的自建/代理 DoH 地址加进对应文件、重启容器即可，探测会自动把它纳入。
 - 处于带 SNI 嗅探的网络时，已知 DoH 主机名（cloudflare-dns.com 等）会被拦，此时加一个不在黑名单里的地址即可。
 

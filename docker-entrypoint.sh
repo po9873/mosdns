@@ -99,7 +99,7 @@ settle() { # $1=探测输出 $2=存档文件 $3=标签 $4=候选清单
   if [ -n "$url" ]; then
     {
       printf '        - addr: "%s"\n' "$url"
-      [ -n "$boot" ] && printf '          bootstrap: "%s"\n' "$boot"
+      [ -n "$boot" ] && printf '          dial_addr: "%s:443"\n' "$boot"
       printf '          insecure_skip_verify: true\n'
     } > "$1"
     elog "$3 无可用上游且无存档，暂用候选清单首条占位（解析可能失败）"
