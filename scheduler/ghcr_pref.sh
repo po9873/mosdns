@@ -2,15 +2,17 @@
 # ghcr.io 路优选：目标 ghcr.io
 #
 # 这一路有个特殊性：docker pull 实际经两个完全不同的域名
-#   1) ghcr.io                          认证 + manifest（GitHub 自己的入口，20.27.x / 20.205.x）
+#   1) ghcr.io                          认证 + manifest（GitHub 自己的入口）
 #   2) pkg-containers.githubusercontent.com   镜像层数据（Fastly，185.199.108~111.154）
 # 只映射 ghcr.io 的话，docker pull 会卡在拉层那一步（一直转圈、最后超时）。
 # 两者不是同一批节点，必须各用各的 IP，所以镜像层域名单独成组（PREF_EXTRA_LINES）。
 #
-# 另一个现实：ghcr.io 的证书只部署在少数节点上。实测 768 个 20.27.x 地址里
-# 只有 20.27.177.117 的证书覆盖 ghcr.io，其余全是 cert/超时——所以这一路
-# 常出现「只选出 1 个」。common.sh 的保底备胎就是为这种情况加的：不足 3 个时
-# 从池里历史验证通过的补，别让一路只剩一个 IP 没得换。
+# 另一个现实：ghcr.io 的证书只部署在少数节点上。20.27.x 是 Azure 的网段
+# （扫描 20.27.176~178 共 762 个地址，只有 20.27.177.117 认 ghcr.io）；
+# GitHub 自己的 140.82.112.0/20 里也只有 .33/.34 这两个地址带 *.ghcr.io
+# 证书（.3/.42 那些是 github.com）。所以候选清单很窄，种子文件里那 10 个
+# 就是实测能用的全部，别指望扫描能扫出更多。common.sh 的保底备胎
+# （keep_min，默认 3）就是为这种情况加的。
 set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1

@@ -730,6 +730,17 @@ run_route() {
   b6=$(probe_top "$v6" "$port" "$conc" 3 $((top_n * 12)))
   batch=$( { printf '%s\n' "$b4"; printf '%s\n' "$b6"; } | awk 'NF' )
 
+  # 种子文件里手写的 IP 是「已知能用」的清单，必须无条件进校验环节。
+  # 为什么：池子里那些从大网段随机采样来的候选，TCP 往往更快——它们只是回了
+  # SYN-ACK，压根不提供这个服务（CloudFront 中国区边缘、GitHub 的 192.30 段都是），
+  # 一按连接时间排序就把种子 IP 挤出前 N 名。ghcr 那 10 个入口就是这么被挤掉、
+  # 常年只剩 1 个的。宁可为这十几个 IP 多花一秒校验，也别让它们没机会说话。
+  seed_fb=$(fallback_ips "$seed" 2>/dev/null | awk 'NF')
+  if [ -n "$seed_fb" ]; then
+    batch=$( { printf '%s\n' "$batch"; printf '%s\n' "$seed_fb"; } \
+             | awk 'NF && !seen[$1]++' )
+  fi
+
   if [ -z "$batch" ]; then
     log "$route: TCP 探测全部失败"
     write_state "$route" "$target" "no_tcp" "" "" 0 0 0

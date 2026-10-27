@@ -84,7 +84,7 @@ docker pull ghcr.io/po9873/mosdns:latest   # GitHub Container Registry
 | Google 搜索 | `gstatic.com/ipranges/goog.json` | GitHub 网段镜像（每日转文本）/ jsDelivr 镜像 / **社区实测 IP 清单（Ponderfly）** | v4 132 段 / v6 16 段 + 8819 个实测 IP |
 | Google 翻译 | 同上（同一份数据） | 同上 | v4 132 段 / v6 16 段 + 8819 个实测 IP |
 | GitHub 访问 | `api.github.com/meta` | GitHub520 社区 hosts（HelloGitHub）/ ineo6 hosts（GitLab）/ jsDelivr 镜像 | v4 254 段 / v6 6 段 |
-| ghcr | 同上（同一份数据） | （GitHub520 里没有 ghcr.io 记录，实测为空，默认关） | v4 254 段 / v6 6 段 |
+| ghcr | `api.github.com/meta`（**默认关**：几万条段里随机采样命中率约 0.8%，扫不出来） | 准确入口清单写在 `config/seeds/ghcr.txt`（10 个，实测逐个打过 TLS + `GET /v2/`） | v4 254 段 / v6 6 段 |
 | TMDB | AWS 官方 `ip-ranges.amazonaws.com/ip-ranges.json`，**只取 `service=CLOUDFRONT`** | 无 | v4 214 段 / v6 34 段 |
 | IMDb | 同上（同一份数据，单独一条） | 无 | v4 214 段 / v6 34 段 |
 
@@ -314,9 +314,17 @@ https://dns.nextdns.io/dns-query 45.90.28.1
 2. **不够就补备胎**：这批不足「最少保留」（默认 3）时，从候选池里挑**历史上真验证通过过**的
    IP 补上，标成「备胎」。备胎本轮不复测、不加减分，主力坏掉时守护进程会先拿它顶上。
 
-为什么非要保底：ghcr.io 这种路实测 768 个 `20.27.x` 地址里只有 `20.27.177.117` 的证书覆盖
-`ghcr.io`（`140.82.x` 全是 GitHub 自己的证书，根本不认 ghcr.io），一轮下来天然只选得出 1 个。
-只剩一个 IP 时它一抖，整路立刻没得换，只能干等下一轮重扫（几分钟）。留两个备胎，切换是秒级的。
+为什么非要保底：ghcr.io 这种路，证书只挂在极少数地址上——扫遍 Azure 的 `20.27.176~178`
+（762 个地址）只有 `20.27.177.117` 认这个域名；GitHub 自己的 `140.82.112.0/20` 里也只有
+每个 /24 的 **第 33、34 号地址**带 `*.ghcr.io` 证书（`.3` / `.42` 那些才是 `github.com`）。
+一轮下来天然只选得出 1~2 个。只剩一个 IP 时它一抖，整路立刻没得换，只能干等下一轮重扫
+（几分钟）。留两个备胎，切换是秒级的。
+
+> 顺带一个教训：别用「整段扫一遍全是 cert」来判断一个网段没用。`140.82.112.0/20` 随机采样
+> 会得出「全是 github.com 证书」的结论，实际上 4096 个地址里有 8 个是 ghcr.io 的入口——
+> 采样点没落到 `.33/.34` 上而已。这类入口的准确清单放在 `config/seeds/ghcr.txt`，
+> 而且**种子里的 IP 会无条件进校验环节**，不会因为池子里那些「TCP 秒回、却根本不提供该服务」
+> 的采样候选排序更靠前就被挤掉。
 
 ## TMDB / IMDb 两路是怎么回事
 

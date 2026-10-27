@@ -127,9 +127,10 @@ PRESETS = [
      "route": "github", "url_v4": "https://api.github.com/meta",
      "url_v6": "https://api.github.com/meta", "enabled": True},
     {"key": "official-github-ghcr", "name": "GitHub 官方 IP 段（ghcr 路）", "kind": "official",
-     "note": "与访问路同一份数据，镜像仓库专用域名走这些段",
+     "note": "默认关闭：ghcr.io 的证书只挂在极少数地址上，从这几万条官方段里随机采样，"
+             "命中率约 0.8%，扫一年也扫不出几个。真实入口由 config/seeds/ghcr.txt 精确给出",
      "route": "ghcr", "url_v4": "https://api.github.com/meta",
-     "url_v6": "https://api.github.com/meta", "enabled": True},
+     "url_v6": "https://api.github.com/meta", "enabled": False},
 
     # ---- Google 网段的镜像 ----
     # 为什么需要：官方 goog.json 在 www.gstatic.com 上，本机常拉不到（实测 443 超时），
