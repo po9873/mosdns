@@ -65,6 +65,37 @@ if [ ! -f "$DATA_DIR/settings.json" ]; then
   cat > "$DATA_DIR/settings.json" <<EOF
 {"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"top_n":3,"ipv6":true,"verify_https":true,"bad_ttl_hours":${PREF_BAD_TTL_HOURS:-6},"watchdog_sec":${PREF_WATCHDOG_SEC:-180},"sub_ttl_days":${PREF_SUB_TTL_DAYS:-14},"pool_max":${PREF_POOL_MAX:-4000},"stable_hours":${PREF_STABLE_HOURS:-6},"stable_ttfb_ms":${PREF_STABLE_TTFB_MS:-1200},"stable_speed_kbps":${PREF_STABLE_SPEED_KBPS:-200},"pref_stable":true,"push":{"enabled":false,"url":"","events":"round,warn,login"},"keep_min":3,"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true,"tmdb":true,"imdb":true}}
 EOF
+else
+  # 老部署升级：新版本加的设置项要补进去。
+  # 为什么必须补：控制台那一栏读不到值就是空的，用户看到空白会以为坏了；
+  # 而且一保存就会被覆盖成默认值，等于白改了。已存在的值一律不动。
+  python3 - "$DATA_DIR/settings.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+try:
+    with open(p) as f:
+        d = json.load(f)
+except Exception:
+    raise SystemExit(0)
+add = {"keep_min": 3,
+       "routes": {"cf": True, "google": True, "gt": True,
+                  "github": True, "ghcr": True, "tmdb": True, "imdb": True}}
+chg = False
+for k, v in add.items():
+    if k not in d:
+        d[k] = v
+        chg = True
+    elif isinstance(v, dict) and isinstance(d.get(k), dict):
+        for rk, rv in v.items():
+            if rk not in d[k]:
+                d[k][rk] = rv
+                chg = True
+if chg:
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f, ensure_ascii=False)
+    os.replace(tmp, p)
+PY
 fi
 
 # ---------- 渲染 mosdns 配置 ----------

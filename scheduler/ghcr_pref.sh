@@ -24,11 +24,22 @@ export PREF_EXTRA_LINES="$PREF_DIR/.ghcr.extra"
 
 PKG_DOM=pkg-containers.githubusercontent.com
 pkgs=$(resolve_ips "$PKG_DOM" "" A)
+okp=""
 if [ -n "$pkgs" ]; then
   okp=$(printf '%s\n' "$pkgs" | python3 "$SELF_DIR/lib/https_probe.py" "$PKG_DOM" 443 5 4 1 / 2>/dev/null | awk '$2=="ok"{print $1}')
-  if [ -n "$okp" ]; then
-    printf '%s %s\n' "$PKG_DOM" "$(printf '%s\n' "$okp" | tr '\n' ' ')" >> "$PREF_EXTRA_LINES"
-    log "ghcr: 镜像层域名 $PKG_DOM -> $(printf '%s\n' "$okp" | tr '\n' ' ')"
+fi
+if [ -n "$okp" ]; then
+  printf '%s %s\n' "$PKG_DOM" "$(printf '%s\n' "$okp" | tr '\n' ' ')" >> "$PREF_EXTRA_LINES"
+  log "ghcr: 镜像层域名 $PKG_DOM -> $(printf '%s\n' "$okp" | tr '\n' ' ')"
+else
+  # 这一轮解析或校验没成功，别把已经能用的那行丢掉。Fastly 的这几个地址
+  # 经常「这轮抽风、下轮就好」，一失败就当没有，hosts 里那行一撤，docker pull
+  # 立刻卡在拉层（前面认证和 manifest 都好好的，就是层拉不下来，最难查）。
+  # 所以：沿用上一轮 hosts 里已经写着的 IP，等下一轮再试新的。
+  keep=$(awk -v d="$PKG_DOM" '$1==d{$1=""; sub(/^[ \t]+/,""); print; exit}' "$PREF_DIR/ghcr.hosts" 2>/dev/null)
+  if [ -n "$keep" ]; then
+    printf '%s %s\n' "$PKG_DOM" "$keep" >> "$PREF_EXTRA_LINES"
+    log "ghcr: 镜像层域名本轮没验到新的，继续用上一轮的 $keep"
   else
     log "ghcr: 镜像层域名 $PKG_DOM 没有 IP 通过校验，本次不写（保持上一轮）"
   fi
