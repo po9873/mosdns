@@ -293,7 +293,7 @@ def read_results():
     out = {}
     for r in ROUTES:
         p = os.path.join(PREF_DIR, "%s.hosts" % r)
-        entry = {"domain": "", "ip": "", "ips": [], "mtime": 0, "dropped": []}
+        entry = {"domain": "", "domains": [], "ip": "", "ips": [], "mtime": 0, "dropped": []}
         lat = {}
         try:
             with open(os.path.join(PREF_DIR, "%s.meta" % r)) as f:
@@ -318,33 +318,42 @@ def read_results():
         except Exception:
             pass
         try:
+            first = True
             with open(p) as f:
                 for line in f:
                     parts = line.split()
-                    if len(parts) >= 2:
-                        entry["domain"] = parts[0]
-                        ips = []
-                        for ip in parts[1:]:
-                            if not is_ip(ip):
-                                continue
-                            lt, st, sp, sp_est = lat.get(ip, (None, "", None, False))
-                            st = st or "ok"
-                            if is_hard_fail(st):
-                                # 1034/证书/5xx 一律不展示，记下来供界面提示「已剔除」
-                                entry["dropped"].append({"ip": ip, "reason": st})
-                                continue
-                            ips.append({
-                                "ip": ip,
-                                "family": "v6" if ":" in ip else "v4",
-                                # latency 现在是真实 HTTPS 响应时间（TTFB），不再是 TCP 握手
-                                "latency": lt,
-                                "speed": sp,          # KB/s；拿不到（响应体太小）时为 null
-                                "speed_est": sp_est,   # true = 样本太小，只是个大概值
-                                "status": st,
-                            })
-                        entry["ips"] = ips
-                        entry["ip"] = ips[0]["ip"] if ips else ""
-                        break
+                    if len(parts) < 2:
+                        continue
+                    # hosts 里一路可能有好几行：第一行是主域名（拿它的 IP 展示），
+                    # 后面几行是同一路顺带映射的域名（api.tmdb.org、image.tmdb.org、
+                    # raw/objects…）。只在第一行取 IP 就 break 的话，界面永远只显示
+                    # 一个域名，用户根本看不出这一路到底覆盖了什么。
+                    entry["domains"].append(parts[0])
+                    if not first:
+                        continue
+                    first = False
+                    entry["domain"] = parts[0]
+                    ips = []
+                    for ip in parts[1:]:
+                        if not is_ip(ip):
+                            continue
+                        lt, st, sp, sp_est = lat.get(ip, (None, "", None, False))
+                        st = st or "ok"
+                        if is_hard_fail(st):
+                            # 1034/证书/5xx 一律不展示，记下来供界面提示「已剔除」
+                            entry["dropped"].append({"ip": ip, "reason": st})
+                            continue
+                        ips.append({
+                            "ip": ip,
+                            "family": "v6" if ":" in ip else "v4",
+                            # latency 现在是真实 HTTPS 响应时间（TTFB），不再是 TCP 握手
+                            "latency": lt,
+                            "speed": sp,          # KB/s；拿不到（响应体太小）时为 null
+                            "speed_est": sp_est,   # true = 样本太小，只是个大概值
+                            "status": st,
+                        })
+                    entry["ips"] = ips
+                    entry["ip"] = ips[0]["ip"] if ips else ""
             entry["mtime"] = int(os.path.getmtime(p))
         except Exception:
             pass

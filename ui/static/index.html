@@ -149,6 +149,8 @@
   .route-card .rc-dom{font-size:14px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .route-card .rc-src{font-size:12.5px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
   .route-card .rc-host{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;color:var(--text);opacity:.85}
+  .route-card .rc-extra{font-size:13.5px;line-height:1.55;color:var(--muted);margin-top:3px;word-break:break-all;opacity:.85}
+  .route-card .rc-extra::before{content:"＋ ";opacity:.6}
   .route-card .rc-sub{font-size:13.5px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .tag{display:inline-block;font-size:11px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
   .tag.v6{color:#3b8eea;border-color:rgba(59,142,234,.45)}
@@ -1228,8 +1230,8 @@
     google: {series:"google",domain:"www.google.com",          use:"谷歌搜索"},
     gt:     {series:"gt",    domain:"translate.googleapis.com", use:"谷歌翻译接口"},
     github: {series:"github",domain:"github.com",              use:"GitHub 网页 / raw"},
-    ghcr:   {series:"ghcr",  domain:"ghcr.io",                 use:"GitHub 容器镜像仓库"},
-    tmdb:   {series:"tmdb",  domain:"www.themoviedb.org",      use:"TMDB 网页 / API / 海报（AWS CloudFront）"},
+    ghcr:   {series:"ghcr",  domain:"ghcr.io",                 use:"GitHub 镜像仓库 + raw/Release 下载（Fastly 185.199 段）"},
+    tmdb:   {series:"tmdb",  domain:"www.themoviedb.org",      use:"TMDB 网页 / API / 海报（含 Jellyfin 用的 api.themoviedb.org）"},
     imdb:   {series:"imdb",  domain:"www.imdb.com",            use:"IMDb 网页 / 海报（AWS CloudFront）"}
   };
   var state = { view:"overview", settings:{}, results:{}, logSrc:"pref", timers:[] };
@@ -1447,8 +1449,19 @@
       dm.appendChild(chip);
       var dmt = document.createElement("span"); dmt.className = "rc-host"; dmt.textContent = item.domain || meta.domain || "—";
       dm.appendChild(dmt);
-      dm.title = ROUTE_LABEL[r] + " 的 IP 只用于 " + (item.domain || meta.domain || "") + "（" + (meta.use || "") + "）";
+      dm.title = ROUTE_LABEL[r] + " 的 IP 只用于这些域名：" + ((item.domains && item.domains.length ? item.domains : [item.domain || meta.domain || ""]).join("、")) + "（" + (meta.use || "") + "）";
       div.appendChild(dm);
+
+      /* 一路往往不止一个域名（tmdb 还有 api./image.，ghcr 还有 raw/objects/pkg-containers）。
+         不列出来用户根本不知道这张卡的 IP 其实是给好几个域名用的。 */
+      var extra = (item.domains || []).filter(function(d){ return d && d !== dmt.textContent; });
+      if (extra.length) {
+        var ex = document.createElement("div");
+        ex.className = "rc-extra";
+        ex.textContent = extra.join(" · ");
+        ex.title = "同一批 IP 也写给了这些域名";
+        div.appendChild(ex);
+      }
 
       /* 直接把每个 IP 列出来（最多 4 个，多的折成「还有 N 个」） */
       if (ips.length) {
