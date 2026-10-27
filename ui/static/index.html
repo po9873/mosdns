@@ -1868,6 +1868,8 @@
     cf1015: "Cloudflare 限速（请求过多）",
     cf1023: "Cloudflare 主机不可达",
     cert:    "证书不匹配或已过期（疑似被劫持 / SNI 不对）",
+    wrong:   "能连上，但这个地址不提供该服务（拿不到应有的页面/译文）",
+    busy:    "对方限速（429），这一会儿忙，不算坏，下一轮再试",
     timeout: "连接或响应超时",
     fail:    "连接被重置或握手失败",
     unverified: "只测到 TCP 能连，没通过 HTTPS 校验（页面可能打不开）"
@@ -1900,6 +1902,8 @@
     if (/^cf(\d+)$/.test(st)) return "CF " + st.slice(2);
     if (/^http5(\d\d)$/.test(st)) return "HTTP 5" + st.slice(6);
     if (st === "cert") return "证书错";
+    if (st === "wrong") return "不提供该服务";
+    if (st === "busy") return "限速";
     if (st === "timeout") return "超时";
     if (st === "fail") return "连不上";
     return st;

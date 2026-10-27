@@ -137,6 +137,36 @@ PRESETS = [
      "url_v6": "https://cdn.jsdelivr.net/gh/RPDJF/google-ip-range@main/google-ip-range-ipv6.txt",
      "enabled": False},
 
+    # ---- Google 翻译：实测可用的翻译节点清单 ----
+    # 为什么必须有这条：翻译服务在国内走的不是 142.250.x 那些官方网段，而是
+    # 8.138.x / 113.31.x / 47.95.x 这类边缘节点（翻译入口就在这些地址上）。
+    # goog.json 里根本没有这些地址，所以「拿官方网段采样再探」永远探不出翻译 IP——
+    # 这才是之前翻译路一直选不出东西的真正原因，不是线路不通。
+    # 清单来自社区工具 Ponderfly/GoogleTranslateIpCheck（大家常用的那个扫 IP 工具，
+    # 每天实测后逐日提交，最近一次 2026-10-25）。它只提供候选，能不能用仍由本机
+    # 实测决定：真发一次翻译请求，拿到译文才算数。
+    {"key": "third-gtip", "name": "Google 翻译可用 IP 清单（Ponderfly 社区，每日更新）", "kind": "thirdparty",
+     "note": "社区工具每天实测出的国内可用翻译节点（8.138 / 113.31 / 47.95 等），官方网段里没有这些地址",
+     "route": "gt",
+     "url_v4": "https://raw.githubusercontent.com/Ponderfly/GoogleTranslateIpCheck/master/src/GoogleTranslateIpCheck/GoogleTranslateIpCheck/ip.txt",
+     "url_v6": "", "enabled": True},
+    {"key": "third-gtip-jsd", "name": "Google 翻译可用 IP 清单 · jsDelivr 镜像", "kind": "mirror",
+     "note": "同上数据的 CDN 镜像，raw.githubusercontent 打不开时打开这个",
+     "route": "gt",
+     "url_v4": "https://cdn.jsdelivr.net/gh/Ponderfly/GoogleTranslateIpCheck@master/src/GoogleTranslateIpCheck/GoogleTranslateIpCheck/ip.txt",
+     "url_v6": "", "enabled": False},
+
+    # ---- Google 搜索路：用的是同一批边缘节点 ----
+    # 实测（本机直连、不走代理）：这批翻译节点对 www.google.com/search?q=... 同样
+    # 返回 200 + 9 万字节的真实结果页（title 就是 Google Search），香港站也一样。
+    # 也就是说「谷歌搜索在国内还有可用 IP」是真的，只是它们不在 Google 官方网段里，
+    # 拿 goog.json 采样永远探不到。
+    {"key": "third-gtip-google", "name": "Google 可用 IP 清单（搜索路，社区每日实测）", "kind": "thirdparty",
+     "note": "与翻译路同一批边缘节点，实测搜 www.google.com 也能出结果页；只作候选，能不能用由本机实测决定",
+     "route": "google",
+     "url_v4": "https://raw.githubusercontent.com/Ponderfly/GoogleTranslateIpCheck/master/src/GoogleTranslateIpCheck/GoogleTranslateIpCheck/ip.txt",
+     "url_v6": "", "enabled": True},
+
     # ---- GitHub 的社区 hosts 源（github / ghcr 两路）----
     # 为什么需要：这两路原来只有官方 api.github.com/meta 一条源。官方给的是 GitHub
     # 全量网段（含大量非前端段），采样展开后能连上的很少——实测一轮 60 个候选只选出

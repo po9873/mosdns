@@ -230,6 +230,17 @@ write_route() {
     printf '%s' "$domain"
     printf ' %s' $ips
     printf '\n'
+    # 同一批 IP 还要一并映射的域名（PREF_EXTRA_DOMAINS，空格分隔）。
+    # 只给「确定共用同一批边缘节点」的路用：翻译的网页端 translate.google.com
+    # 和接口端 translate.googleapis.com 就是同一批节点，两个都得映射，
+    # 否则浏览器/插件走接口那个域名时仍会被解析到上游的污染结果。
+    # 不能所有路都这么干：github.com 和 raw.githubusercontent.com 根本不是一批 IP。
+    for d in ${PREF_EXTRA_DOMAINS:-}; do
+      [ "$d" = "$domain" ] && continue
+      printf '%s' "$d"
+      printf ' %s' $ips
+      printf '\n'
+    done
   } > "$PREF_DIR/$route.hosts"
   printf '%s\n' "$pairs" > "$PREF_DIR/$route.meta"
   merge_hosts
@@ -438,6 +449,16 @@ run_route() {
     return 1
   fi
 
+  # ---- 这一路「怎么算能用」----
+  # 默认请求 / 看 HTTP 正常即可；但有的服务根路径本来就返回 404（Google 前端节点
+  # 全是这样），用 GET / 判断会把真能用的 IP 全判成不可用。所以允许按路指定：
+  #   PREF_PROBE_TARGET  探测时用的域名（默认 = 种子域名）
+  #   PREF_PROBE_PATH    请求路径（默认 /）
+  #   PREF_PROBE_EXPECT  正文里必须出现的内容，没出现就判定「不提供该服务」
+  local ptarget="${PREF_PROBE_TARGET:-$target}"
+  local ppath="${PREF_PROBE_PATH:-/}"
+  local pexp="${PREF_PROBE_EXPECT:-}"
+
   # ---- 失败退避：这一路当地整层不通时，别每轮白跑几分钟 ----
   local rnext rnow rleft
   if [ "${PREF_FORCE:-0}" != "1" ]; then
@@ -497,7 +518,7 @@ run_route() {
       if [ -n "$cur" ]; then
         case "$(setting verify_https)" in
           false|False|0) vchk=$(printf '%s\n' "$cur" | awk '{print $1, "ok", "?", "-"}') ;;
-          *) vchk=$(printf '%s\n' "$cur" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 "$conc" 2 2>/dev/null) ;;
+          *) vchk=$(printf '%s\n' "$cur" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 "$conc" 2 "$ppath" "$pexp" 2>/dev/null) ;;
         esac
         live_out=$(printf '%s\n' "$vchk" | awk '$2=="ok"')
         live_n=$(printf '%s\n' "$live_out" | awk 'NF' | wc -l | tr -d ' ')
@@ -610,7 +631,7 @@ run_route() {
       vres=$(printf '%s\n' "$batch" | awk '{print $1, "ok", $2, "-"}')
       ;;
     *)
-      vres=$(printf '%s\n' "$batch" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 2>/dev/null)
+      vres=$(printf '%s\n' "$batch" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 4 1 "$ppath" "$pexp" 2>/dev/null)
       # 补位：通过的不足 top_n 时，把没试过的候选再探一批，别急着降级
       ok=$(printf '%s\n' "$vres" | awk '$2=="ok"' | wc -l | tr -d ' ')
       if [ "${ok:-0}" -lt "$top_n" ]; then
@@ -620,7 +641,7 @@ run_route() {
         if [ "${more_n:-0}" -gt 0 ]; then
           log "$route: 仅 $ok 个通过校验，补探 $more_n 个候补"
           vres=$(printf '%s\n%s\n' "$vres" \
-                 "$(printf '%s\n' "$more" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 2>/dev/null)")
+                 "$(printf '%s\n' "$more" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 4 1 "$ppath" "$pexp" 2>/dev/null)")
         fi
       fi
       ;;
@@ -628,10 +649,10 @@ run_route() {
 
   # 通过校验的：ip TTFB ok 吞吐（TTFB 排序，界面显示的就是这个真实响应时间）
   ok=$(printf '%s\n' "$vres" | awk '$2=="ok"{print $1, $3, "ok", ($4==""?"-":$4)}' | sort -k2 -n)
-  # 明确不可用：1034/1010/1020、证书不符、5xx
-  hard=$(printf '%s\n' "$vres" | awk '$2!="ok" && $2!="timeout" && $2!="fail"{print $1" "$2}')
-  # 不确定（可能只是网络抖动）：超时、连接失败
-  soft=$(printf '%s\n' "$vres" | awk '$2=="timeout"||$2=="fail"{print $1" "$2}')
+  # 明确不可用：1034/1010/1020、证书不符、5xx、以及「能连但这个地址不提供该服务」
+  hard=$(printf '%s\n' "$vres" | awk '$2!="ok" && $2!="timeout" && $2!="fail" && $2!="busy"{print $1" "$2}')
+  # 不确定（可能只是网络抖动或对方限速）：超时、连接失败、429
+  soft=$(printf '%s\n' "$vres" | awk '$2=="timeout"||$2=="fail"||$2=="busy"{print $1" "$2}')
 
   # ---- 第三步：坏 IP 立即拉黑 + 立即撤下，这一步就是「1034 一触发就换 IP」----
   if [ -n "$hard" ]; then

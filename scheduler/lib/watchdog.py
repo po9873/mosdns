@@ -52,7 +52,27 @@ def runtime_cfg():
         pass
     return sec, on
 
-HARD = ("cf", "cert")        # 状态名以这些开头 = 明确不可用
+HARD = ("cf", "cert", "wrong")   # 状态名以这些开头 = 明确不可用
+
+# Google 系域名专用判定：这些节点的根路径回什么都有可能（翻译首页 200、其他路径 404），
+# 光看「HTTP 通不通」分不出好坏；而翻译接口有配额，巡检频繁调用会被 429，
+# 反而把好 IP 判成坏的换掉。所以统一看首页标题（<title>Google…）。
+_TRANS_DOMS = ("translate.googleapis.com", "translate.google.com")
+_GOOGLE_DOMS = ("www.google.com", "www.google.com.hk")
+
+
+def spec_for(domain):
+    """这一路该请求什么路径、正文里该出现什么（默认根路径，不校验内容）。
+
+    翻译首页是纯 JS 壳，整页没有 <title>；搜索首页有 <title>Google。
+    用这两种特征判断，既不用调翻译接口（有配额，巡检频繁会被 429 限速），
+    也能把「能连但不提供该服务」的节点筛掉。
+    """
+    if domain in _TRANS_DOMS:
+        return "/", "translate"
+    if domain in _GOOGLE_DOMS:
+        return "/", "<title>Google"
+    return "/", None
 
 
 def log(msg):
@@ -186,8 +206,9 @@ def probe(ip, domain):
     """巡检只关心「能不能打开」，但 https_probe.check 现在返回 4 个字段
     （ip / 状态 / TTFB / 吞吐）。这里统一补成 4 元组，避免以后它再加字段
     又把守护线程整个搞崩（之前就崩过：too many values to unpack）。"""
+    path, expect = spec_for(domain)
     try:
-        r = https_probe.check(ip, domain, PORT, TIMEOUT)
+        r = https_probe.check(ip, domain, PORT, TIMEOUT, 1, path, expect)
     except Exception:
         return ip, "fail", None, None
     r = tuple(r)

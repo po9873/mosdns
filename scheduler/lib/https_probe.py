@@ -6,10 +6,16 @@
 #   TTFB（发出请求到收到响应头）和 下载吞吐（KB/s）。
 # 所以这里同时测两样，输出给调度器写进 meta，界面直接显示速度。
 #
-# 用法: python3 https_probe.py <domain> <port> <timeout> <concurrency>
+# 用法: python3 https_probe.py <domain> <port> <timeout> <concurrency> [samples] [path] [expect]
 # 输入(stdin): 每行 "ip" 或 "ip tcp_ms"
 # 输出(stdout): "ip 状态 ttfb_ms speed_kbps"
-#   状态 = ok / cf1034 / cf10xx / cert / timeout / fail / http5xx
+#   状态 = ok / wrong / cf1034 / cf10xx / cert / timeout / fail / http5xx
+#
+# 为什么能传 path/expect：不同服务「能用」的样子不一样。
+#   Google 翻译的根路径 / 本来就回 404（前端节点就这样），拿 GET / 判断，
+#   会把所有真能用的翻译 IP 全判死；必须请求真实接口
+#   /translate_a/single 并要求正文里出现译文 JSON，才算「真能用」。
+#   expect 不合 → 状态 wrong（能连、证书也对，但这个地址不提供该服务）。
 #   ttfb_ms / speed_kbps 未知时输出 "-"
 import concurrent.futures
 import re
@@ -33,7 +39,7 @@ BODY_BUDGET = 4.0     # 读 body 最多再花 4 秒
 SPEED_TRUST_BYTES = 32768
 
 
-def _attempt(ip, domain, port, timeout):
+def _attempt(ip, domain, port, timeout, path="/", expect=None):
     """跑一次完整探测，返回 (状态, ttfb_ms, speed_kbps, 是否估算)。"""
     v6 = ":" in ip
     fam = socket.AF_INET6 if v6 else socket.AF_INET
@@ -42,6 +48,14 @@ def _attempt(ip, domain, port, timeout):
     ctx = ssl.create_default_context()
     ctx.check_hostname = True
     ctx.verify_mode = ssl.CERT_REQUIRED
+    # 必须声明 ALPN，和浏览器一致。实测（google 翻译节点 8.138.x / 47.95.x）：
+    # 握手不带 ALPN 时，对端会按「默认虚拟主机」应答，给出的是不相干域名
+    # （CN=yaoqianmeiyong.site）的证书 → 被我们判成 cert，而浏览器实际好得很。
+    # 带上 http/1.1 之后证书就是正常 Google 证书，请求也能拿到真实结果。
+    try:
+        ctx.set_alpn_protocols(["http/1.1"])
+    except Exception:
+        pass
 
     s = socket.socket(fam, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -55,9 +69,9 @@ def _attempt(ip, domain, port, timeout):
         except ssl.SSLError:
             return "fail", None, None, False
         req = (
-            "GET / HTTP/1.1\r\nHost: %s\r\n"
+            "GET %s HTTP/1.1\r\nHost: %s\r\n"
             "User-Agent: Mozilla/5.0 (compatible; mosdns-pref/1.0)\r\n"
-            "Accept: */*\r\nConnection: close\r\n\r\n" % domain
+            "Accept: */*\r\nConnection: close\r\n\r\n" % (path or "/", domain)
         )
         ss.sendall(req.encode())
 
@@ -84,23 +98,37 @@ def _attempt(ip, domain, port, timeout):
             return "cf" + m2.group(1), ttfb, None, False
         if status == 0:
             return "fail", None, None, False
+        if status == 429:
+            # 对方限速：只是这一会儿忙，不代表这个 IP 坏了，别拉黑、也别写进 hosts
+            return "busy", ttfb, None, False
         if status >= 500:
             # 5xx 也顺手测速度，方便判断是节点挂了还是单纯慢
             return "http%d" % status, ttfb, None, False
 
-        # ---- 继续读 body：算下载吞吐 ----
-        got = len(body_head)
+        # ---- 继续读 body：算下载吞吐；传了 expect 就尽量读到出现为止 ----
+        body = bytearray(body_head)
+        got = len(body)
+        needle = expect.encode() if expect else b""
         t_dl = time.time()
         deadline = t_dl + BODY_BUDGET
         while got < BODY_CAP and time.time() < deadline:
+            if needle and needle in bytes(body):
+                break
             try:
                 d = ss.recv(16384)
             except Exception:
                 break
             if not d:
                 break
-            got += len(d)
+            body += d
+            got = len(body)
         span = time.time() - t_dl
+
+        # 能连上、证书也对，但拿不到该服务应有的内容 → 这个地址不提供该服务。
+        # （典型：Google 前端节点对任何路径都回 404，看着「通」，实际翻译/搜索都不通。）
+        if needle and needle not in bytes(body):
+            return "wrong", ttfb, None, False
+
         speed = None
         est = False
         if got >= BODY_MIN and span > 0.001:
@@ -118,17 +146,18 @@ def _attempt(ip, domain, port, timeout):
             pass
 
 
-def check(item, domain, port, timeout, samples=1):
+def check(item, domain, port, timeout, samples=1, path="/", expect=None):
     """对单个 IP 探测；samples>1 时多测几次取「最好的一次」。
 
     为什么要多测：单次吞吐会抖动（实测同一 IP 158/289/532 KB/s），拿一次结果
     就判「慢了」会误触发全量重探。只要任意一次证明它不慢，就不算慢。
+    path / expect 用于「这个服务真实长什么样」的判定（见文件头说明）。
     返回 (ip, 状态, ttfb, speed, 是否估算)。
     """
     ip = item.split()[0]
     best = None          # (状态, ttfb, speed, est)
     for _ in range(max(1, int(samples))):
-        st, ttfb, speed, est = _attempt(ip, domain, port, timeout)
+        st, ttfb, speed, est = _attempt(ip, domain, port, timeout, path, expect)
         if best is None:
             best = (st, ttfb, speed, est)
             continue
@@ -171,6 +200,8 @@ def main():
     timeout = float(sys.argv[3])
     conc = max(1, int(sys.argv[4])) if len(sys.argv) > 4 else 4
     samples = max(1, int(sys.argv[5])) if len(sys.argv) > 5 else 1
+    path = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] else "/"
+    expect = sys.argv[7] if len(sys.argv) > 7 and sys.argv[7] else None
 
     items = [l.strip() for l in sys.stdin if l.strip()]
     if not items:
@@ -178,7 +209,7 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=conc) as ex:
         for ip, st, ttfb, speed, est in ex.map(
-                lambda i: check(i, domain, port, timeout, samples), items):
+                lambda i: check(i, domain, port, timeout, samples, path, expect), items):
             sp = fmt(speed)
             if sp != "-" and est:
                 sp = "~" + sp          # ~ 表示样本太小，只作参考、不参与「变慢」判定

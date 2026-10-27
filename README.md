@@ -80,8 +80,8 @@ docker pull ghcr.io/po9873/mosdns:latest   # GitHub Container Registry
 | 路 | 官方源 | 其他源 | 网段数（实测） |
 |---|---|---|---|
 | Cloudflare | `cloudflare.com/ips-v4` + `ips-v6` | IPDB 精选 / IPDB 接口 / IPDB 反代优选 / jsDelivr 镜像 / ghproxy 镜像 | v4 15 段 / v6 7 段 |
-| Google 搜索 | `gstatic.com/ipranges/goog.json` | GitHub 网段镜像（每日转文本）/ jsDelivr 镜像 | v4 132 段 / v6 16 段 |
-| Google 翻译 | 同上（同一份数据） | 同上 | v4 132 段 / v6 16 段 |
+| Google 搜索 | `gstatic.com/ipranges/goog.json` | GitHub 网段镜像（每日转文本）/ jsDelivr 镜像 / **社区实测 IP 清单（Ponderfly）** | v4 132 段 / v6 16 段 + 8819 个实测 IP |
+| Google 翻译 | 同上（同一份数据） | 同上 | v4 132 段 / v6 16 段 + 8819 个实测 IP |
 | GitHub 访问 | `api.github.com/meta` | GitHub520 社区 hosts（HelloGitHub）/ ineo6 hosts（GitLab）/ jsDelivr 镜像 | v4 254 段 / v6 6 段 |
 | ghcr | 同上（同一份数据） | GitHub520 社区 hosts | v4 254 段 / v6 6 段 |
 
@@ -254,6 +254,17 @@ https://dns.nextdns.io/dns-query 45.90.28.1
 
 界面上的 `275ms` 就是 TTFB，`· 8.4 MB/s` 是吞吐（拿得到才显示）。
 
+**每一路「什么算能用」不一样，按路指定**（`scheduler/*_pref.sh` 里的 `PREF_PROBE_*`）：
+
+| 路 | 请求什么 | 判定 |
+|---|---|---|
+| Cloudflare / GitHub / ghcr | `GET /` | HTTP 正常、无 1034/证书错/5xx |
+| Google 搜索 | `GET /`（www.google.com） | 正文出现 `<title>Google` |
+| Google 翻译 | `GET /`（translate.google.com） | 正文出现 `translate`（该页是纯 JS 壳，没有 `<title>`） |
+
+为什么不用「状态码通就算」：Google 前端对不认识的路径一律回 404/200 的空壳，
+只看状态码会把「能连但不能用」的节点全当成好的（`203.208.x` 那批就是这样被误判的）。
+
 ### 吞吐前面的 `≈` 是什么意思
 
 `≈158 KB/s` 表示 **样本太小、只是个大概值**：响应体不足 32KB，一个 TCP 窗口就传完了，
@@ -295,9 +306,29 @@ KB/s 是噪音，拿来判决只会让系统一直折腾。
 
 多源（订阅/种子）在这里的角色是**切换依据**，不是每轮都全量重扫。
 
+### Google 两路为什么必须用「社区实测清单」
+
+这是个容易搞反的地方，写清楚免得以后再走弯路：
+
+- **Google 官方网段（`goog.json` 里的 142.250.x 等）在国内基本连不上**：实测 TCP 443 全部超时。
+  所以「从官方网段采样再探」这条路，永远探不出能用的 IP——不是判定太严，是那些地址真连不上。
+- **但 Google 搜索和翻译在国内确实还有可用 IP**，它们是一批国内边缘节点（8.134/8.137/8.138、
+  113.31、106.75、47.113 等）。官方网段里没有这些地址，社区工具
+  [Ponderfly/GoogleTranslateIpCheck](https://github.com/Ponderfly/GoogleTranslateIpCheck)
+  每天实测后把清单提交进仓库，本项目直接把它当源用（可更新，不写死）。
+- 清单只提供**候选**：能不能用仍由本机实测决定，探不通的不进 hosts。
+
+校验这两个域名时还有两个坑，代码里都处理了：
+
+1. **必须带 ALPN**。握手不带 ALPN 时，对端会按「默认虚拟主机」应答，回一张不相干域名的证书
+   （实测 `CN=yaoqianmeiyong.site`），看着像「证书不对」，其实浏览器用得好好的。
+2. **不能拿翻译接口做校验**。`translate_a/single` 无 key 有配额，优选一轮要探几十个 IP，
+   探着探着自己就被 429 限速，于是所有节点都「失败」——等于自己把判据打爆了。
+   现在按「首页 + 页面特征」判断：翻译首页是纯 JS 壳，看 `translate` 字样；搜索首页看 `<title>Google`。
+
 ### 整层不通的路会自己「歇着」（失败退避）
 
-有的路在当地是整层不通的（比如 Google 的服务 IP 被墙），全量探测每轮都要白跑 2~3 分钟，
+有的路在当地是整层不通的（个别地区/网络到某批 IP 完全不可达），全量探测每轮都要白跑 2~3 分钟，
 最后还是「TCP 探测全部失败」。这种情况没必要反复折腾——域名走上游解析照常能用。
 
 - 连续失败 → 退避 **1h → 2h → 4h → 6h（封顶）**，期间不再空跑，日志写「暂停优选」
