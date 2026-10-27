@@ -12,6 +12,14 @@ export PREF_ALLOW_DOWNGRADE=1
 # 一次约 270KB），直连我们选中的 IP + SNI 用这个域名，测的就是这条链路。
 export PREF_SPEED_URL='https://speed.cloudflare.com/__down?bytes=300000'
 
+# 同一批边缘节点能顺带服务的域名：这些都是 Cloudflare 站点，用的是同一批
+# anycast IP，跟 cloudflare.com 一起写进 hosts 没有额外成本。
+#   theaudiodb.com  —— MoviePilot 音乐元数据（专辑/封面）
+#   lrclib.net      —— MoviePilot 歌词源
+#   anilist.co      —— 动画元数据；刮削走的是 graphql 那个域名，一起带上
+# 写之前会逐个 IP 验一遍，验不过的域名这次就不映射，不会拖累主域名。
+export PREF_EXTRA_DOMAINS="theaudiodb.com www.theaudiodb.com lrclib.net anilist.co graphql.anilist.co"
+
 source /app/scheduler/common.sh
 acquire_lock || exit 1
 run_route "cf" "/app/config/seeds/cloudflare.txt" 443

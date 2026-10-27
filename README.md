@@ -88,6 +88,24 @@ docker pull ghcr.io/po9873/mosdns:latest   # GitHub Container Registry
 | TMDB | AWS 官方 `ip-ranges.amazonaws.com/ip-ranges.json`，**只取 `service=CLOUDFRONT`** | 无 | v4 214 段 / v6 34 段 |
 | IMDb | 同上（同一份数据，单独一条） | 无 | v4 214 段 / v6 34 段 |
 
+### 每一路到底给哪些域名写 hosts
+
+控制台「概况」卡片和「结果」页会把这些域名逐个列出来（不用猜），对应如下：
+
+| 路 | 写进 hosts 的域名 |
+|---|---|
+| Cloudflare | `cloudflare.com`、`theaudiodb.com`、`www.theaudiodb.com`、`lrclib.net`、`anilist.co`、`graphql.anilist.co` |
+| Google 搜索 | `www.google.com`、`www.google.com.hk`、`google.com` |
+| Google 翻译 | `translate.google.com`、`translate.googleapis.com` |
+| GitHub 访问 | `github.com` |
+| ghcr | `ghcr.io`、`pkg-containers.githubusercontent.com`、`raw.githubusercontent.com`、`objects.githubusercontent.com` |
+| TMDB | `www.themoviedb.org`、`api.tmdb.org`、`api.themoviedb.org`、`image.tmdb.org` |
+| IMDb | `www.imdb.com`、`m.media-amazon.com` |
+
+同一路里的域名是「同一批边缘节点」才合并的（Cloudflare / CloudFront 各家同家任意域名通用）。
+不是一批的绝不共用：`github.com` 和 `raw.githubusercontent.com` 就分在两路、各用各的 IP。
+附加域名写之前会逐个 IP 验一遍，验不过这次就不映射，不会让那个域名打不开。
+
 > 社区 hosts 源是「`IP 域名`」格式。**这类清单按域名白名单收**：只保留本路真正用得上的域名那一行，
 > 其余行（别的站点、assets、Pages）整行跳过——以前整份照收，池子里一半 IP 根本不属于这一路
 > （实测 GitHub 池里混进过 Facebook、微软的地址），优选时抽到的全是「TCP 通但这域名不认」的垃圾。

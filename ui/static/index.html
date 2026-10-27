@@ -149,8 +149,13 @@
   .route-card .rc-dom{font-size:14px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .route-card .rc-src{font-size:12.5px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
   .route-card .rc-host{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;color:var(--text);opacity:.85}
-  .route-card .rc-extra{font-size:13.5px;line-height:1.55;color:var(--muted);margin-top:3px;word-break:break-all;opacity:.85}
-  .route-card .rc-extra::before{content:"＋ ";opacity:.6}
+  .route-card .rc-extra{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;align-items:center}
+  .route-card .rc-extra::before{content:"＋";font-size:12.5px;color:var(--muted);opacity:.7}
+  .route-card .rc-extra code{
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text);
+    background:rgba(255,255,255,.08);border-radius:6px;padding:1px 6px;word-break:break-all;
+  }
+  html[data-theme="light"] .route-card .rc-extra code{background:rgba(20,40,80,.07)}
   .route-card .rc-sub{font-size:13.5px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .tag{display:inline-block;font-size:11px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
   .tag.v6{color:#3b8eea;border-color:rgba(59,142,234,.45)}
@@ -619,6 +624,10 @@
     background:rgba(255,255,255,.08);border-radius:7px;padding:1px 7px;
   }
   html[data-theme="light"] .rcard .use code{background:rgba(20,40,80,.07)}
+  .rcard .use code.main{background:rgba(90,162,240,.16);color:var(--blue2)}
+  html[data-theme="light"] .rcard .use code.main{background:rgba(90,162,240,.13)}
+  .rcard .use .ulab{opacity:.75;flex:none}
+  .rcard .use .cnt{font-size:11.5px;opacity:.7;flex:none}
   .rcard .ipl{display:flex;flex-direction:column;gap:6px}
   .rcard .ipl .r{
     display:flex;align-items:center;gap:8px;padding:7px 11px;border-radius:12px;
@@ -1458,8 +1467,12 @@
       if (extra.length) {
         var ex = document.createElement("div");
         ex.className = "rc-extra";
-        ex.textContent = extra.join(" · ");
         ex.title = "同一批 IP 也写给了这些域名";
+        extra.forEach(function(d){
+          var c = document.createElement("code");
+          c.textContent = d;
+          ex.appendChild(c);
+        });
         div.appendChild(ex);
       }
 
@@ -2440,8 +2453,16 @@
           (it.status === "paused" ? '<span class="chip" title="这条路的 IP 在当地整层不通，已暂停全量优选；域名自动走上游解析，不影响正常上网">已暂停优选</span>' : "") +
           "</div>";
 
-        var use = '<div class="use">只用于 <code>' + escH(host0) + "</code>" +
-          (meta.use ? '<span>· ' + escH(meta.use) + "</span>" : "") +
+        /* 这一路到底给哪些域名写了 hosts：全部列出来。
+           只显示主域名的话，tmdb 的 api./image.、ghcr 的 raw/objects 这些
+           明明也在用优选 IP，界面上却看不出来。 */
+        var doms = (it.domains && it.domains.length) ? it.domains : (host0 !== "—" ? [host0] : []);
+        var use = '<div class="use"><span class="ulab">只用于</span>' +
+          doms.map(function(d){
+            return '<code' + (d === host0 ? ' class="main"' : "") + ">" + escH(d) + "</code>";
+          }).join("") +
+          (doms.length > 1 ? '<span class="cnt">' + doms.length + " 个域名</span>" : "") +
+          (meta.use ? "<span>· " + escH(meta.use) + "</span>" : "") +
           (it.mtime ? '<span style="margin-left:auto">' + fmtTime(it.mtime) + "</span>" : "") +
           "</div>";
 
