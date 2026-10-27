@@ -72,16 +72,45 @@ fi
 #   select_doh.py 在【容器内】逐个连候选 IP、发真实 DoH 请求，只收录当地真能通的。
 esc() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
 
-REMOTE_LIST=$(python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_remote_candidates.txt" www.google.com 3 8 2>/tmp/remote_doh.log)
-LOCAL_LIST=$(python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_local_candidates.txt" www.baidu.com 3 8 2>/tmp/local_doh.log)
-# 兜底：极端情况下探测脚本无输出时，给一个占位上游保证配置合法（解析会失败但服务不崩）
-[ -n "$REMOTE_LIST" ] || REMOTE_LIST='        - addr: "https://1.1.1.1/dns-query"
-          insecure_skip_verify: true'
-[ -n "$LOCAL_LIST" ]  || LOCAL_LIST='        - addr: "https://223.5.5.5/dns-query"
-          insecure_skip_verify: true'
-printf '%s\n' "$REMOTE_LIST" > /tmp/remote_list.txt
-printf '%s\n' "$LOCAL_LIST"  > /tmp/local_list.txt
-elog "国外 DoH 本地探测选中 $(grep -c 'addr:' /tmp/remote_list.txt) 个；国内 $(grep -c 'addr:' /tmp/local_list.txt) 个"
+# 两份清单并行探测（各自内部已并发），避免串行叠加启动时间
+python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_remote_candidates.txt" www.google.com 3 6 >/tmp/remote_list.txt 2>/tmp/remote_doh.log &
+_p1=$!
+python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_local_candidates.txt"  www.baidu.com  3 6 >/tmp/local_list.txt  2>/tmp/local_doh.log &
+_p2=$!
+wait "$_p1" "$_p2" 2>/dev/null || true
+
+# 本次探测结果落到 /data 存档；下次若是瞬时网络抖动探测不到，直接沿用上次能用的，
+# 不会因为一次探测失败就把线上解析能力清空。
+settle() { # $1=探测输出 $2=存档文件 $3=标签 $4=候选清单
+  if grep -q 'addr:' "$1" 2>/dev/null; then
+    cp -f "$1" "$2" 2>/dev/null || true
+    return 0
+  fi
+  if [ -s "$2" ]; then
+    cp -f "$2" "$1" 2>/dev/null || true
+    elog "$3 本次探测无可用上游，沿用上次选中的结果"
+    return 0
+  fi
+  # 两处都空：取候选清单首条占位，保证配置合法（不写死任何厂商）
+  local cand url boot
+  cand=$(grep -v '^[[:space:]]*#' "$4" 2>/dev/null | awk 'NF{print $1"|"$2; exit}')
+  url=${cand%%|*}
+  boot=${cand#*|}
+  if [ -n "$url" ]; then
+    {
+      printf '        - addr: "%s"\n' "$url"
+      [ -n "$boot" ] && printf '          bootstrap: "%s"\n' "$boot"
+      printf '          insecure_skip_verify: true\n'
+    } > "$1"
+    elog "$3 无可用上游且无存档，暂用候选清单首条占位（解析可能失败）"
+  else
+    : > "$1"
+    elog "$3 候选清单为空，没有可用上游"
+  fi
+}
+settle /tmp/remote_list.txt "$DATA_DIR/doh_remote_selected.txt" "国外" "$DATA_DIR/doh_remote_candidates.txt"
+settle /tmp/local_list.txt  "$DATA_DIR/doh_local_selected.txt"  "国内" "$DATA_DIR/doh_local_candidates.txt"
+elog "上游 DoH 本地探测：国外 $(grep -c 'addr:' /tmp/remote_list.txt 2>/dev/null || echo 0) 个 / 国内 $(grep -c 'addr:' /tmp/local_list.txt 2>/dev/null || echo 0) 个"
 
 sed \
   -e "s|__DNS_PORT__|$(esc "$DNS_PORT")|g" \
