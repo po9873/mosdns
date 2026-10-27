@@ -57,8 +57,19 @@ docker pull po9873/mosdns:latest           # Docker Hub
 docker pull ghcr.io/po9873/mosdns:latest   # GitHub Container Registry
 ```
 
-想让容器独占一个局域网 IP（比如固定 `192.168.1.101`，设备上 DNS 直接填它），
-改用 macvlan —— compose 文件末尾注释里有一份现成的写法。
+想让容器独占一个局域网 IP（设备上 DNS 直接填它），把 `ports` 去掉，改用 macvlan：
+
+```yaml
+    mac_address: <自定义 MAC>          # 可选，方便路由器做静态绑定
+    networks:
+      <你的 macvlan 网络名>:
+        ipv4_address: <你的局域网 IP>
+
+networks:
+  <你的 macvlan 网络名>:
+    external: true
+    name: <你的 macvlan 网络名>
+```
 
 > 调优参数（缓存、看门狗间隔、上游 DoH…）**默认都不用写**，
 > 见下面「配置项」，或直接进控制台「配置」页改，保存即生效，不用重启容器。

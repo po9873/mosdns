@@ -1,45 +1,13 @@
-# MosDNS 优选一体机 —— 最小可用配置
-#
-# 就这些，复制即用。所有调优参数镜像里都有默认值，
-# 想改再去 README「配置项」挑几个覆盖，或者直接进控制台「配置」页改（保存即生效，不用重启）。
-#
-# 镜像两个来源都行，内容完全一样：
-#   po9873/mosdns:latest           （Docker Hub）
-#   ghcr.io/po9873/mosdns:latest   （GitHub Container Registry）
-
 services:
   mosdns:
     image: po9873/mosdns:latest
     container_name: mosdns
     restart: unless-stopped
     ports:
-      - "53:53/udp"
-      - "53:53/tcp"
-      - "80:80"          # 控制台
+      - "53:53/udp"    # DNS
+      - "53:53/tcp"    # DNS
+      - "80:80"        # Web UI
     volumes:
       - ./data:/data
     environment:
-      TZ: "Asia/Shanghai"
-      # 下面几个是最常改的，默认值已经能用，需要时再取消注释
-      # PREF_DNS_PORT: "53"
-      # PREF_UI_PORT: "80"
-      # PREF_DOMESTIC_DOH: "https://223.5.5.5/dns-query"
-      # PREF_FOREIGN_DOH: "https://1.1.1.1/dns-query"
-      # PREF_FOREIGN_DOH_BACKUP: "https://8.8.8.8/dns-query"
-
-# ------------------------------------------------------------------
-# 想让容器有自己的局域网 IP（比如固定 192.168.1.101，DNS 直接指向它），
-# 改用 macvlan：去掉上面的 ports，换成下面的 networks。
-#
-#     networks:
-#       bridge-host:
-#         ipv4_address: 192.168.1.101
-#     cap_add: [NET_ADMIN, NET_RAW]        # 诊断页的 ping 需要
-#
-# networks:
-#   bridge-host:
-#     external: true
-#     name: bridge-host
-#
-# 注意：macvlan 下不需要 ports 映射，53/80 直接监听在容器自己的 IP 上。
-# ------------------------------------------------------------------
+      TZ: Asia/Shanghai
