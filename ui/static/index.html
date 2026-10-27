@@ -595,7 +595,7 @@
     .status-strip > .pill:has(#btnRunAll) .btn{box-shadow:0 10px 26px rgba(47,125,225,.42), inset 0 1px 0 rgba(255,255,255,.34)}
   }
 
-  /* ---------- 结果页：五路分开成卡片（每路标明系列 + 域名） ---------- */
+  /* ---------- 结果页：七路分开成卡片（每路标明系列 + 域名） ---------- */
   .rcgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:14px}
   .rcard{
     border:1px solid var(--glass-brd);border-radius:18px;padding:14px 16px;
@@ -955,7 +955,7 @@
             <input type="number" id="cfgStableSpeed" min="0" max="102400" step="50" style="width:96px;text-align:center">
           </div>
           <div class="form-row">
-            <div class="lab">结果变化后自动重载引擎<small>一轮五路跑完只判断一次；结果和上轮相同则不重启，DNS 零中断</small></div>
+            <div class="lab">结果变化后自动重载引擎<small>一轮七路跑完只判断一次；结果和上轮相同则不重启，DNS 零中断</small></div>
             <label class="switch"><input type="checkbox" id="cfgAutoReload"><span class="slider"></span></label>
           </div>
           <div class="form-row"><div class="lab">Cloudflare 优选</div><label class="switch"><input type="checkbox" data-route="cf"><span class="slider"></span></label></div>
@@ -1021,7 +1021,7 @@
         <div class="card" style="margin-top:16px">
           <h3>运行信息</h3>
           <div class="kv"><span class="k">账号</span><span class="mono" id="infoUser">-</span></div>
-          <div class="kv"><span class="k">五路串行</span><span>全局锁，任一时刻只跑一路</span></div>
+          <div class="kv"><span class="k">七路串行</span><span>全局锁，任一时刻只跑一路</span></div>
           <div class="kv"><span class="k">上游</span><span class="mono" style="font-size:13px">国外 DoH 直连（无代理）</span></div>
           <div class="kv"><span class="k">数据目录</span><span class="mono">/data</span></div>
         </div>
@@ -1170,7 +1170,7 @@
         </div>
 
         <div class="card" style="margin-top:16px">
-          <h3>候选池 <span class="muted" style="font-weight:400;font-size:13px">（五个池子分开：每池标了系列和它服务的域名，池里的数按源拆开）</span></h3>
+          <h3>候选池 <span class="muted" style="font-weight:400;font-size:13px">（七个池子分开：每池标了系列和它服务的域名，池里的数按源拆开）</span></h3>
           <div id="poolStat" class="poolgrid"><div class="empty">加载中…</div></div>
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
             <button class="btn" id="btnPoolPrune">清理失效 IP</button>
