@@ -677,6 +677,15 @@ run_route() {
   total=$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF' | wc -l | tr -d ' ' )
 
   if [ "$total" = "0" ]; then
+    if [ -n "$soft" ] && [ -s "$rhf" ]; then
+      # 只有超时/连不上、一个都没通过校验时，绝不拿「TCP 通但请求没回来的 IP」顶替。
+      # 实测教训：把 Fastly 的 151.101.x / 185.199.x 写成 github.com 之后，
+      # github.com 直接打不开——端口开着不代表这个 IP 认这个域名。
+      # 保留上一轮已验证的结果，比换上一批没验证过的 IP 安全得多。
+      log "$route: 本轮无 IP 通过校验，保留上一轮的 hosts 不动（不给没验证过的 IP 顶替）"
+      write_state "$route" "$target" "degraded" "" "" "${n4:-0}" 0 "${pool_n}"
+      return 2
+    fi
     if [ -n "$soft" ]; then
       # 只有超时/连不上，没有明确拒绝 → 允许降级，但标 unverified
       downgrade=1

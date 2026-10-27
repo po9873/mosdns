@@ -1,8 +1,5 @@
 # ghcr.io 路候选种子（公开、极小、不会变）
+# 兜底同上：只放 GitHub 网页入口段，不放 Fastly / Cloudflare 的通用地址。
 ghcr.io
-pkg-containers.githubusercontent.com
-1.1.1.1
-104.16.0.1
-104.18.0.1
-172.67.0.1
-151.101.0.1
+20.205.243.166
+140.82.112.3

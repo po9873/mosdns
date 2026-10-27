@@ -353,6 +353,32 @@ def expand_cidr(net, sample=None):
 SPLIT = re.compile(r"[\s,;|\"'<>()\[\]{}]+")
 
 
+# GitHub 的 api.github.com/meta 是一份「按用途分类」的 JSON：里面有 web/api/git（真正的
+# 网站入口），也有 actions/codespaces（CI 跑批机、云主机）、pages（Fastly 静态托管）。
+# 早先不分分类全量入池，结果 4000 条池子里 3590 条是 9.129.x 这种跑批机地址，
+# 每轮抽 60 个候选几乎全抽到它们，最后只选出 1 个真入口 —— 不是判定太严，是候选不对。
+_GITHUB_META_KEYS = ("web", "api", "git")
+
+
+def _github_meta_filter(text):
+    """只保留 GitHub meta 里代表网站入口的分类；不是这类 JSON 就原样返回。"""
+    s = text.lstrip()
+    if not s.startswith("{"):
+        return text
+    try:
+        d = json.loads(s)
+    except Exception:
+        return text
+    if not isinstance(d, dict) or "web" not in d:
+        return text
+    out = []
+    for k in _GITHUB_META_KEYS:
+        v = d.get(k)
+        if isinstance(v, list):
+            out.extend([x for x in v if isinstance(x, str)])
+    return "\n".join(out) if out else text
+
+
 def parse_source(text):
     """解析一个源的内容。
 
@@ -366,7 +392,7 @@ def parse_source(text):
         return {"ips": [], "v4": 0, "v6": 0, "v4_ips": 0, "v6_ips": 0,
                 "s4": 0, "s6": 0}
 
-    raw = text
+    raw = _github_meta_filter(text)
     # 整段 base64 的订阅（v2ray 风格）
     head = raw.strip()[:200]
     if head and not re.search(r"[\.:]\s*\d", head) and len(raw.strip()) > 60:

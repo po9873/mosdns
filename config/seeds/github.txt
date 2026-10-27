@@ -1,11 +1,8 @@
 # GitHub 路候选种子（公开、极小、不会变）
+# 每行一个候选：域名（运行时用系统 DNS 实时解析为最新真实 IP）或兜底 IP。
+# 兜底只用 GitHub 自己的网页入口段；别放 Fastly（151.101.x / 185.199.x）——
+# 那是 raw.githubusercontent / Pages 的地址，写成 github.com 会让站点打不开。
 github.com
 api.github.com
-objects.githubusercontent.com
 20.205.243.166
-140.82.0.1
-143.55.0.1
-151.101.0.1
-192.30.0.1
-20.40.0.1
-20.41.0.1
+140.82.112.3
