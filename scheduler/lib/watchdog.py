@@ -56,13 +56,32 @@ HARD = ("cf", "cert")        # 状态名以这些开头 = 明确不可用
 
 
 def log(msg):
-    line = "[%s] [watchdog] %s" % (time.strftime("%m-%d %H:%M:%S"), msg)
+    # 前缀用中文，避免日志里一堆 [watchdog] 让人看不懂在干什么
+    line = "[%s] 【守护】%s" % (time.strftime("%m-%d %H:%M:%S"), msg)
     print(line, flush=True)
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:
         pass
+
+
+def why_label(why):
+    """把内部状态码翻成人话，日志里不出现 cf1034 这种裸代码。"""
+    w = str(why or "")
+    if w == "timeout":
+        return "超时"
+    if w == "fail":
+        return "连不上"
+    if w == "cert":
+        return "证书不对"
+    if w.startswith("cf10"):
+        return "Cloudflare %s 错误" % w[2:]
+    if w.startswith("http5"):
+        return "源站 %s 错误" % w[4:]
+    if w == "unverified":
+        return "没通过 HTTPS 校验"
+    return w or "打不开"
 
 
 def jload(p, dft):
@@ -172,7 +191,7 @@ def probe(ip, domain):
 
 def run_once():
     if os.path.isdir(LOCK_DIR):
-        log("优选正在运行，本轮跳过（避免抢写 hosts）")
+        log("优选任务正在跑，这轮巡检先跳过（避免两边同时改写 hosts 打架）")
         return 0
 
     state = jload(STATE_FILE, {})
@@ -214,7 +233,8 @@ def run_once():
         for ip, why in dropped:
             subs.mark_bad(ip, why, route)
             state.pop("%s|%s" % (route, ip), None)
-            log("%s: %s 不可用（%s），已拉黑" % (route, ip, why))
+            log("%s 路：%s 打不开（%s），已加入黑名单，%d 小时内不再用"
+                % (route, ip, why_label(why), subs.BAD_TTL_H))
 
         # 剩下的继续留着；缺的从池子里补
         need = max(0, len(ips) - len(keep))
@@ -239,15 +259,13 @@ def run_once():
         for ip, why in dropped:
             subs.add_event("swap", route, ip, why, " ".join(added) or "(撤下，回退上游)")
         if added:
-            log("%s: 换 IP 完成 %s -> %s" % (route,
-                                            ",".join(d[0] for d in dropped),
-                                            ",".join(added)))
+            log("%s 路：%s 打不开，换成 %s（新 IP 已实测通过）"
+                % (route, ",".join(d[0] for d in dropped), ",".join(added)))
         elif final:
-            log("%s: 撤下 %s，保留 %d 个仍可用" % (route,
-                                                 ",".join(d[0] for d in dropped),
-                                                 len(final)))
+            log("%s 路：撤下打不开的 %s，保留 %d 个仍可用"
+                % (route, ",".join(d[0] for d in dropped), len(final)))
         else:
-            log("%s: %s 全部不可用且无替补，已撤下该路（域名回退上游）"
+            log("%s 路：%s 全打不开、也没有可换的，已撤下这一路（该域名改走上游解析）"
                 % (route, ",".join(d[0] for d in dropped)))
 
     try:
@@ -257,15 +275,16 @@ def run_once():
 
     if changed:
         reload_mosdns()
-    log("巡检完成：检查 %d 个 IP，换掉 %d 个" % (checked, swapped))
+    log("这轮巡检结束：检查 %d 个 IP，换掉 %d 个（其余都能正常打开）" % (checked, swapped))
     return swapped
 
 
 def main():
     once = "--once" in sys.argv
     sec, on = runtime_cfg()
-    log("启动，间隔 %d 秒，超时 %.0fs，连不上 %d 次才换%s"
-        % (sec, TIMEOUT, MAX_STRIKES, "" if on else "（当前已关闭巡检）"))
+    log("启动：每 %d 秒把每路在用的 IP 各打开一次（单个超时 %.0fs），"
+        "打不开（1034/证书/5xx/连不上）就换 IP；同一 IP 连续 %d 次不行才换%s"
+        % (sec, TIMEOUT, MAX_STRIKES, "（当前巡检已关闭）" if not on else ""))
     if once:
         run_once()
         return 0

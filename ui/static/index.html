@@ -22,7 +22,7 @@
   body{
     margin:0; background:transparent; color:var(--text);
     font-family:system-ui,-apple-system,"SF Pro Text","PingFang SC","Segoe UI","Microsoft YaHei",sans-serif;
-    font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased;
+    font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased;
   }
   /* 玻璃背后要有光斑，否则 blur 出来是死灰 */
   #bgfx{
@@ -55,25 +55,25 @@
     border-radius:16px; padding:28px; box-shadow:var(--shadow);
   }
   .login-card .brand{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-  .dot-logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--blue),#7b5cff);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px}
-  .login-card h2{margin:6px 0 18px;font-size:18px;font-weight:650}
-  .login-card p.sub{margin:0 0 18px;color:var(--muted);font-size:12.5px}
+  .dot-logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--blue),#7b5cff);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:15px}
+  .login-card h2{margin:6px 0 18px;font-size:19px;font-weight:650}
+  .login-card p.sub{margin:0 0 18px;color:var(--muted);font-size:13.5px}
   .field{margin-bottom:12px}
-  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .field label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
   .field input{
     width:100%; padding:10px 12px; border-radius:9px; border:1px solid var(--border);
-    background:var(--panel2); color:var(--text); font-size:14px; outline:none;
+    background:var(--panel2); color:var(--text); font-size:15px; outline:none;
   }
   .field input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,142,234,.16)}
   .btn{
     border:1px solid var(--border); background:var(--panel2); color:var(--text);
-    padding:9px 14px; border-radius:9px; font-size:13px; transition:.15s;
+    padding:9px 14px; border-radius:9px; font-size:14px; transition:.15s;
   }
   .btn:hover{border-color:var(--blue);color:var(--blue2)}
   .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
   .btn.primary:hover{background:var(--blue2);color:#fff}
   .btn.block{width:100%;padding:11px}
-  .err{color:var(--red);font-size:12.5px;min-height:18px;margin-top:8px}
+  .err{color:var(--red);font-size:13.5px;min-height:18px;margin-top:8px}
 
   /* ---------- 布局 ---------- */
   .app{display:flex;min-height:100vh}
@@ -83,12 +83,12 @@
     display:flex; flex-direction:column; padding:18px 12px; position:sticky; top:0; height:100vh;
   }
   .side-brand{display:flex;align-items:center;gap:10px;padding:6px 8px 18px}
-  .side-brand b{font-size:15px;letter-spacing:.3px}
+  .side-brand b{font-size:16px;letter-spacing:.3px}
   .side-brand b span{color:var(--blue2)}
   nav{display:flex;flex-direction:column;gap:4px}
   nav a{
     display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;
-    color:var(--muted);text-decoration:none;font-size:13.5px;transition:.15s;cursor:pointer;
+    color:var(--muted);text-decoration:none;font-size:14.5px;transition:.15s;cursor:pointer;
   }
   nav a:hover{background:var(--panel);color:var(--text)}
   nav a.active{background:var(--panel);color:var(--blue2);font-weight:600}
@@ -105,7 +105,7 @@
   nav a[data-view=diag] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 12h-4l-3 9L9 3l-3 9H2'/%3E%3C/svg%3E")}
   nav a[data-view=config] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='4' y1='21' x2='4' y2='14'/%3E%3Cline x1='4' y1='10' x2='4' y2='3'/%3E%3Cline x1='12' y1='21' x2='12' y2='12'/%3E%3Cline x1='12' y1='8' x2='12' y2='3'/%3E%3Cline x1='20' y1='21' x2='20' y2='16'/%3E%3Cline x1='20' y1='12' x2='20' y2='3'/%3E%3Cline x1='1' y1='14' x2='7' y2='14'/%3E%3Cline x1='9' y1='8' x2='15' y2='8'/%3E%3Cline x1='17' y1='16' x2='23' y2='16'/%3E%3C/svg%3E")}
   nav a[data-view=source] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cellipse cx='12' cy='5' rx='9' ry='3'/%3E%3Cpath d='M21 12c0 1.66-4 3-9 3s-9-1.34-9-3'/%3E%3Cpath d='M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5'/%3E%3C/svg%3E")}
-  .side-foot{margin-top:auto;padding:12px 8px 4px;color:var(--muted);font-size:11.5px;border-top:1px solid var(--border)}
+  .side-foot{margin-top:auto;padding:12px 8px 4px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--border)}
   .side-foot .row{display:flex;justify-content:space-between;margin-top:6px}
   .main{flex:1;min-width:0;display:flex;flex-direction:column}
   .topbar{
@@ -113,7 +113,7 @@
     padding:16px 24px; border-bottom:1px solid var(--border); background:var(--bg);
     position:sticky; top:0; z-index:10;
   }
-  .topbar h1{margin:0;font-size:17px;font-weight:650}
+  .topbar h1{margin:0;font-size:18px;font-weight:650}
   .topbar .actions{display:flex;gap:8px;align-items:center}
   .content{padding:22px 24px 40px;max-width:1900px;width:100%;margin:0 auto}
   .view{display:none}
@@ -121,12 +121,12 @@
 
   /* ---------- 卡片 ---------- */
   .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
-  .card h3{margin:0 0 14px;font-size:14px;font-weight:650;display:flex;align-items:center;gap:8px}
+  .card h3{margin:0 0 14px;font-size:15px;font-weight:650;display:flex;align-items:center;gap:8px}
   .grid{display:grid;gap:14px}
   .grid.c5{grid-template-columns:repeat(5,1fr)}
   .grid.c2{grid-template-columns:1fr 1fr}
   .status-strip{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:16px}
-  .pill{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted)}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--muted)}
   .led{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
   .led.ok{background:var(--green);box-shadow:0 0 0 3px rgba(63,185,80,.15)}
   .led.bad{background:var(--red);box-shadow:0 0 0 3px rgba(248,81,73,.15)}
@@ -135,26 +135,26 @@
   .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
   .route-card:hover{border-color:var(--blue)}
   .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-  .route-card .rc-name{font-size:14px;color:var(--muted);letter-spacing:.3px}
-  .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:17px;font-weight:600;word-break:break-all}
+  .route-card .rc-name{font-size:15px;color:var(--muted);letter-spacing:.3px}
+  .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;word-break:break-all}
   /* 卡片里直接列出每个 IP，不再只说「共 N 个」 */
   .route-card .rc-list{margin:2px 0 0;display:flex;flex-direction:column;gap:3px}
-  .route-card .rc-line{display:flex;align-items:center;gap:7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15.5px;font-weight:600;line-height:1.55}
-  .route-card .rc-line .n{color:var(--muted);font-weight:400;font-size:12px;min-width:12px}
+  .route-card .rc-line{display:flex;align-items:center;gap:7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:16.5px;font-weight:600;line-height:1.55}
+  .route-card .rc-line .n{color:var(--muted);font-weight:400;font-size:13px;min-width:12px}
   .route-card .rc-line .ip{word-break:normal;overflow-wrap:anywhere;min-width:0}
-  .route-card .rc-line .ip.v6ip{font-size:13px;letter-spacing:-.2px}
-  .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:13px;margin-left:auto;white-space:nowrap}
-  .route-card .rc-more{font-size:12.5px;color:var(--muted);margin-top:2px}
-  .route-card .rc-time{font-size:12.5px;color:var(--muted);margin-top:6px}
-  .route-card .rc-dom{font-size:13px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-  .route-card .rc-src{font-size:11.5px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
-  .route-card .rc-host{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;color:var(--text);opacity:.85}
-  .route-card .rc-sub{font-size:12.5px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-  .tag{display:inline-block;font-size:10px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
+  .route-card .rc-line .ip.v6ip{font-size:14px;letter-spacing:-.2px}
+  .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:14px;margin-left:auto;white-space:nowrap}
+  .route-card .rc-more{font-size:13.5px;color:var(--muted);margin-top:2px}
+  .route-card .rc-time{font-size:13.5px;color:var(--muted);margin-top:6px}
+  .route-card .rc-dom{font-size:14px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .route-card .rc-src{font-size:12.5px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
+  .route-card .rc-host{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;color:var(--text);opacity:.85}
+  .route-card .rc-sub{font-size:13.5px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .tag{display:inline-block;font-size:11px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
   .tag.v6{color:#3b8eea;border-color:rgba(59,142,234,.45)}
   /* ---------- 源管理 ---------- */
   .rowline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 0;border-top:1px dashed var(--border)}
-  .rowline label{font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .rowline label{font-size:13.5px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
   .rowline .grow{flex:1;min-width:220px;display:block;align-items:stretch}
   .rowline .grow input,.rowline .grow textarea{width:100%;margin-top:5px}
   .rowline textarea{resize:vertical;min-height:52px}
@@ -170,14 +170,14 @@
   }
   .srcgrp:last-child{margin-bottom:0}
   .srcgrp .sghd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
-  .srcgrp .sghd b{font-size:13.5px;font-weight:650}
+  .srcgrp .sghd b{font-size:14.5px;font-weight:650}
   .srcgrp .sghd .chip{
-    font-size:10.5px;line-height:1.7;padding:0 8px;border-radius:999px;flex:none;
+    font-size:11.5px;line-height:1.7;padding:0 8px;border-radius:999px;flex:none;
     border:1px solid rgba(90,162,240,.35);color:var(--blue2);background:rgba(90,162,240,.13);
   }
-  .srcgrp .sghd .sgmeta{font-size:11.5px;color:var(--muted)}
+  .srcgrp .sghd .sgmeta{font-size:12.5px;color:var(--muted)}
   .srcgrp .sghd .sguse{
-    font-size:11.5px;color:var(--muted);flex:1 1 auto;min-width:0;text-align:right;
+    font-size:12.5px;color:var(--muted);flex:1 1 auto;min-width:0;text-align:right;
   }
   @media (max-width:820px){
     .srcgrp{padding:11px 12px;border-radius:14px}
@@ -185,54 +185,54 @@
   }
   .srcrow{border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)}
   .srcrow .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .srcrow .nm{flex:1;min-width:150px;font-size:13px}
+  .srcrow .nm{flex:1;min-width:150px;font-size:14px}
   /* 系列选择：一眼看出这个源喂给哪一路、服务哪个域名 */
   .srcrow select.rt{
-    flex:none;max-width:230px;padding:4px 6px;font-size:11.5px;
+    flex:none;max-width:230px;padding:4px 6px;font-size:12.5px;
     color:var(--blue2);border-color:rgba(90,162,240,.35);background:rgba(90,162,240,.10);
     border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;
   }
   @media (max-width:820px){
-    .srcrow select.rt{max-width:none;flex:1 1 100%;min-height:38px;font-size:12px}
+    .srcrow select.rt{max-width:none;flex:1 1 100%;min-height:38px;font-size:13px}
   }
-  .srcrow .u4,.srcrow .u6{width:100%;margin-top:6px;font-size:12px}
-  .srcnum{font-size:11.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace}
+  .srcrow .u4,.srcrow .u6{width:100%;margin-top:6px;font-size:13px}
+  .srcnum{font-size:12.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace}
   .srcnum b{color:var(--text);font-weight:600}
   .poolgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}
   .poolcell{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--panel2)}
-  .poolcell .n{font-size:20px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
-  .poolcell .l{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .poolcell .n{font-size:21px;font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .poolcell .l{font-size:12.5px;color:var(--muted);margin-top:3px}
   /* 卡头：系列 + 这一池只服务哪个域名，一眼对上 */
   .poolcell .phead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .poolcell .phead b{font-size:13px;font-weight:650}
+  .poolcell .phead b{font-size:14px;font-weight:650}
   .poolcell .chip{
-    font-size:10.5px;line-height:1.7;padding:0 8px;border-radius:999px;flex:none;
+    font-size:11.5px;line-height:1.7;padding:0 8px;border-radius:999px;flex:none;
     border:1px solid var(--glass-brd,var(--border));color:var(--muted);background:rgba(255,255,255,.06);
   }
   .poolcell .chip.ser{color:var(--blue2);background:rgba(90,162,240,.13);border-color:rgba(90,162,240,.35)}
   .poolcell .pdom{
-    font-size:11.5px;color:var(--muted);margin:5px 0 8px;
+    font-size:12.5px;color:var(--muted);margin:5px 0 8px;
     display:flex;align-items:center;gap:5px;flex-wrap:wrap;
   }
   .poolcell .pdom code{
-    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--text);
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text);
     background:rgba(255,255,255,.08);border-radius:7px;padding:1px 7px;overflow-wrap:anywhere;
   }
   html[data-theme="light"] .poolcell .pdom code{background:rgba(20,40,80,.07)}
   /* 这个池子的数到底由哪几个源给的：一行一个源，名字 + 数量 */
   .poolsrc{margin-top:8px;padding-top:7px;border-top:1px dashed var(--border)}
-  .poolsrc .h{font-size:10.5px;color:var(--muted);letter-spacing:.04em;margin-bottom:3px}
-  .poolsrc .r{display:flex;align-items:flex-start;gap:8px;font-size:11px;line-height:1.5;color:var(--text)}
+  .poolsrc .h{font-size:11.5px;color:var(--muted);letter-spacing:.04em;margin-bottom:3px}
+  .poolsrc .r{display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.5;color:var(--text)}
   .poolsrc .r i{flex:1;min-width:0;font-style:normal;white-space:normal;word-break:break-word;color:var(--muted)}
   .poolsrc .r b{font-weight:600;line-height:1.5;font-family:ui-monospace,Menlo,Consolas,monospace;flex:none}
   .poolsrc .r.gone i{color:#e2534b}
   .poolsrc .r.feed i{color:var(--blue)}
-  .poolsrc .more{font-size:11px;color:var(--muted);margin-top:2px}
+  .poolsrc .more{font-size:12px;color:var(--muted);margin-top:2px}
   /* 已自动清理的源：中性灰，折叠起来，不刺眼 */
   .delbox{border:1px solid var(--border);border-radius:10px;padding:6px 10px;background:var(--panel2);margin:0 0 12px}
-  .delbox summary{font-size:11.5px;color:var(--muted);cursor:pointer;outline:none}
+  .delbox summary{font-size:12.5px;color:var(--muted);cursor:pointer;outline:none}
   .delbox summary::-webkit-details-marker{color:var(--muted)}
-  .delbox .r{display:flex;align-items:baseline;gap:8px;font-size:11.5px;line-height:1.7;color:var(--muted);flex-wrap:wrap}
+  .delbox .r{display:flex;align-items:baseline;gap:8px;font-size:12.5px;line-height:1.7;color:var(--muted);flex-wrap:wrap}
   .delbox .r i{flex:1;min-width:120px;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
   .tag.official{color:var(--blue);border-color:rgba(59,142,234,.5)}
   .tag.third{color:var(--amber);border-color:rgba(192,125,26,.5)}
@@ -242,18 +242,18 @@
   .tag.hok{color:var(--green);border-color:rgba(47,158,99,.45)}
   .tag.hbad{color:#e2534b;border-color:rgba(226,83,75,.5)}
   .iplist{display:flex;flex-direction:column;gap:3px}
-  .iplist .row{display:flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
-  .iplist .lat{color:var(--muted);font-size:12px}
-  .route-card .rc-time{font-size:12.5px;color:var(--muted);margin-top:6px}
+  .iplist .row{display:flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;word-break:break-all}
+  .iplist .lat{color:var(--muted);font-size:13px}
+  .route-card .rc-time{font-size:13.5px;color:var(--muted);margin-top:6px}
 
-  table{width:100%;border-collapse:collapse;font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
   th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
-  th{color:var(--muted);font-weight:500;font-size:12px}
+  th{color:var(--muted);font-weight:500;font-size:13px}
   td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   tbody tr:hover{background:var(--panel2)}
-  .empty{color:var(--muted);text-align:center;padding:26px 0;font-size:13px}
+  .empty{color:var(--muted);text-align:center;padding:26px 0;font-size:14px}
 
-  .lat-pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-family:ui-monospace,monospace}
+  .lat-pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:13px;font-family:ui-monospace,monospace}
   .lat-good{background:rgba(63,185,80,.14);color:var(--green)}
   .lat-mid{background:rgba(210,153,34,.14);color:var(--amber)}
   .lat-bad{background:rgba(248,81,73,.14);color:var(--red)}
@@ -262,45 +262,45 @@
   .resolve-row{display:flex;gap:10px;flex-wrap:wrap}
   .resolve-row input{
     flex:1;min-width:200px;padding:10px 12px;border-radius:9px;border:1px solid var(--border);
-    background:var(--panel2);color:var(--text);font-size:14px;outline:none;
+    background:var(--panel2);color:var(--text);font-size:15px;outline:none;
   }
   .resolve-row input:focus{border-color:var(--blue)}
-  .resolve-meta{color:var(--muted);font-size:12px;margin:12px 0 4px}
+  .resolve-meta{color:var(--muted);font-size:13px;margin:12px 0 4px}
 
   /* 实时查询流（读 mosdns query_summary 日志） */
   .flexhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
   .qstat{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 10px}
   .qstat .s{flex:1 1 116px;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:8px 11px}
-  .qstat .s span{display:block;font-size:11px;color:var(--muted)}
-  .qstat .s b{display:block;font-size:17px;margin-top:2px;font-weight:600}
-  .qstat .s b small{font-size:11px;color:var(--muted);font-weight:400}
+  .qstat .s span{display:block;font-size:12px;color:var(--muted)}
+  .qstat .s b{display:block;font-size:18px;margin-top:2px;font-weight:600}
+  .qstat .s b small{font-size:12px;color:var(--muted);font-weight:400}
   .q-live{max-height:340px;overflow-y:auto;overflow-x:auto;border:1px solid var(--border);border-radius:10px}
-  .q-live table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .q-live table{width:100%;border-collapse:collapse;font-size:13.5px}
   .q-live th,.q-live td{padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:left}
-  .q-live th{position:sticky;top:0;background:var(--panel);z-index:1;font-size:11.5px}
+  .q-live th{position:sticky;top:0;background:var(--panel);z-index:1;font-size:12.5px}
   .q-live tbody tr:last-child td{border-bottom:none}
   .q-live .qname{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:normal;word-break:break-all;max-width:340px}
-  .q-live .qtype{font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin-left:6px}
-  .q-live .q-ok{color:var(--green);font-size:12px}
-  .q-live .q-hit{color:var(--blue2);font-size:12px}
-  .q-live .q-bad{color:var(--red);font-size:12px}
+  .q-live .qtype{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px;margin-left:6px}
+  .q-live .q-ok{color:var(--green);font-size:13px}
+  .q-live .q-hit{color:var(--blue2);font-size:13px}
+  .q-live .q-bad{color:var(--red);font-size:13px}
 
   .logbox{
     background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;
     height:calc(100vh - 250px);min-height:320px;overflow:auto;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-all;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14.5px;line-height:1.85;white-space:pre-wrap;word-break:break-all;
   }
   .tabs{display:flex;gap:6px;margin-bottom:12px}
-  .tab{padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12.5px}
+  .tab{padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:13.5px}
   .tab.active{background:var(--panel2);color:var(--blue2);border-color:var(--blue)}
 
   .form-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--border)}
   .form-row:last-child{border-bottom:none}
-  .form-row .lab{font-size:13px}
-  .form-row .lab small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;font-weight:400}
+  .form-row .lab{font-size:14px}
+  .form-row .lab small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px;font-weight:400}
   .form-row input[type=number]{width:130px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none}
-  .form-row input[type=text],.form-row input[type=password]{width:230px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-family:inherit;font-size:13px}
-  .form-row input:not([type]):not([class]){width:320px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-family:inherit;font-size:13px}
+  .form-row input[type=text],.form-row input[type=password]{width:230px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-family:inherit;font-size:14px}
+  .form-row input:not([type]):not([class]){width:320px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-family:inherit;font-size:14px}
   .form-row input:not([type]):not([class]):focus{border-color:var(--blue)}
   .form-row input[type=text]:focus,.form-row input[type=password]:focus,.form-row input[type=number]:focus{border-color:var(--blue)}
   .switch{position:relative;width:44px;height:24px;flex:0 0 auto}
@@ -309,33 +309,33 @@
   .slider:before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
   .switch input:checked + .slider{background:var(--blue)}
   .switch input:checked + .slider:before{transform:translateX(20px)}
-  .kv{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--border);font-size:13px}
+  .kv{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--border);font-size:14px}
   .kv:last-child{border-bottom:none}
   .kv .k{color:var(--muted)}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .toast{
     position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
     background:var(--panel);border:1px solid var(--border);color:var(--text);
-    padding:10px 18px;border-radius:10px;font-size:13px;box-shadow:var(--shadow);
+    padding:10px 18px;border-radius:10px;font-size:14px;box-shadow:var(--shadow);
     max-width:min(92vw,540px);white-space:normal;word-break:break-word;line-height:1.45;
     opacity:0;pointer-events:none;transition:.25s;z-index:100
   }
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-  .warn-box{background:rgba(226,160,38,.12);border:1px solid rgba(226,160,38,.4);color:#d99b1f;border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.65;margin:0 0 14px}
+  .warn-box{background:rgba(226,160,38,.12);border:1px solid rgba(226,160,38,.4);color:#d99b1f;border-radius:10px;padding:10px 12px;font-size:13.5px;line-height:1.65;margin:0 0 14px}
   .inline-form{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}
-  .inline-form input{flex:1;min-width:180px;padding:9px 11px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-size:13px}
+  .inline-form input{flex:1;min-width:180px;padding:9px 11px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);outline:none;font-size:14px}
   .inline-form input:focus{border-color:var(--blue)}
-  .diag-out{margin-top:12px;font-size:13px}
+  .diag-out{margin-top:12px;font-size:14px}
   .diag-out .line{display:flex;gap:10px;padding:5px 0;border-bottom:1px dashed var(--border);align-items:center;flex-wrap:wrap}
   .diag-out .line:last-child{border-bottom:none}
-  .diag-out .k{color:var(--muted);min-width:76px;font-size:12px}
+  .diag-out .k{color:var(--muted);min-width:76px;font-size:13px}
   .diag-out .v{flex:1;word-break:break-all}
-  .diag-out .foot{display:flex;align-items:center;gap:10px;margin-top:10px;color:var(--muted);font-size:11.5px}
-  .hint{margin:12px 0 0;color:var(--muted);font-size:12px;line-height:1.7}
+  .diag-out .foot{display:flex;align-items:center;gap:10px;margin-top:10px;color:var(--muted);font-size:12.5px}
+  .hint{margin:12px 0 0;color:var(--muted);font-size:13px;line-height:1.7}
   .muted{color:var(--muted)}
   .preview{
     margin:14px 0 0;padding:12px;background:var(--bg2);border:1px solid var(--border);
-    border-radius:10px;max-height:280px;overflow:auto;font-size:12px;line-height:1.7;
+    border-radius:10px;max-height:280px;overflow:auto;font-size:13px;line-height:1.7;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;color:var(--muted);
   }
   .pill b{color:var(--text)}
@@ -352,13 +352,13 @@
     }
     .side-brand,.side-foot{display:none}
     nav{flex-direction:row;width:100%;justify-content:space-around;gap:0;min-width:0}
-    nav a{flex-direction:column;gap:4px;font-size:10.5px;padding:6px 2px;flex:1 1 0;min-width:0;text-align:center}
+    nav a{flex-direction:column;gap:4px;font-size:11.5px;padding:6px 2px;flex:1 1 0;min-width:0;text-align:center}
     nav a i{width:14px;height:14px}
     .main{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 
     .topbar{padding:12px 14px;gap:8px}
-    .topbar h1{font-size:16px}
-    .topbar .btn{padding:7px 10px;font-size:12px}
+    .topbar h1{font-size:17px}
+    .topbar .btn{padding:7px 10px;font-size:13px}
 
     .content{padding:14px 12px 24px;max-width:100%}
     .status-strip{gap:10px 14px;margin-bottom:14px}
@@ -371,9 +371,9 @@
     .grid.c5 > :last-child:nth-child(odd){grid-column:auto}
     .grid.c2{grid-template-columns:1fr}
     .route-card{padding:12px}
-    .route-card .rc-line{font-size:15px;gap:6px}
-    .route-card .rc-line .ip.v6ip{font-size:13px}
-    .route-card .rc-line .ms{font-size:12.5px}
+    .route-card .rc-line{font-size:16px;gap:6px}
+    .route-card .rc-line .ip.v6ip{font-size:14px}
+    .route-card .rc-line .ms{font-size:13.5px}
 
     .card{padding:14px}
     /* 表格在手机上变卡片列表，避免"操作"列被挤出屏幕 */
@@ -386,23 +386,23 @@
     #listsTable tbody tr:last-child,#resultsTable tbody tr:last-child{margin-bottom:0}
     #listsTable td,#resultsTable td{
       display:flex;justify-content:space-between;align-items:center;gap:12px;
-      padding:4px 0;border:none;white-space:normal;font-size:12.5px;text-align:right;
+      padding:4px 0;border:none;white-space:normal;font-size:13.5px;text-align:right;
     }
     #listsTable td:before,#resultsTable td:before{
-      content:attr(data-label);color:var(--muted);flex:0 0 auto;text-align:left;font-size:12px;
+      content:attr(data-label);color:var(--muted);flex:0 0 auto;text-align:left;font-size:13px;
     }
     #listsTable td[data-label="清单"],#resultsTable td[data-label="路"]{
-      justify-content:flex-start;font-weight:600;font-size:13.5px;margin-bottom:2px;
+      justify-content:flex-start;font-weight:600;font-size:14.5px;margin-bottom:2px;
     }
     #listsTable td[data-label="清单"]:before,#resultsTable td[data-label="路"]:before{content:none}
     #listsTable td[data-label=""]{justify-content:flex-end;padding-top:8px}
     #listsTable td[data-label=""]:before{content:none}
     #listsTable td[data-label="状态"]{justify-content:flex-end;gap:6px}
     #listsTable td[data-label="状态"]:before{margin-right:auto}
-    th,td{padding:8px 8px;font-size:12px}
+    th,td{padding:8px 8px;font-size:13px}
 
     .resolve-row{flex-wrap:nowrap;gap:8px}
-    .resolve-row input{min-width:0;flex:1 1 auto;font-size:15px;padding:11px 12px}
+    .resolve-row input{min-width:0;flex:1 1 auto;font-size:16px;padding:11px 12px}
     .resolve-form .btn,.resolve-row .btn{flex:0 0 auto;padding:11px 16px}
 
     .form-row{flex-direction:column;align-items:stretch;gap:8px;padding:12px 0}
@@ -418,7 +418,10 @@
     .kv .mono,.kv span:last-child{word-break:break-all}
     /* 日志页占满可视高度，跟其他页面一样长，不要短一截 */
     #view-logs.active{display:flex;flex-direction:column;min-height:calc(100dvh - 180px)}
-    .logbox{height:auto;flex:1 1 auto;min-height:280px;font-size:11.5px;line-height:1.7}
+    /* 手机上给日志框固定高度，超出就在框里滚动——不要跟着内容无限拉长整页 */
+    .logbox{height:52vh;max-height:52vh;min-height:220px;flex:0 0 auto;
+      overflow-y:auto;-webkit-overflow-scrolling:touch;
+      font-size:14px;line-height:1.75;padding:10px}
     .tabs{overflow-x:auto;flex:none}
     .login-card{margin:14px;padding:22px 18px}
 
@@ -433,10 +436,10 @@
 
     /* 实时查询流在手机上：隐藏客户端列，其余列收窄 */
     .q-live .col-client{display:none}
-    .q-live th,.q-live td{padding:6px 7px;font-size:11.5px}
-    .q-live .qname{max-width:160px;font-size:11.5px}
+    .q-live th,.q-live td{padding:6px 7px;font-size:12.5px}
+    .q-live .qname{max-width:160px;font-size:12.5px}
     .qstat .s{flex:1 1 calc(50% - 5px);min-width:0}
-    .qstat .s b{font-size:15px}
+    .qstat .s b{font-size:16px}
     .inline-form .btn{flex:1 1 calc(50% - 5px);min-width:0}
   }
 
@@ -587,7 +590,7 @@
     .login-card{border-radius:26px}
     /* 卡片标题在手机上独占一行，不要被右边的说明挤成两行半 */
     .card > h3{display:block;line-height:1.45}
-    .card > h3 > span{display:block;margin-top:4px;font-size:11.5px;line-height:1.5}
+    .card > h3 > span{display:block;margin-top:4px;font-size:12.5px;line-height:1.5}
     .status-strip > .pill:has(#btnRunAll) .btn{box-shadow:0 10px 26px rgba(47,125,225,.42), inset 0 1px 0 rgba(255,255,255,.34)}
   }
 
@@ -601,15 +604,15 @@
     box-shadow:var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
   }
   .rcard .hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .rcard .hd b{font-size:14px;font-weight:650}
+  .rcard .hd b{font-size:15px;font-weight:650}
   .rcard .hd .chip{
-    font-size:10.5px;line-height:1.7;padding:0 8px;border-radius:999px;
+    font-size:11.5px;line-height:1.7;padding:0 8px;border-radius:999px;
     border:1px solid var(--glass-brd);color:var(--muted);background:rgba(255,255,255,.06);flex:none;
   }
   .rcard .hd .chip.ser{color:var(--blue2);background:rgba(90,162,240,.13);border-color:rgba(90,162,240,.35)}
-  .rcard .use{font-size:11.5px;color:var(--muted);margin:6px 0 11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .rcard .use{font-size:12.5px;color:var(--muted);margin:6px 0 11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .rcard .use code{
-    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--text);
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--text);
     background:rgba(255,255,255,.08);border-radius:7px;padding:1px 7px;
   }
   html[data-theme="light"] .rcard .use code{background:rgba(20,40,80,.07)}
@@ -619,16 +622,16 @@
     background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);
   }
   html[data-theme="light"] .rcard .ipl .r{background:rgba(255,255,255,.72);border-color:rgba(20,40,80,.08)}
-  .rcard .ipl .r .n{font-size:10.5px;color:var(--muted);min-width:13px;flex:none}
-  .rcard .ipl .r .ip{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;word-break:normal;overflow-wrap:anywhere;min-width:0}
-  .rcard .ipl .r .ms{margin-left:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--muted);flex:none}
+  .rcard .ipl .r .n{font-size:11.5px;color:var(--muted);min-width:13px;flex:none}
+  .rcard .ipl .r .ip{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px;word-break:normal;overflow-wrap:anywhere;min-width:0}
+  .rcard .ipl .r .ms{margin-left:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--muted);flex:none}
   @media (max-width:820px){
     .rcgrid{grid-template-columns:1fr;gap:12px}
     .rcard{border-radius:20px;padding:14px}
-    .rcard .ipl .r .ip{font-size:12.5px}
-    .rcard .hd b{font-size:14.5px}
+    .rcard .ipl .r .ip{font-size:13.5px}
+    .rcard .hd b{font-size:15.5px}
   }
-  .rcard .none{font-size:12.5px;color:var(--muted);padding:10px 2px}
+  .rcard .none{font-size:13.5px;color:var(--muted);padding:10px 2px}
   /* ---------- 定时任务表 ---------- */
   .schedtable{display:flex;flex-direction:column}
   .srow{
@@ -637,22 +640,22 @@
     padding:12px 0;border-bottom:1px solid var(--border);
   }
   .srow:last-child{border-bottom:none;padding-bottom:2px}
-  .srow .sname{font-size:13px;min-width:0}
-  .srow .sname small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;line-height:1.45}
+  .srow .sname{font-size:14px;min-width:0}
+  .srow .sname small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px;line-height:1.45}
   .srow .sfreq{
-    display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);
+    display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--muted);
     white-space:nowrap;justify-content:flex-start;min-width:0;
   }
   /* 控件统一高度，基线才齐；文字用 .u 撑到同样高度 */
   .srow .sfreq > *{height:34px;box-sizing:border-box}
-  .srow .sfreq .u{line-height:34px;flex:none;font-size:12.5px}
+  .srow .sfreq .u{line-height:34px;flex:none;font-size:13.5px}
   .srow .sfreq input[type=number]{
-    width:88px;flex:none;padding:0 8px;text-align:center;font-size:13px;
+    width:88px;flex:none;padding:0 8px;text-align:center;font-size:14px;
     font-family:ui-monospace,Menlo,Consolas,monospace;
   }
-  .srow .sfreq select{flex:1 1 auto;min-width:0;padding:0 8px;font-size:12.5px}
+  .srow .sfreq select{flex:1 1 auto;min-width:0;padding:0 8px;font-size:13.5px}
   .srow .sfreq select.hour{flex:0 0 84px}
-  .srow .snext{grid-column:1/-1;font-size:11.5px;color:var(--muted);margin-top:2px}
+  .srow .snext{grid-column:1/-1;font-size:12.5px;color:var(--muted);margin-top:2px}
   .srow .snext b{color:var(--text);font-weight:500}
   @media (max-width:820px){
     .srow{grid-template-columns:minmax(0,1fr) 46px;gap:6px 12px;padding:13px 0}
@@ -664,7 +667,7 @@
     .srow .sfreq input[type=number]{width:92px}
     .srow .sfreq select{flex:1 1 auto}
     .srow .sfreq select.hour{flex:0 0 auto;min-width:96px}
-    .srow .snext{font-size:11.5px}
+    .srow .snext{font-size:12.5px}
   }
 
   /* 分流清单卡里的「自动更新」条 */
@@ -674,11 +677,11 @@
     border:1px solid var(--glass-brd,var(--border));
     background:var(--glass2,var(--panel2));
   }
-  .listauto .lab{font-size:12.5px;font-weight:600}
-  .listauto select{padding:6px 8px;font-size:12.5px;min-width:92px}
+  .listauto .lab{font-size:13.5px;font-weight:600}
+  .listauto select{padding:6px 8px;font-size:13.5px;min-width:92px}
   .listauto select.hour{min-width:76px}
   .listauto select[hidden]{display:none}
-  .listauto #lstNext{font-size:12px}
+  .listauto #lstNext{font-size:13px}
   @media (max-width:820px){
     .listauto{gap:8px;padding:10px}
     .listauto select{min-height:40px;flex:1 1 120px;min-width:0}
@@ -692,7 +695,7 @@
 <!-- 登录 -->
 <div class="login-mask" id="loginMask">
   <form class="login-card" id="loginForm" autocomplete="off">
-    <div class="brand"><div class="dot-logo">M</div><b style="font-size:15px">MosDNS</b></div>
+    <div class="brand"><div class="dot-logo">M</div><b style="font-size:16px">MosDNS</b></div>
     <h2>登录智能优选控制台</h2>
     <p class="sub">初始账号 <b>admin</b> / 密码 <b>admin</b>，<b>首次登录会强制改密</b></p>
     <div class="field">
@@ -711,7 +714,7 @@
 <!-- 首次登录强制改密（不给跳过） -->
 <div class="login-mask hide" id="forceMask">
   <form class="login-card" id="forceForm" autocomplete="off">
-    <div class="brand"><div class="dot-logo">M</div><b style="font-size:15px">MosDNS</b></div>
+    <div class="brand"><div class="dot-logo">M</div><b style="font-size:16px">MosDNS</b></div>
     <h2>先改掉初始密码</h2>
     <p class="sub">默认的 <b>admin / admin</b> 是公开的，不改掉用不了控制台。</p>
     <div class="field">
@@ -812,7 +815,7 @@
       <!-- 结果 -->
       <section class="view" id="view-results">
         <div class="card">
-          <h3>五路优选结果 <span class="muted" style="font-weight:400;font-size:12px">（按系列分开；每一路的 IP 只用于它自己的域名，写入 /data/prefs 后重启引擎生效）</span></h3>
+          <h3>五路优选结果 <span class="muted" style="font-weight:400;font-size:13px">（按系列分开；每一路的 IP 只用于它自己的域名，写入 /data/prefs 后重启引擎生效）</span></h3>
           <div id="resultsTable"><div class="empty">加载中…</div></div>
         </div>
       </section>
@@ -829,7 +832,7 @@
       <!-- 配置 -->
       <section class="view" id="view-config">
         <div class="card" style="margin-bottom:16px">
-          <h3>定时任务 <span class="muted" style="font-weight:400;font-size:12px">（所有定时都在这，改完点保存立即生效，不用重启容器）</span></h3>
+          <h3>定时任务 <span class="muted" style="font-weight:400;font-size:13px">（所有定时都在这，改完点保存立即生效，不用重启容器）</span></h3>
           <div class="schedtable">
             <div class="srow">
               <div class="sname">五路优选<small>一轮五路跑完后的等待时间</small></div>
@@ -1012,7 +1015,7 @@
           <h3>运行信息</h3>
           <div class="kv"><span class="k">账号</span><span class="mono" id="infoUser">-</span></div>
           <div class="kv"><span class="k">五路串行</span><span>全局锁，任一时刻只跑一路</span></div>
-          <div class="kv"><span class="k">上游</span><span class="mono" style="font-size:12px">国外 DoH 直连（无代理）</span></div>
+          <div class="kv"><span class="k">上游</span><span class="mono" style="font-size:13px">国外 DoH 直连（无代理）</span></div>
           <div class="kv"><span class="k">数据目录</span><span class="mono">/data</span></div>
         </div>
       </section>
@@ -1055,14 +1058,14 @@
       <section class="view" id="view-source">
         <div class="card">
           <div class="flexhead">
-            <h3>IP 源 <span class="muted" style="font-weight:400;font-size:12px">（勾选启用 · 定时拉取 · 自动增删候选）</span></h3>
+            <h3>IP 源 <span class="muted" style="font-weight:400;font-size:13px">（勾选启用 · 定时拉取 · 自动增删候选）</span></h3>
             <div class="btns" style="display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn" id="btnSrcDiscover">扫描新源</button>
               <button class="btn" id="btnSrcAdd">+ 添加</button>
               <button class="btn primary" id="btnSrcSave">保存全部</button>
             </div>
           </div>
-          <p class="muted" style="margin:8px 0 14px;font-size:12.5px">
+          <p class="muted" style="margin:8px 0 14px;font-size:13.5px">
             官方源最权威、只给网段；第三方更新快、量小；镜像用于 raw 直连不通时兜底。
             只有勾上「启用」的源参与定时拉取和优选，取消勾选立即停止使用。
           </p>
@@ -1079,7 +1082,7 @@
               </select>
             </label>
             <label id="spHourWrap" hidden>几点 <select id="spHour"></select></label>
-            <span class="muted" id="spNext" style="font-size:12px"></span>
+            <span class="muted" id="spNext" style="font-size:13px"></span>
             <button class="btn" id="btnSrcPull" style="margin-left:auto">全部拉取</button>
           </div>
 
@@ -1093,7 +1096,7 @@
             <label class="chk" title="每天把所有源（含已停用的第三方）拉一遍，确认还能用">
               <input type="checkbox" id="hlOn"> 定时体检
             </label>
-            <span class="muted" id="hlNext" style="font-size:12px"></span>
+            <span class="muted" id="hlNext" style="font-size:13px"></span>
             <button class="btn" id="btnSrcHealth" style="margin-left:auto">立即体检</button>
           </div>
 
@@ -1101,11 +1104,11 @@
             <label class="chk" title="开着：拉不到的源直接删掉，列表里不留废源；关掉：只停用，等它自己恢复">
               <input type="checkbox" id="adOn"> 失效自动删除
             </label>
-            <span class="muted" id="adHint" style="font-size:12px"></span>
+            <span class="muted" id="adHint" style="font-size:13px"></span>
             <button class="btn" id="btnSrcGc">立即清理失效源</button>
             <button class="btn" id="btnSrcRestore" style="margin-left:auto">恢复内置源</button>
           </div>
-          <p class="muted" style="margin:0 0 12px;font-size:12px">
+          <p class="muted" style="margin:0 0 12px;font-size:13px">
             体检会逐个拉一次所有源（不只启用中的）。官方源失败只标红——它是权威定义，多半只是临时断网；
             非官方源拉不到就按上面的开关处理：<b>删除</b>（默认，<span id="adCnt">1</span> 次不通过就删）
             或只停用。删掉的源会从候选池里一并带走它还没验证过的 IP，已验证过、实测能通的 IP 保留。
@@ -1115,7 +1118,7 @@
           <div class="rowline" style="align-items:flex-start">
             <label class="grow">源订阅（一行一个清单地址，同步进来的源默认不启用）
               <textarea id="subBox" rows="2" placeholder="https://example.com/my-cf-sources.json"></textarea>
-              <span class="muted" style="font-size:11.5px">支持两种格式：① JSON 数组，每项 {name,url_v4,url_v6}；② 文本行「名称 | v4地址 | v6地址」或裸地址。</span>
+              <span class="muted" style="font-size:12.5px">支持两种格式：① JSON 数组，每项 {name,url_v4,url_v6}；② 文本行「名称 | v4地址 | v6地址」或裸地址。</span>
             </label>
             <button class="btn" id="btnSubSync">立即同步订阅</button>
           </div>
@@ -1133,33 +1136,33 @@
             <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
               <button class="btn primary" id="btnAddOk">添加并立即拉取</button>
               <button class="btn" id="btnAddCancel">取消</button>
-              <span class="muted" style="font-size:12px;align-self:center">添加后会马上拉一次，显示能拿到多少 v4 / v6</span>
+              <span class="muted" style="font-size:13px;align-self:center">添加后会马上拉一次，显示能拿到多少 v4 / v6</span>
             </div>
           </div>
 
           <div id="srcList"><div class="empty">加载中…</div></div>
-          <div class="muted" style="font-size:12px;margin-top:10px">
+          <div class="muted" style="font-size:13px;margin-top:10px">
             每条源后面的「系列 X → 域名」是这个源喂给哪一路：拉到的 IP 只进那一池，只服务那个域名，改了立即保存。
             点「看有多少IP」只拉取、不测速，用来确认地址还通、能拿到多少 v4 / v6。
           </div>
         </div>
 
         <div class="card" style="margin-top:16px">
-          <h3>候选池 <span class="muted" style="font-weight:400;font-size:12px">（五个池子分开：每池标了系列和它服务的域名，池里的数按源拆开）</span></h3>
+          <h3>候选池 <span class="muted" style="font-weight:400;font-size:13px">（五个池子分开：每池标了系列和它服务的域名，池里的数按源拆开）</span></h3>
           <div id="poolStat" class="poolgrid"><div class="empty">加载中…</div></div>
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
             <button class="btn" id="btnPoolPrune">清理失效 IP</button>
-            <span class="muted" style="font-size:12px">清掉已拉黑的、连续失败的、14 天没再出现的、超出上限的</span>
+            <span class="muted" style="font-size:13px">清掉已拉黑的、连续失败的、14 天没再出现的、超出上限的</span>
           </div>
         </div>
 
         <div class="card" style="margin-top:16px">
-          <h3>换 IP 记录 <span class="muted" style="font-weight:400;font-size:12px">（1034 一出现就换，不等下一轮）</span></h3>
+          <h3>换 IP 记录 <span class="muted" style="font-weight:400;font-size:13px">（1034 一出现就换，不等下一轮）</span></h3>
           <div id="swapList"><div class="empty">还没有换过 IP</div></div>
         </div>
 
         <div class="card" style="margin-top:16px">
-          <h3>分流清单 <span class="muted" style="font-weight:400;font-size:12px">（国内 IP 段随 APNIC 分配变化、CDN 网段随厂商发版变化，都可在这里更新）</span></h3>
+          <h3>分流清单 <span class="muted" style="font-weight:400;font-size:13px">（国内 IP 段随 APNIC 分配变化、CDN 网段随厂商发版变化，都可在这里更新）</span></h3>
           <!-- 自动更新：开关 / 周期 / 时刻，改完立即生效，不用手动点 -->
           <div class="listauto" id="listAutoBar">
             <label class="switch" title="关掉后只能手动点更新"><input type="checkbox" id="lstAutoOn"><span class="slider"></span></label>
@@ -1173,13 +1176,13 @@
             </select>
             <select id="lstHour" class="hour"></select>
             <span class="muted" id="lstNext">—</span>
-            <span class="muted" id="lstHint" style="font-size:11.5px">四份清单一起按这个时间自动拉；内容没变不重载引擎</span>
+            <span class="muted" id="lstHint" style="font-size:12.5px">四份清单一起按这个时间自动拉；内容没变不重载引擎</span>
           </div>
           <div id="listsTable"><div class="empty">加载中…</div></div>
           <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center">
             <button class="btn primary" id="btnListsUpdateAll">全部更新</button>
             <button class="btn" id="btnReloadEngine">重载引擎</button>
-            <span class="muted" style="font-size:12px">更新后自动重载引擎，1~2 秒内生效</span>
+            <span class="muted" style="font-size:13px">更新后自动重载引擎，1~2 秒内生效</span>
           </div>
           <pre class="preview" id="listPreview" hidden></pre>
         </div>
@@ -1718,7 +1721,7 @@
       if (it.next) {
         var nx = document.createElement("div");
         nx.className = "muted";
-        nx.style.cssText = "font-size:11px;margin-top:2px;white-space:nowrap";
+        nx.style.cssText = "font-size:12px;margin-top:2px;white-space:nowrap";
         nx.textContent = fmtNext(it.next);
         c4.appendChild(nx);
       }
@@ -1739,7 +1742,7 @@
       var sch = state.listSched || {};
       var au = document.createElement("div");
       au.className = "muted";
-      au.style.cssText = "font-size:11px;margin-top:2px;white-space:nowrap";
+      au.style.cssText = "font-size:12px;margin-top:2px;white-space:nowrap";
       au.textContent = it.auto_enabled
         ? ("自动 · " + cycleText(sch.cycle, sch.hour))
         : (it.auto ? "自动已关 · 手动" : "手动");
@@ -1747,10 +1750,10 @@
 
       var c7 = document.createElement("td");
       var b1 = document.createElement("button");
-      b1.className = "btn"; b1.style.cssText = "padding:4px 10px;font-size:12px;margin-right:6px";
+      b1.className = "btn"; b1.style.cssText = "padding:4px 10px;font-size:13px;margin-right:6px";
       b1.textContent = "更新"; b1.onclick = function(){ updateList(k); };
       var b2 = document.createElement("button");
-      b2.className = "btn"; b2.style.cssText = "padding:4px 10px;font-size:12px";
+      b2.className = "btn"; b2.style.cssText = "padding:4px 10px;font-size:13px";
       b2.textContent = "预览"; b2.onclick = function(){ previewList(k); };
       c7.appendChild(b1); c7.appendChild(b2);
 
@@ -2115,7 +2118,7 @@
           '<span class="muted">' + escH(e.reason || "") + "</span>" +
           (e.to ? ' <span class="muted">→</span> <span class="mono">' + escH(e.to) + "</span>" : "") +
         "</span>" +
-        '<span class="muted" style="font-size:12px;white-space:nowrap">' + fmtTime(e.t) + "</span>" +
+        '<span class="muted" style="font-size:13px;white-space:nowrap">' + fmtTime(e.t) + "</span>" +
       "</div>";
     }).join("");
   }
