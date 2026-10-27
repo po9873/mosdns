@@ -13,7 +13,9 @@ export PREF_PROBE_EXPECT='<title>Google'
 
 # 香港站、裸域和主站是同一批前端节点，一起映射；否则 google.com.hk / google.com
 # 仍会拿到上游的污染结果（实测上游返回的是 Facebook 段 69.171.x 这种脏答案）。
-export PREF_EXTRA_DOMAINS="www.google.com.hk google.com"
+# Gmail 同属 Google 前端：mail 是网页版，accounts 是登录，www.googleapis 是
+# 网页端调用的接口。不一起映射的话搜索能开、登录/收发信仍走污染解析。
+export PREF_EXTRA_DOMAINS="www.google.com.hk google.com mail.google.com accounts.google.com www.googleapis.com"
 
 source /app/scheduler/common.sh
 acquire_lock || exit 1
