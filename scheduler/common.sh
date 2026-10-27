@@ -195,8 +195,55 @@ write_route() {
 }
 
 merge_hosts() {
-  cat "$PREF_DIR"/*.hosts 2>/dev/null | awk 'NF' | sort -u > "$PREF_DIR/all.hosts.tmp"
-  mv "$PREF_DIR/all.hosts.tmp" "$PREF_DIR/all.hosts"
+  # 注意：不能 cat "$PREF_DIR"/*.hosts —— 那样会把 all.hosts 自己也合进去，
+  # 每跑一轮就把上一轮内容再追加一遍，文件无限膨胀、同一域名堆一堆重复行。
+  # 只合并各路自己的 cf.hosts / google.hosts / ... ，再整体去重。
+  local f base out="$PREF_DIR/all.hosts.tmp"
+  : > "$out"
+  for f in "$PREF_DIR"/*.hosts; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f")
+    case "$base" in
+      all.hosts|all.hosts.*) continue ;;
+    esac
+    awk 'NF' "$f" >> "$out"
+  done
+  # 同一域名只留一行；IP 先归一化再去重
+  # （同一个 IPv6 可能有 2606:4700:0:af:… 和 2606:4700:0000:00af:… 两种写法，其实是同一个地址）
+  python3 - "$out" <<'PY'
+import sys, ipaddress
+src = sys.argv[1]
+
+def norm(x):
+    try:
+        return str(ipaddress.ip_address(x))
+    except ValueError:
+        return x
+
+best = {}
+for ln in open(src, encoding="utf-8"):
+    p = ln.split()
+    if not p:
+        continue
+    dom = p[0]
+    ips, seen = [], set()
+    for x in p[1:]:
+        k = norm(x)
+        if k in seen:
+            continue
+        seen.add(k)
+        ips.append(k)
+    if not ips:
+        continue
+    cur = best.get(dom)
+    if cur is None or len(ips) > len(cur):
+        best[dom] = ips
+
+with open(src, "w", encoding="utf-8") as f:
+    for dom in sorted(best):
+        f.write(dom + " " + " ".join(best[dom]) + "\n")
+PY
+  mv "$out" "$PREF_DIR/all.hosts"
 }
 
 # 让最新 hosts 生效：杀掉 mosdns，由 entrypoint supervisor 自动重启（约 1 秒）
