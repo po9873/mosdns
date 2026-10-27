@@ -224,10 +224,19 @@ start_mosdns() {
 mosdns_loop() {
   while true; do
     pid=""
-    [ -f "$DATA_DIR/mosdns.pid" ] && pid=$(cat "$DATA_DIR/mosdns.pid" 2>/dev/null)
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      sleep 1
-      continue
+    if [ -f "$DATA_DIR/mosdns.pid" ]; then
+      pid=$(cat "$DATA_DIR/mosdns.pid" 2>/dev/null)
+      # pid 号会跨容器复用：重建容器后旧 pid 很可能被 UI/调度器占上，
+      # 这时 kill -0 依然成功，就会一直以为引擎还活着、永远不启动它。
+      # 所以必须确认这个号上跑的确实是 mosdns。
+      cmdline=""
+      if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ]; then
+        cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)
+      fi
+      case "$cmdline" in
+        *mosdns*) sleep 1; continue ;;
+        *) rm -f "$DATA_DIR/mosdns.pid"; pid="" ;;
+      esac
     fi
     start_mosdns
     sleep 1
