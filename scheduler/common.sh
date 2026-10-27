@@ -469,6 +469,22 @@ pick_best() {
     }'
 }
 
+# 从候选池里补「历史验证通过」的备胎。
+# 参数：route、还差几个、已经在用的行（多行 "ip ..."）
+# 输出：每行「ip - backup -」（TTFB 未知，界面显示为「备胎」）
+# 为什么只认 ok>0 的：这些 IP 以前真被本机验证通过过，比换一个从没测过的安全。
+fill_backup() {
+  local route="$1" need="$2" have="$3"
+  local bf="$PREF_DIR/.$route.have" cf="$PREF_DIR/.$route.cand" ex
+  [ "${need:-0}" -lt 1 ] && return 0
+  printf '%s\n' "$have" | awk 'NF{print $1}' > "$bf"
+  sub_cli pool "$route" 40 --verified > "$cf" 2>/dev/null
+  ex=$(grep -vxF -f "$bf" "$cf" 2>/dev/null | awk 'NF' | head -n "$need")
+  rm -f "$bf" "$cf" 2>/dev/null
+  [ -n "$ex" ] && printf '%s\n' "$ex" | awk 'NF{print $1, "-", "backup", "-"}'
+  return 0
+}
+
 # ---------- 单路优选主流程 ----------
 run_route() {
   local route="$1" seed="$2" port="${3:-443}"
@@ -575,13 +591,58 @@ run_route() {
             slow=1; why="两轮实测吞吐都只有 ${vspeed%.*}KB/s（低于 ${st_speed}KB/s）"
           fi
           if [ -z "$slow" ]; then
-            local shown_speed
+            local shown_speed live_rows orig_n state_rows
             shown_speed=$(printf '%s\n' "$live_out" | awk '$4!="-"{print $4}' | sort -n | tail -1)
             rm -f "$afail" 2>/dev/null
             log "$route: 稳定模式，${live_n} 个 IP 能打开且不慢（响应 ${vbest:-?}ms${shown_speed:+ / ${shown_speed#\~}KB/s}），跳过全量重探（约 $(( (mnow - mprev) / 60 )) 分钟前优选过）"
+            live_rows=$(printf '%s\n' "$live_out" | awk 'NF{print $1, $3, "ok", $4}')
+            state_rows="$live_rows"
+            # 稳定归稳定，但「在用的 IP 太少」也得管：ghcr 这种天然只选得出 1 个，
+            # 它一抖整路就没得换。这里只做一件事——补到 keep_min 个，别的不动。
+            if [ "${live_n:-0}" -lt "$keep_min" ]; then
+              orig_n="$live_n"
+              local want hf candf candlist vres added extra2 nb2
+              want=$(( (keep_min - live_n) * 4 ))
+              [ "$want" -gt 12 ] && want=12
+              hf="$PREF_DIR/.$route.have"; candf="$PREF_DIR/.$route.cand"
+              printf '%s\n' "$live_rows" | awk 'NF{print $1}' > "$hf"
+              sub_cli pool "$route" 40 > "$candf" 2>/dev/null
+              candlist=$(grep -vxF -f "$hf" "$candf" 2>/dev/null | awk 'NF' | head -n "$want")
+              rm -f "$hf" "$candf" 2>/dev/null
+              # ① 先现场验几个池里的新候选：它们可能比备胎更好，验证通过才算数
+              if [ -n "$candlist" ]; then
+                vres=$(printf '%s\n' "$candlist" \
+                       | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 "$conc" 1 "$ppath" "$pexp" 2>/dev/null \
+                       | awk '$2=="ok"{print $1, $3, "ok", ($4==""?"-":$4)}' | sort -k2 -n \
+                       | head -n $(( keep_min - live_n )))
+                if [ -n "$vres" ]; then
+                  added=$(printf '%s\n' "$vres" | awk 'NF' | wc -l | tr -d ' ')
+                  printf '%s\n' "$vres" | awk 'NF{print $1, "verify"}' | sub_cli feed "$route" >/dev/null 2>&1
+                  printf '%s\n' "$vres" | awk 'NF{print $1, "ok"}' | sub_cli bump-many "$route" >/dev/null
+                  live_rows=$(printf '%s\n%s' "$live_rows" "$vres")
+                  state_rows="$live_rows"
+                  live_n=$(( orig_n + added ))
+                  log "$route: 在用的只有 ${orig_n} 个，现场验了池内 $(printf '%s\n' "$candlist" | awk 'NF' | wc -l | tr -d ' ') 个候选，补进 ${added} 个"
+                fi
+              fi
+              # ② 还不够就用池里历史验证通过的备胎（没复测，标 backup）
+              if [ "${live_n:-0}" -lt "$keep_min" ]; then
+                extra2=$(fill_backup "$route" $(( keep_min - live_n )) "$live_rows")
+                nb2=$(printf '%s\n' "$extra2" | awk 'NF' | wc -l | tr -d ' ')
+                if [ "${nb2:-0}" -gt 0 ]; then
+                  live_rows=$(printf '%s\n%s' "$live_rows" "$extra2")
+                  state_rows="$live_rows"
+                  live_n=$(( live_n + nb2 ))
+                  log "$route: 再从池里补了 ${nb2} 个历史验证过的备胎"
+                fi
+              fi
+              # 补过就重写 hosts（没补出东西就不动它，别白改一次文件触发重载）
+              if [ "${live_n:-0}" -gt "$orig_n" ]; then
+                write_route "$route" "$target" "$live_rows" || true
+              fi
+            fi
             # 把本轮实测结果写回，界面「已选 IP + 速度」不会因为跳过重探而变空
-            write_state "$route" "$target" "stable" \
-              "$(printf '%s\n' "$live_out" | awk '{print $1, $3, "ok", $4}')" "" "${live_n}" 0 0
+            write_state "$route" "$target" "stable" "$state_rows" "" "${live_n}" 0 0
             return 0
           fi
           log "$route: 稳定模式检测到变慢（$why），触发全量重探"
@@ -734,12 +795,9 @@ run_route() {
   # 标 backup —— 界面上看得出来是备胎，守护进程也会优先复核它们。
   local n_backup=0
   if [ "${total:-0}" -gt 0 ] && [ "$total" -lt "$keep_min" ]; then
-    local havef="$PREF_DIR/.$route.have" candf="$PREF_DIR/.$route.cand" extra need
+    local extra need
     need=$(( keep_min - total ))
-    { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF{print $1}' > "$havef"
-    sub_cli pool "$route" 40 --verified > "$candf" 2>/dev/null
-    extra=$(grep -vxF -f "$havef" "$candf" 2>/dev/null | awk 'NF' | head -n "$need")
-    rm -f "$havef" "$candf" 2>/dev/null
+    extra=$(fill_backup "$route" "$need" "$(printf '%s\n%s' "$best4" "$best6")")
     if [ -n "$extra" ]; then
       best4=$(printf '%s\n%s\n' "$best4" "$(printf '%s\n' "$extra" | awk '!/:/{print $1, "-", "backup", "-"}')" | awk 'NF')
       best6=$(printf '%s\n%s\n' "$best6" "$(printf '%s\n' "$extra" | awk '/:/{print $1, "-", "backup", "-"}')" | awk 'NF')
