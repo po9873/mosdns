@@ -33,3 +33,16 @@ if [ -n "$pkgs" ]; then
 fi
 
 run_route "ghcr" "/app/config/seeds/ghcr.txt" 443
+rc=$?
+
+# 稳定模式（当前 IP 能开且不慢）不会重写 hosts，那样镜像层域名这一行就永远进不去，
+# 结果就是「ghcr.io 能解析、docker pull 还是卡在拉层」。这里单独补一次：
+# 缺就追加 + 重新合并，引擎重载交给调用方（scheduler 一轮跑完统一判断）。
+if [ -s "$PREF_EXTRA_LINES" ] && [ -s "$PREF_DIR/ghcr.hosts" ]; then
+  if ! grep -q "^pkg-containers" "$PREF_DIR/ghcr.hosts"; then
+    awk 'NF' "$PREF_EXTRA_LINES" >> "$PREF_DIR/ghcr.hosts"
+    merge_hosts
+    log "ghcr: 补上镜像层域名映射（docker pull 拉镜像层要用）"
+  fi
+fi
+exit $rc
