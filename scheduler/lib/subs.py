@@ -1420,18 +1420,29 @@ def main():
         if not os.path.exists(EVENT_FILE):
             jsave(EVENT_FILE, {"events": []})
         d = load_src()
-        have = {it.get("key") for it in d["items"]}
+        by_key = {it.get("key"): it for it in d["items"]}
+        changed = False
         for p in PRESETS:
-            if p["key"] in have:
+            it = by_key.get(p["key"])
+            if it is None:
+                d["items"].append({
+                    "key": p["key"], "name": p["name"], "note": p.get("note", ""),
+                    "kind": p["kind"], "url_v4": p["url_v4"], "url_v6": p["url_v6"],
+                    "enabled": p.get("enabled", True), "route": p.get("route", "cf"),
+                    "fmt": p.get("fmt", ""), "domains": p.get("domains"),
+                    "last_fetch": 0, "last_test": None, "status": "",
+                })
+                changed = True
                 continue
-            d["items"].append({
-                "key": p["key"], "name": p["name"], "note": p.get("note", ""),
-                "kind": p["kind"], "url_v4": p["url_v4"], "url_v6": p["url_v6"],
-                "enabled": p.get("enabled", True), "route": p.get("route", "cf"),
-                "fmt": p.get("fmt", ""), "domains": p.get("domains"),
-                "last_fetch": 0, "last_test": None, "status": "",
-            })
-        save_src(d)
+            # 老部署升级：内置源后来加的「解析规则」（fmt / domains）要补上，
+            # 否则升级完还是按老办法整份照收，域名白名单等于没生效。
+            # 只补空的，不覆盖（用户手动改过就不动）。
+            for k in ("fmt", "domains"):
+                if p.get(k) and not it.get(k):
+                    it[k] = p[k]
+                    changed = True
+        if changed:
+            save_src(d)
         return 0
 
     if cmd == "status":
