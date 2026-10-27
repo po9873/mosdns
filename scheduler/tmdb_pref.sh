@@ -20,9 +20,11 @@ export PREF_PROBE_TARGET=www.themoviedb.org
 export PREF_PROBE_PATH='/'
 export PREF_PROBE_EXPECT=''
 
-# 网页 / API / 图片是同一批 CloudFront 边缘节点，三个域名都要映射，
-# 否则浏览器打开站点后，海报（image.tmdb.org）和 API 请求仍然走污染解析。
-export PREF_EXTRA_DOMAINS="api.tmdb.org image.tmdb.org"
+# 同一批 CloudFront 边缘节点服务这几个域名，都要映射：
+#   api.tmdb.org         官方 API 短域名
+#   api.themoviedb.org   Jellyfin / Emby 默认刮削地址（少了它海报出不来）
+#   image.tmdb.org       海报
+export PREF_EXTRA_DOMAINS="api.tmdb.org api.themoviedb.org image.tmdb.org"
 
 # 测速地址：www.themoviedb.org 根路径只回 2.6KB 的挑战页，算不出带宽。
 # 拿一张 w500 海报（约 160KB）来测，直连选中的 IP、SNI 用 image.tmdb.org，
