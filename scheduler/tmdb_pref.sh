@@ -24,4 +24,10 @@ export PREF_PROBE_EXPECT=''
 # 否则浏览器打开站点后，海报（image.tmdb.org）和 API 请求仍然走污染解析。
 export PREF_EXTRA_DOMAINS="api.tmdb.org image.tmdb.org"
 
+# 测速地址：www.themoviedb.org 根路径只回 2.6KB 的挑战页，算不出带宽。
+# 拿一张 w500 海报（约 160KB）来测，直连选中的 IP、SNI 用 image.tmdb.org，
+# 测的是同一条 CloudFront 链路。这张图是 TMDB 上最经典的条目之一，
+# 路径长期有效；哪天挂了也不影响优选，只是这一行没有速度数字。
+export PREF_SPEED_URL='https://image.tmdb.org/t/p/w500/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg'
+
 run_route "tmdb" "/app/config/seeds/tmdb.txt" 443

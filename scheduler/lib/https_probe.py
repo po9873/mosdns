@@ -27,9 +27,9 @@ import time
 CF_ERR = re.compile(r"[Ee]rror(?:\s+code:?)?\s+(10\d\d)", re.I)
 STATUS_RE = re.compile(r"^HTTP/1\.[01]\s+(\d{3})")
 
-BODY_CAP = 65536      # 最多读 64KB 用于估算速度，够准又不拖时间
+BODY_CAP = 262144     # 最多读 256KB 用于估算速度
 BODY_MIN = 4096       # 少于 4KB 的响应体太小，算出来的速度没意义
-BODY_BUDGET = 4.0     # 读 body 最多再花 4 秒
+BODY_BUDGET = 6.0     # 读 body 最多再花 6 秒
 
 # 吞吐样本可信门槛：只有真的传完 ≥32KB，算出来的 KB/s 才拿来判断「这台是不是慢了」。
 # 为什么：同一个 IP、同一个地址，实测有 158 / 289 / 532 KB/s 三种结果——
@@ -101,32 +101,47 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None):
         if status == 429:
             # 对方限速：只是这一会儿忙，不代表这个 IP 坏了，别拉黑、也别写进 hosts
             return "busy", ttfb, None, False
+        if status == 421:
+            # 421 Misdirected：证书对、TCP 通，但这个 IP 不服务这个域名。
+            # 典型场景：CloudFront 上能服务 www.imdb.com 的 IP，对
+            # m.media-amazon.com 回 421。必须判成不能用，否则会把海报域名
+            # 指到一个根本不认它的 IP 上（页面打得开、图全裂）。
+            return "wrong", ttfb, None, False
         if status >= 500:
             # 5xx 也顺手测速度，方便判断是节点挂了还是单纯慢
             return "http%d" % status, ttfb, None, False
 
-        # ---- 继续读 body：算下载吞吐；传了 expect 就尽量读到出现为止 ----
+        # ---- 继续读 body：算下载吞吐；传了 expect 就边读边看内容对不对 ----
+        # 注意：命中 expect 只是「内容判定通过」，不能就此停手。
+        # 以前命中就 break，而 Google 首页的 <title> 在前 1KB 内，样本只有 1KB
+        # → 速度永远是空的。这条路上「判定」和「测速」必须分开：判定通过后
+        # 继续把样本读够（到 SPEED_TRUST_BYTES），速度才有意义。
         body = bytearray(body_head)
         got = len(body)
         needle = expect.encode() if expect else b""
+        hit = bool(needle) and needle in body
         t_dl = time.time()
         deadline = t_dl + BODY_BUDGET
         while got < BODY_CAP and time.time() < deadline:
-            if needle and needle in bytes(body):
+            if hit and got >= SPEED_TRUST_BYTES:
                 break
             try:
-                d = ss.recv(16384)
+                d = ss.recv(65536)
             except Exception:
                 break
             if not d:
                 break
             body += d
             got = len(body)
+            if needle and not hit:
+                # 只搜「新到的那段 + 一个 needle 长度的重叠区」，别每次全文重扫
+                if needle in body[-(len(d) + len(needle)):]:
+                    hit = True
         span = time.time() - t_dl
 
         # 能连上、证书也对，但拿不到该服务应有的内容 → 这个地址不提供该服务。
         # （典型：Google 前端节点对任何路径都回 404，看着「通」，实际翻译/搜索都不通。）
-        if needle and needle not in bytes(body):
+        if needle and not hit:
             return "wrong", ttfb, None, False
 
         speed = None
@@ -146,7 +161,79 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None):
             pass
 
 
-def check(item, domain, port, timeout, samples=1, path="/", expect=None):
+def _speed_probe(ip, url, timeout=8, budget=6.0):
+    """单独测一次下载吞吐：直连 ip，SNI/Host 用 URL 里的域名。
+
+    为什么需要：有些路「能用的样子」本身就是个小响应——Cloudflare 首页 178B、
+    TMDB 的 403 页 2.6KB、ghcr 的 401 空 body。拿这种响应算速度等于没算。
+    所以这些路额外配一个「已知会吐大文件」的地址（PREF_SPEED_URL），只测速、
+    不参与「能不能用」的判定。测的是同一个 IP、同一条链路，数值是可信的。
+
+    Cloudflare 有官方测速端点 speed.cloudflare.com/__down?bytes=N，任何一个
+    边缘 IP 都能服务（实测 v4/v6 均 200，270KB / 200~330KB/s）；
+    TMDB 的图走 image.tmdb.org，一张 w500 海报约 160KB。
+    返回 (speed_kbps, 样本字节数)，失败返回 (None, 0)。
+    """
+    m = re.match(r"^https?://([^/]+)(/.*)?$", url or "")
+    if not m:
+        return None, 0
+    host = m.group(1)
+    path = m.group(2) or "/"
+    v6 = ":" in ip
+    fam = socket.AF_INET6 if v6 else socket.AF_INET
+    addr = (ip, 443, 0, 0) if v6 else (ip, 443)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    try:
+        ctx.set_alpn_protocols(["http/1.1"])
+    except Exception:
+        pass
+    s = socket.socket(fam, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(addr)
+        ss = ctx.wrap_socket(s, server_hostname=host)
+        req = ("GET %s HTTP/1.1\r\nHost: %s\r\n"
+               "User-Agent: Mozilla/5.0 (compatible; mosdns-pref/1.0)\r\n"
+               "Accept: */*\r\nConnection: close\r\n\r\n" % (path, host))
+        ss.sendall(req.encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf and len(buf) < 24576:
+            d = ss.recv(4096)
+            if not d:
+                break
+            buf += d
+        head, _, body = buf.partition(b"\r\n\r\n")
+        m2 = STATUS_RE.match(head.decode("utf-8", "replace"))
+        if not m2 or int(m2.group(1)) >= 400:
+            return None, len(body)
+        got = len(body)
+        t0 = time.time()
+        deadline = t0 + budget
+        while got < BODY_CAP and time.time() < deadline:
+            try:
+                d = ss.recv(65536)
+            except Exception:
+                break
+            if not d:
+                break
+            body += d
+            got = len(body)
+        span = time.time() - t0
+        if got < BODY_MIN or span <= 0.001:
+            return None, got
+        return (got / 1024.0) / span, got
+    except Exception:
+        return None, 0
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def check(item, domain, port, timeout, samples=1, path="/", expect=None, speed_url=None):
     """对单个 IP 探测；samples>1 时多测几次取「最好的一次」。
 
     为什么要多测：单次吞吐会抖动（实测同一 IP 158/289/532 KB/s），拿一次结果
@@ -183,6 +270,12 @@ def check(item, domain, port, timeout, samples=1, path="/", expect=None):
             elif speed > nsp:
                 nsp, nest = speed, est
         best = (st, nt, nsp, nest)
+    # 内容判定那一发拿到的是小响应（cf 首页 178B、tmdb 403 页 2.6KB）→ 没有速度。
+    # 这一路如果配了测速地址，就再打一发大的，把带宽补上。
+    if speed_url and best[2] is None:
+        sp2, bytes2 = _speed_probe(ip, speed_url, timeout)
+        if sp2 is not None:
+            best = (best[0], best[1], sp2, bytes2 < SPEED_TRUST_BYTES)
     return ip, best[0], best[1], best[2], best[3]
 
 
@@ -202,6 +295,7 @@ def main():
     samples = max(1, int(sys.argv[5])) if len(sys.argv) > 5 else 1
     path = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] else "/"
     expect = sys.argv[7] if len(sys.argv) > 7 and sys.argv[7] else None
+    speed_url = sys.argv[8] if len(sys.argv) > 8 and sys.argv[8] else None
 
     items = [l.strip() for l in sys.stdin if l.strip()]
     if not items:
@@ -209,7 +303,7 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=conc) as ex:
         for ip, st, ttfb, speed, est in ex.map(
-                lambda i: check(i, domain, port, timeout, samples, path, expect), items):
+                lambda i: check(i, domain, port, timeout, samples, path, expect, speed_url), items):
             sp = fmt(speed)
             if sp != "-" and est:
                 sp = "~" + sp          # ~ 表示样本太小，只作参考、不参与「变慢」判定

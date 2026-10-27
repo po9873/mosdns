@@ -219,7 +219,7 @@ filter_bad_ips() {
 write_route() {
   local route="$1" domain="$2"
   shift 2
-  local pairs ips
+  local pairs ips dok
   pairs=$(printf '%s\n' "$@" | awk 'NF')
   if [ -z "$pairs" ]; then
     log "$route: 无可用 IP，保留上一轮结果"
@@ -237,8 +237,19 @@ write_route() {
     # 不能所有路都这么干：github.com 和 raw.githubusercontent.com 根本不是一批 IP。
     for d in ${PREF_EXTRA_DOMAINS:-}; do
       [ "$d" = "$domain" ] && continue
+      # 附加域名也得逐个 IP 验一遍，不能照抄主域名的 IP。
+      # 「这个 IP 能服务 A 域名」不等于「能服务 B 域名」——CloudFront 上实测
+      # IMDb 那批 IP 里就有一个对 m.media-amazon.com 回 421 Misdirected，
+      # 照抄过去的结果是网页能开、海报全裂。
+      dok=$(printf '%s\n' $ips \
+            | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 / "" "" 2>/dev/null \
+            | awk '$2=="ok"{print $1}')
+      if [ -z "$dok" ]; then
+        log "$route: 附加域名 $d 没有 IP 通过校验，本次不映射（否则那个域名会打不开）"
+        continue
+      fi
       printf '%s' "$d"
-      printf ' %s' $ips
+      printf ' %s' $dok
       printf '\n'
     done
   } > "$PREF_DIR/$route.hosts"
@@ -580,7 +591,7 @@ run_route() {
       if [ -n "$cur" ]; then
         case "$(setting verify_https)" in
           false|False|0) vchk=$(printf '%s\n' "$cur" | awk '{print $1, "ok", "?", "-"}') ;;
-          *) vchk=$(printf '%s\n' "$cur" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 "$conc" 2 "$ppath" "$pexp" 2>/dev/null) ;;
+          *) vchk=$(printf '%s\n' "$cur" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 "$conc" 2 "$ppath" "$pexp" "${PREF_SPEED_URL:-}" 2>/dev/null) ;;
         esac
         live_out=$(printf '%s\n' "$vchk" | awk '$2=="ok"')
         live_n=$(printf '%s\n' "$live_out" | awk 'NF' | wc -l | tr -d ' ')
@@ -618,7 +629,7 @@ run_route() {
               # ① 先现场验几个池里的新候选：它们可能比备胎更好，验证通过才算数
               if [ -n "$candlist" ]; then
                 vres=$(printf '%s\n' "$candlist" \
-                       | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 "$conc" 1 "$ppath" "$pexp" 2>/dev/null \
+                       | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 "$conc" 1 "$ppath" "$pexp" "${PREF_SPEED_URL:-}" 2>/dev/null \
                        | awk '$2=="ok"{print $1, $3, "ok", ($4==""?"-":$4)}' | sort -k2 -n \
                        | head -n $(( keep_min - live_n )))
                 if [ -n "$vres" ]; then
@@ -759,7 +770,7 @@ run_route() {
       vres=$(printf '%s\n' "$batch" | awk '{print $1, "ok", $2, "-"}')
       ;;
     *)
-      vres=$(printf '%s\n' "$batch" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 4 1 "$ppath" "$pexp" 2>/dev/null)
+      vres=$(printf '%s\n' "$batch" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 4 1 "$ppath" "$pexp" "${PREF_SPEED_URL:-}" 2>/dev/null)
       # 补位：通过的不足 top_n 时，把没试过的候选再探一批，别急着降级
       ok=$(printf '%s\n' "$vres" | awk '$2=="ok"' | wc -l | tr -d ' ')
       if [ "${ok:-0}" -lt "$top_n" ]; then
@@ -769,7 +780,7 @@ run_route() {
         if [ "${more_n:-0}" -gt 0 ]; then
           log "$route: 仅 $ok 个通过校验，补探 $more_n 个候补"
           vres=$(printf '%s\n%s\n' "$vres" \
-                 "$(printf '%s\n' "$more" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 4 1 "$ppath" "$pexp" 2>/dev/null)")
+                 "$(printf '%s\n' "$more" | python3 "$SELF_DIR/lib/https_probe.py" "$ptarget" "$port" 6 4 1 "$ppath" "$pexp" "${PREF_SPEED_URL:-}" 2>/dev/null)")
         fi
       fi
       ;;

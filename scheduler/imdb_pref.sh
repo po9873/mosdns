@@ -11,7 +11,9 @@
 #   有 HTTP 响应就算可用，不用拿正文赌运气。
 #
 # 顺带映射 m.media-amazon.com：IMDb 的海报、头像都放在这个域名上，
-# 不映射的话页面能开、图全裂。
+# 不映射的话页面能开、图全裂。注意这个域名是**逐个 IP 单独校验**的
+# （write_route 里做的）：实测有 IP 能服务 www.imdb.com 却对 m.media-amazon.com
+# 回 421 Misdirected，照抄主域名的 IP 会让海报全裂。
 set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1
@@ -21,5 +23,9 @@ export PREF_PROBE_PATH='/'
 export PREF_PROBE_EXPECT=''
 
 export PREF_EXTRA_DOMAINS="m.media-amazon.com"
+
+# 测速地址：www.imdb.com 只回 965 字节的反爬页，算不出带宽。
+# 拿一张海报（约 270KB）测，走的是同一批 CloudFront 边缘。
+export PREF_SPEED_URL='https://m.media-amazon.com/images/M/MV5BMDFkYTc0MGEtZmNhMC00ZDIzLWFmNTEtODM1ZmRlYWMwMWFmXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_.jpg'
 
 run_route "imdb" "/app/config/seeds/imdb.txt" 443

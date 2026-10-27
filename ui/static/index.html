@@ -1464,7 +1464,7 @@
           }
           var ms = document.createElement("span"); ms.className = "ms";
           ms.textContent = speedText(x);
-          ms.title = "真实 HTTPS 响应时间" + (x.speed != null ? " / 实测下载吞吐" : "") + (x.status && x.status !== "ok" ? "（" + errText(x.status) + "）" : "");
+          ms.title = "真实 HTTPS 响应时间" + (x.speed != null ? " / 实测下载吞吐" : "；对方返回的内容太小，算不出带宽") + (x.status && x.status !== "ok" ? "（" + errText(x.status) + "）" : "");
           ln.appendChild(ms);
           list.appendChild(ln);
         });
@@ -1880,6 +1880,11 @@
     if (x.speed != null) {
       var s = x.speed >= 1024 ? (x.speed / 1024).toFixed(1) + " MB/s" : Math.round(x.speed) + " KB/s";
       out += " · " + (x.speed_est ? "≈" : "") + s;
+    } else if (x.latency != null) {
+      /* 没测出带宽不是没测，是对方返回的东西太小（Cloudflare 首页 178B、
+         IMDb 反爬页 965B、ghcr 401 空 body），样本不够算 KB/s。
+         留空会让人以为没做，所以明说一句，具体见 title。 */
+      out += " · 小响应";
     }
     return out;
   }
@@ -2433,7 +2438,7 @@
                 (x.status && x.status !== "ok"
                   ? '<span class="tag" title="' + escH(errText(x.status)) + '">' + escH(errLabel(x.status)) + "</span>"
                   : "") +
-                '<span class="ms" title="响应=真实 HTTPS 首字节时间；有吞吐说明响应体够大能测速">' +
+                '<span class="ms" title="响应=真实 HTTPS 首字节时间；后面是实测下载吞吐。「小响应」= 对方这次只返回了几百字节到几 KB，样本太小算不出带宽（不代表没测）">' +
                   speedText(x) + "</span>" +
                 "</div>";
             }).join("") + "</div>"
