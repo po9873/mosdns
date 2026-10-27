@@ -986,8 +986,10 @@
             <div class="lab">推送哪些事件<small>逗号分隔：round 每轮完成 / warn 失败或降级 / login 登录提醒</small></div>
             <input id="cfgPushEvents" placeholder="round,warn,login">
           </div>
-          <div style="display:flex;gap:10px;margin-top:12px">
+          <div style="display:flex;gap:10px;margin-top:12px;align-items:center">
+            <button class="btn primary" id="btnPushSave">保存推送设置</button>
             <button class="btn" id="btnPushTest">发送测试</button>
+            <span class="sub" style="margin:0">改完要点保存，否则刷新会还原</span>
           </div>
         </div>
 
@@ -2680,6 +2682,12 @@
       state.settings = res.settings;
       toast("配置已保存");
     }).catch(function(err){ toast("保存失败：" + err.message); });
+  });
+
+  // 推送卡片自己带一个保存键：这一卡片离「保存配置」隔着好几屏，用户填完
+  // 找不到保存会以为自动存了，刷新后又被 loadSettings 覆盖回去。
+  $("#btnPushSave").addEventListener("click", function(){
+    $("#btnSaveCfg").click();
   });
 
   $("#btnPushTest").addEventListener("click", function(){
