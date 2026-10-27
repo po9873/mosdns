@@ -132,17 +132,16 @@
   /* 卡头一行：左路名、右系列标签+状态灯；卡身再分左右两栏（域名 / IP） */
   .route-card .rc-topr{display:flex;align-items:center;gap:10px;flex:none}
   .route-card .rc-body{display:flex;gap:18px;align-items:flex-start}
-  /* 左列按内容宽度（shrink-to-fit）：域名短的时候不占空位，
-     右列紧跟着域名排，不再出现「左边一大片空白」；
-     域名多的路（ghcr 四个长域名）左列自己撑开，最多占 56%。 */
-  .route-card .rc-l{flex:0 1 auto;min-width:0;max-width:56%;padding-right:18px;border-right:1px solid var(--border)}
-  .route-card .rc-r{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:6px}
-  /* 右列：一行一个 IP。
-     IP 列用 max-content（按这一路最长的 IP 定宽，IPv6 也能一行放下），
-     数值列紧随其后——grid 列宽在整块里只算一次，所以每行的 IP 起点、
-     数值起点都在同一条竖线上，不会一行长一行短。 */
-  .route-card .rc-iplist{display:grid;grid-template-columns:max-content max-content;column-gap:22px;row-gap:7px;align-items:baseline;justify-content:start;width:max-content;max-width:100%}
-  .rc-iprow{display:contents}
+  /* 左列固定 320px：每张卡这一栏一样宽，域名起点和右侧分隔线在所有卡上对齐；
+     右列吃满剩下的宽度，IP 按可用宽度自动分栏铺开，卡片右侧不留空白。 */
+  .route-card .rc-l{flex:0 0 320px;min-width:0;padding-right:18px;border-right:1px solid var(--border)}
+  .route-card .rc-r{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:6px}
+  /* 右列：IP 自动分栏。宽度够就两栏三栏并排，窄了自动减到一栏，
+     每个格子内部仍是「IP 一列 + 数值一列」，所以同一格里的延时/速度对齐。 */
+  .route-card .rc-iplist{display:grid;grid-template-columns:repeat(auto-fit,minmax(238px,1fr));column-gap:26px;row-gap:7px;align-items:baseline;justify-items:start}
+  .rc-iprow{display:grid;grid-template-columns:15.5ch minmax(0,1fr);column-gap:12px;align-items:baseline;width:100%}
+  /* IPv6 太长，独占整行（跨所有分栏），只在冒号处折行 */
+  .rc-iprow.v6ip{grid-column:1/-1;grid-template-columns:minmax(0,1fr) auto}
   .rc-iprow .ipcell{display:flex;align-items:baseline;gap:6px;white-space:nowrap;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px;font-weight:600;
     font-variant-numeric:tabular-nums}
@@ -417,9 +416,10 @@
     .grid.route{gap:10px}
     .grid.route > .route-card{flex-direction:column;gap:10px;padding:12px}
     .route-card .rc-body{flex-direction:column;gap:10px}
-    .route-card .rc-l{flex:none;max-width:100%;padding:0 0 10px;border-right:0;border-bottom:1px solid var(--border)}
+    .route-card .rc-l{flex:none;width:100%;max-width:100%;padding:0 0 10px;border-right:0;border-bottom:1px solid var(--border)}
     .route-card .rc-r{flex:none;width:100%;align-items:stretch}
-    .route-card .rc-iplist{grid-template-columns:max-content minmax(0,1fr);column-gap:14px;width:auto}
+    .route-card .rc-iplist{grid-template-columns:1fr;column-gap:0}
+    .rc-iprow{grid-template-columns:15.5ch minmax(0,1fr)}
     .rc-iprow.v6ip .ipcell{font-size:12px}
     .route-card{padding:12px}
     .route-card .rc-line{font-size:16px;gap:6px}
