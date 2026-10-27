@@ -422,7 +422,7 @@ run_route() {
   # 若本路已有选中结果、且近 stable_hours 内刚全量优选过、且当前 IP 轻量存活检测通过，
   # 则跳过本轮全量重探直接沿用——IP 稳定不抖动、速度快。只有看门狗发现当前 IP 退化
   # （1034/超时）或 stable 窗口到期时，才再触发全量重探，从多源候选池里重新选/换。
-  local rhf="$PREF_DIR/$route.hosts" stable_hours mnow mprev cur live_n
+  local rhf="$PREF_DIR/$route.hosts" stable_hours mnow mprev cur live_out live_n
   stable_hours=$(setting stable_hours)
   case "$stable_hours" in ''|*[!0-9]*) stable_hours=6 ;; esac
   if [ "${stable_hours:-0}" -gt 0 ] && [ -s "$rhf" ] && [ "$(setting pref_stable)" != "false" ]; then
@@ -431,10 +431,12 @@ run_route() {
     if [ -n "$mprev" ] && [ $(( (mnow - ${mprev:-0}) / 60 )) -lt "$stable_hours" ]; then
       cur=$(awk 'NR==1{for(i=2;i<=NF;i++) print $i}' "$rhf" | grep -E '^[0-9a-fA-F:.]+$')
       if [ -n "$cur" ]; then
-        live_n=$(probe_top "$cur" "$port" "$conc" 2 $((top_n)) 2>/dev/null | awk 'NF' | wc -l | tr -d ' ')
+        live_out=$(probe_top "$cur" "$port" "$conc" 2 $((top_n)) 2>/dev/null | awk 'NF')
+        live_n=$(printf '%s\n' "$live_out" | awk 'NF' | wc -l | tr -d ' ')
         if [ "${live_n:-0}" -ge 1 ]; then
-          log "$route: 稳定模式，当前 $(printf '%s\n' "$cur" | awk 'NF' | wc -l | tr -d ' ') 个 IP 仍存活，跳过全量重探（约 $(( (mnow - mprev) / 60 )) 分钟前优选过）"
-          write_state "$route" "$target" "stable" "" "" "$(printf '%s\n' "$cur" | awk 'NF' | wc -l | tr -d ' ')" 0 0
+          log "$route: 稳定模式，当前 ${live_n} 个 IP 仍存活，跳过全量重探（约 $(( (mnow - mprev) / 60 )) 分钟前优选过）"
+          # 把本轮实测的存活 IP + 延迟一并写回，界面「已选 IP」不会因为跳过重探而变空
+          write_state "$route" "$target" "stable" "$live_out" "" "${live_n}" 0 0
           return 0
         else
           log "$route: 稳定模式轻量存活检测失败，触发全量重探"
