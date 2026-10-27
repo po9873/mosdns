@@ -183,10 +183,17 @@ def candidates(route, domain, skip):
 
 
 def probe(ip, domain):
+    """巡检只关心「能不能打开」，但 https_probe.check 现在返回 4 个字段
+    （ip / 状态 / TTFB / 吞吐）。这里统一补成 4 元组，避免以后它再加字段
+    又把守护线程整个搞崩（之前就崩过：too many values to unpack）。"""
     try:
-        return https_probe.check(ip, domain, PORT, TIMEOUT)
+        r = https_probe.check(ip, domain, PORT, TIMEOUT)
     except Exception:
-        return ip, "fail", None
+        return ip, "fail", None, None
+    r = tuple(r)
+    if len(r) < 4:
+        r = r + (None,) * (4 - len(r))
+    return r[0], r[1], r[2], r[3]
 
 
 def run_once():
@@ -209,7 +216,7 @@ def run_once():
 
         keep, dropped = [], []
         for ip in ips:
-            _ip, st, ms = probe(ip, domain)      # check() 返回 (ip, 状态, 耗时)
+            _ip, st, ms, _sp = probe(ip, domain)  # check() 返回 (ip, 状态, TTFB, 吞吐)
             checked += 1
             if st == "ok":
                 state.pop("%s|%s" % (route, ip), None)
@@ -243,7 +250,7 @@ def run_once():
             for cand in candidates(route, domain, set(ips) | {d[0] for d in dropped}):
                 if len(added) >= need:
                     break
-                _ip2, st2, _ms2 = probe(cand, domain)
+                _ip2, st2, _ms2, _sp2 = probe(cand, domain)
                 checked += 1
                 if st2 == "ok":
                     added.append(cand)

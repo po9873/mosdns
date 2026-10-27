@@ -136,6 +136,29 @@ PRESETS = [
      "url_v4": "https://cdn.jsdelivr.net/gh/RPDJF/google-ip-range@main/google-ip-range-ipv4.txt",
      "url_v6": "https://cdn.jsdelivr.net/gh/RPDJF/google-ip-range@main/google-ip-range-ipv6.txt",
      "enabled": False},
+
+    # ---- GitHub 的社区 hosts 源（github / ghcr 两路）----
+    # 为什么需要：这两路原来只有官方 api.github.com/meta 一条源。官方给的是 GitHub
+    # 全量网段（含大量非前端段），采样展开后能连上的很少——实测一轮 60 个候选只选出
+    # 1 个 IP，一个 IP 抖一下整路就没人可换。下面几份是社区每天维护的「当前可用前端
+    # IP」，本身直接就是 IP+域名，比网段采样准；解析时只取其中的 IP，域名不参与。
+    {"key": "third-gh520", "name": "GitHub520 社区 hosts（HelloGitHub）", "kind": "thirdparty",
+     "note": "每天更新的 github.com / api / raw 可用前端 IP，含 140.82 / 20.205 等真实入口",
+     "route": "github", "url_v4": "https://raw.hellogithub.com/hosts",
+     "url_v6": "https://raw.hellogithub.com/hosts", "enabled": True},
+    {"key": "third-ineo6", "name": "ineo6/hosts 社区 hosts（GitLab 直连）", "kind": "thirdparty",
+     "note": "GitLab 托管的同类清单，与 GitHub520 互为备份，一份拉不到还有这份",
+     "route": "github", "url_v4": "https://gitlab.com/ineo6/hosts/-/raw/master/next-hosts",
+     "url_v6": "https://gitlab.com/ineo6/hosts/-/raw/master/next-hosts", "enabled": True},
+    {"key": "third-gh520-ghcr", "name": "GitHub520 社区 hosts（ghcr 路）", "kind": "thirdparty",
+     "note": "ghcr.io 与 github.com 同属 GitHub 前端段，这份清单能补到 20.27.x 这类入口",
+     "route": "ghcr", "url_v4": "https://raw.hellogithub.com/hosts",
+     "url_v6": "https://raw.hellogithub.com/hosts", "enabled": True},
+    {"key": "mirror-gh520-jsd", "name": "GitHub520 镜像 · jsDelivr", "kind": "mirror",
+     "note": "raw.hellogithub.com 拉不到时用这个 CDN 镜像（默认关，需要时在「源」页打开）",
+     "route": "github",
+     "url_v4": "https://cdn.jsdelivr.net/gh/521xueweihan/GitHub520@main/hosts",
+     "url_v6": "https://cdn.jsdelivr.net/gh/521xueweihan/GitHub520@main/hosts", "enabled": False},
 ]
 
 DEFAULT_PULL = {"enabled": True, "cycle": "6h", "hour": 4, "last": 0}

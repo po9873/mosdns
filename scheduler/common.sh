@@ -473,10 +473,13 @@ run_route() {
   #   - 全部打不开（1034/证书/5xx/超时）→ 说明实际已坏，立刻全量重探换 IP
   #   - 能打开但 TTFB 超过 stable_ttfb_ms，或实测吞吐低于 stable_speed_kbps → 变慢了，重探
   #   - 能打开且不慢 → 完事，不动它（stable_hours 内不再全量扫）
-  # TCP 延时为什么不算数：握手快不代表能用，Cloudflare 1034、证书错、5xx 都是
-  # 「TCP 通但页面打不开」，只测 TCP 会把坏 IP 当好的继续用。
+  # 为什么每个 IP 测两次（samples=2）：单次吞吐抖动很大，实测同一个 IP 能测出
+  # 158/289/532 KB/s。拿一次结果就判「慢」会天天误触发三分钟的全量重探，
+  # 与「能用就别折腾」完全相反。两次取更好的那次——只要有一次证明它不慢，就不算慢。
+  # 为什么带 ~ 的速度不参与判决：响应体只有几 KB 时算出来的 KB/s 是噪音
+  # （TCP 一个窗口就传完，跨度 0.1s 以内），只用来给界面看个大概。
   local rhf="$PREF_DIR/$route.hosts" stable_hours mnow mprev cur live_out live_n
-  local st_ttfb st_speed vchk vok vbest vspeed
+  local st_ttfb st_speed vchk vok vbest vspeed afail="$PREF_DIR/$route.allfail"
   stable_hours=$(setting stable_hours)
   case "$stable_hours" in ''|*[!0-9]*) stable_hours=6 ;; esac
   st_ttfb=$(setting stable_ttfb_ms); case "$st_ttfb" in ''|*[!0-9]*) st_ttfb=1200 ;; esac
@@ -491,22 +494,26 @@ run_route() {
       if [ -n "$cur" ]; then
         case "$(setting verify_https)" in
           false|False|0) vchk=$(printf '%s\n' "$cur" | awk '{print $1, "ok", "?", "-"}') ;;
-          *) vchk=$(printf '%s\n' "$cur" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 "$conc" 2>/dev/null) ;;
+          *) vchk=$(printf '%s\n' "$cur" | python3 "$SELF_DIR/lib/https_probe.py" "$target" "$port" 6 "$conc" 2 2>/dev/null) ;;
         esac
         live_out=$(printf '%s\n' "$vchk" | awk '$2=="ok"')
         live_n=$(printf '%s\n' "$live_out" | awk 'NF' | wc -l | tr -d ' ')
         if [ "${live_n:-0}" -ge 1 ]; then
           # 最快那个就是这一路的实际体验：TTFB 看响应快慢，speed 看吞吐（拿不到时为空）
           vbest=$(printf '%s\n' "$live_out" | awk '$3!="-"{print $3}' | sort -n | head -1)
-          vspeed=$(printf '%s\n' "$live_out" | awk '$4!="-"{print $4}' | sort -n | tail -1)
+          # 只取可信样本（不带 ~）：~ 是样本太小的估算值，抖动大到不能当判决依据
+          vspeed=$(printf '%s\n' "$live_out" | awk '$4!="-" && $4 !~ /^~/ {print $4}' | sort -n | tail -1)
           local slow="" why=""
           if [ -n "$vbest" ] && [ "${vbest%%.*}" -gt "$st_ttfb" ] 2>/dev/null; then
             slow=1; why="响应 ${vbest%.*}ms 超过 ${st_ttfb}ms"
           elif [ -n "$vspeed" ] && [ "${vspeed%%.*}" -lt "$st_speed" ] 2>/dev/null; then
-            slow=1; why="吞吐 ${vspeed%.*}KB/s 低于 ${st_speed}KB/s"
+            slow=1; why="两轮实测吞吐都只有 ${vspeed%.*}KB/s（低于 ${st_speed}KB/s）"
           fi
           if [ -z "$slow" ]; then
-            log "$route: 稳定模式，${live_n} 个 IP 能打开且不慢（响应 ${vbest:-?}ms${vspeed:+ / ${vspeed%.*}KB/s}），跳过全量重探（约 $(( (mnow - mprev) / 60 )) 分钟前优选过）"
+            local shown_speed
+            shown_speed=$(printf '%s\n' "$live_out" | awk '$4!="-"{print $4}' | sort -n | tail -1)
+            rm -f "$afail" 2>/dev/null
+            log "$route: 稳定模式，${live_n} 个 IP 能打开且不慢（响应 ${vbest:-?}ms${shown_speed:+ / ${shown_speed#\~}KB/s}），跳过全量重探（约 $(( (mnow - mprev) / 60 )) 分钟前优选过）"
             # 把本轮实测结果写回，界面「已选 IP + 速度」不会因为跳过重探而变空
             write_state "$route" "$target" "stable" \
               "$(printf '%s\n' "$live_out" | awk '{print $1, $3, "ok", $4}')" "" "${live_n}" 0 0
@@ -514,7 +521,21 @@ run_route() {
           fi
           log "$route: 稳定模式检测到变慢（$why），触发全量重探"
         else
-          log "$route: 稳定模式实测打不开（1034/证书/5xx/超时），触发全量重探换 IP"
+          # 这一轮全打不开：先别急着花三分钟全量重探。
+          # 单轮偶发失败（对方抖动/本机瞬时断流）很常见，守护进程每几分钟就会
+          # 用单次探测换掉真坏的 IP；连续两轮都全打不开才算真坏，才值得重扫。
+          local nfail=0
+          [ -s "$afail" ] && nfail=$(cat "$afail" 2>/dev/null)
+          case "$nfail" in ''|*[!0-9]*) nfail=0 ;; esac
+          nfail=$(( nfail + 1 ))
+          if [ "$nfail" -lt 2 ]; then
+            echo "$nfail" > "$afail" 2>/dev/null
+            log "$route: 稳定模式这一轮 ${live_n:-0} 个 IP 全打不开（第 ${nfail} 次），先交给守护进程换 IP，下一轮再复核"
+            write_state "$route" "$target" "degraded" "" "" 0 0 0
+            return 0
+          fi
+          rm -f "$afail" 2>/dev/null
+          log "$route: 连续 ${nfail} 轮全打不开（1034/证书/5xx/超时），触发全量重探换 IP"
         fi
       fi
     fi

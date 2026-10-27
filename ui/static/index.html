@@ -1846,7 +1846,9 @@
   /* ---------- 速度与错误码 ---------- */
   /* latency 现在是「真实 HTTPS 响应时间」(TTFB)：含 TCP+TLS+发出请求到收到首字节。
      比 TCP 握手时间可信——握手快不代表能用（1034/证书/5xx 都是 TCP 通但页面打不开）。
-     speed 是实测下载吞吐(KB/s)，响应体太小（<4KB）时拿不到，显示为空。 */
+     speed 是实测下载吞吐(KB/s)，响应体太小（<4KB）时拿不到，显示为空。
+     speed_est=true 表示响应体太小（<32KB）、只是估算值 → 前面加 ≈，
+     提醒这条不能拿来判断「慢不慢」（也正因为这样，调度器不会用它触发换 IP）。 */
   function speedText(x, opt){
     opt = opt || {};
     var out = "";
@@ -1854,7 +1856,7 @@
     else out = "—";
     if (x.speed != null) {
       var s = x.speed >= 1024 ? (x.speed / 1024).toFixed(1) + " MB/s" : Math.round(x.speed) + " KB/s";
-      out += " · " + s;
+      out += " · " + (x.speed_est ? "≈" : "") + s;
     }
     return out;
   }

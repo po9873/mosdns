@@ -303,12 +303,16 @@ def read_results():
                         try:
                             st = parts[2] if len(parts) > 2 else ""
                             sp = None
+                            sp_est = False
                             if len(parts) > 3 and parts[3] not in ("-", ""):
+                                # 「~158」表示样本太小、只是估算值（界面显示为 ≈158KB/s）
+                                tok = parts[3]
+                                sp_est = tok.startswith("~")
                                 try:
-                                    sp = float(parts[3])
+                                    sp = float(tok.lstrip("~"))
                                 except Exception:
                                     sp = None
-                            lat[parts[0]] = (float(parts[1]), st, sp)
+                            lat[parts[0]] = (float(parts[1]), st, sp, sp_est)
                         except Exception:
                             pass
         except Exception:
@@ -323,7 +327,7 @@ def read_results():
                         for ip in parts[1:]:
                             if not is_ip(ip):
                                 continue
-                            lt, st, sp = lat.get(ip, (None, "", None))
+                            lt, st, sp, sp_est = lat.get(ip, (None, "", None, False))
                             st = st or "ok"
                             if is_hard_fail(st):
                                 # 1034/证书/5xx 一律不展示，记下来供界面提示「已剔除」
@@ -335,6 +339,7 @@ def read_results():
                                 # latency 现在是真实 HTTPS 响应时间（TTFB），不再是 TCP 握手
                                 "latency": lt,
                                 "speed": sp,          # KB/s；拿不到（响应体太小）时为 null
+                                "speed_est": sp_est,   # true = 样本太小，只是个大概值
                                 "status": st,
                             })
                         entry["ips"] = ips
