@@ -105,6 +105,9 @@ mosdns_loop() {
 mosdns_loop &
 
 # ---------- scheduler（等 mosdns 就绪后再起）----------
+# 容器里 PID 1 是 UI，调度器收不到 SIGTERM，上一轮如果正好跑到一半被重建，
+# 优选锁会残留在 /data 里（持久化目录），不清掉的话之后每一路都要空等超时。
+rm -rf "$DATA_DIR/.pref.lock" 2>/dev/null || true
 ( sleep 6; exec /app/scheduler/scheduler.sh daemon ) &
 
 # ---------- watchdog（盯住 1034，一出现就换 IP）----------

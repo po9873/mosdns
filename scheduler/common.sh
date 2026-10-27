@@ -75,13 +75,32 @@ PY
 }
 
 # ---------- 全局串行锁（任一时刻只允许一路优选运行）----------
+# 优选锁。容器里 PID 1 是 UI 进程，调度器收不到 SIGTERM，
+# 容器被重建/强杀时 trap 不会执行，锁目录会残留在持久化的 /data 里。
+# 所以每次抢锁前先判断持有者是否还活着，别对着一个死锁干等 30 分钟。
 acquire_lock() {
-  local waited=0
+  local waited=0 pidfile="$LOCK_DIR/pid" owner=""
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    owner=""
+    if [ -f "$pidfile" ]; then
+      owner=$(tr -dc '0-9' < "$pidfile" 2>/dev/null)
+    fi
+    # 1) 持有进程已经不存在（容器重启后留下的旧 pid）→ 直接接管
+    if [ -n "$owner" ] && [ ! -d "/proc/$owner" ]; then
+      log "发现残留优选锁（持有进程 $owner 已退出），清理后继续"
+      rm -rf "$LOCK_DIR" 2>/dev/null || true
+      continue
+    fi
+    # 2) 兜底：锁存在超过 2 小时，一律按过期处理
+    if find "$LOCK_DIR" -maxdepth 0 -mmin +120 2>/dev/null | grep -q .; then
+      log "优选锁已持有时长超过 2 小时，判定为过期，清理后继续"
+      rm -rf "$LOCK_DIR" 2>/dev/null || true
+      continue
+    fi
     sleep 1
     waited=$((waited + 1))
-    if [ "$waited" -ge 1800 ]; then
-      log "等待优选锁超时（30 分钟），放弃"
+    if [ "$waited" -ge 600 ]; then
+      log "等待优选锁超时（10 分钟），放弃"
       return 1
     fi
   done
