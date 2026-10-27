@@ -24,7 +24,7 @@ export PREF_PROBE_EXPECT=''
 #   api.tmdb.org         官方 API 短域名
 #   api.themoviedb.org   Jellyfin / Emby 默认刮削地址（少了它海报出不来）
 #   image.tmdb.org       海报
-export PREF_EXTRA_DOMAINS="api.tmdb.org api.themoviedb.org image.tmdb.org"
+export PREF_EXTRA_DOMAINS="themoviedb.org api.tmdb.org api.themoviedb.org image.tmdb.org auth.themoviedb.org"
 
 # 测速地址：www.themoviedb.org 根路径只回 2.6KB 的挑战页，算不出带宽。
 # 拿一张 w500 海报（约 160KB）来测，直连选中的 IP、SNI 用 image.tmdb.org，

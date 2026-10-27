@@ -22,7 +22,7 @@ export PREF_PROBE_TARGET=www.imdb.com
 export PREF_PROBE_PATH='/'
 export PREF_PROBE_EXPECT=''
 
-export PREF_EXTRA_DOMAINS="m.media-amazon.com"
+export PREF_EXTRA_DOMAINS="m.imdb.com s.media-imdb.com ia.media-imdb.com images-na.ssl-images-amazon.com m.media-amazon.com"
 
 # 测速地址：www.imdb.com 只回 965 字节的反爬页，算不出带宽。
 # 拿一张海报（约 270KB）测，走的是同一批 CloudFront 边缘。

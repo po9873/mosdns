@@ -128,15 +128,20 @@
      右列横排这一路生效的 IP（带响应时间和吞吐）。
      不再用网格——固定列数时七张卡必然排成 5+2，右边空一大片。 */
   .grid.route{display:flex;flex-direction:column;gap:12px}
-  .grid.route > .route-card{display:flex;gap:18px;align-items:stretch;padding:12px 14px}
-  /* 左列吃满剩余宽度（域名长、要放得下），右列固定 272px：
-     固定宽度是关键——每张卡右列的列宽完全一样，上下两张卡的 IP 起点、
-     数值起点才会落在同一条竖线上；用百分比/auto 时每张卡各算各的，必然错开。 */
-  .route-card .rc-l{flex:1 1 auto;min-width:0;padding-right:16px;border-right:1px solid var(--border)}
-  .route-card .rc-r{flex:0 0 288px;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:6px}
-  /* 右列：一行一个 IP。IP 列定死 15.5ch（IPv4 最长 15 个字符）而不是 max-content，
-     否则「172.67.74.12」这种短 IP 会让它所在的块整体跟着缩，两行数值就对不齐。 */
-  .route-card .rc-iplist{display:grid;grid-template-columns:15.5ch minmax(0,1fr);column-gap:24px;row-gap:7px;align-items:baseline}
+  .grid.route > .route-card{display:flex;flex-direction:column;gap:9px;padding:12px 14px}
+  /* 卡头一行：左路名、右系列标签+状态灯；卡身再分左右两栏（域名 / IP） */
+  .route-card .rc-topr{display:flex;align-items:center;gap:10px;flex:none}
+  .route-card .rc-body{display:flex;gap:18px;align-items:flex-start}
+  /* 左列按内容宽度（shrink-to-fit）：域名短的时候不占空位，
+     右列紧跟着域名排，不再出现「左边一大片空白」；
+     域名多的路（ghcr 四个长域名）左列自己撑开，最多占 56%。 */
+  .route-card .rc-l{flex:0 1 auto;min-width:0;max-width:56%;padding-right:18px;border-right:1px solid var(--border)}
+  .route-card .rc-r{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:6px}
+  /* 右列：一行一个 IP。
+     IP 列用 max-content（按这一路最长的 IP 定宽，IPv6 也能一行放下），
+     数值列紧随其后——grid 列宽在整块里只算一次，所以每行的 IP 起点、
+     数值起点都在同一条竖线上，不会一行长一行短。 */
+  .route-card .rc-iplist{display:grid;grid-template-columns:max-content max-content;column-gap:22px;row-gap:7px;align-items:baseline;justify-content:start;width:max-content;max-width:100%}
   .rc-iprow{display:contents}
   .rc-iprow .ipcell{display:flex;align-items:baseline;gap:6px;white-space:nowrap;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px;font-weight:600;
@@ -144,8 +149,9 @@
   .rc-iprow .ms{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;font-weight:400;
     color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:.2px}
   .rc-iprow .tag{align-self:center}
-  /* IPv6 比 15.5ch 长，允许在格子里折行，不能撑破列宽（撑破就又不对齐了） */
-  .rc-iprow.v6ip .ipcell{font-size:12.5px;letter-spacing:-.2px;white-space:normal;word-break:break-all}
+  /* IPv6 只在冒号处换行（ipHtml 已经插了 <wbr>），不会把 737f 这种字段从中间劈开；
+     宽度够时整条一行放下 */
+  .rc-iprow.v6ip .ipcell{font-size:12.5px;letter-spacing:-.1px;white-space:normal;word-break:normal;overflow-wrap:break-word}
   .status-strip{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:16px}
   .pill{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--muted)}
   .led{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
@@ -167,17 +173,19 @@
   .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:13.5px;margin-left:auto;padding-left:10px;white-space:nowrap;flex:none}
   .route-card .rc-more{font-size:13.5px;color:var(--muted);margin-top:2px}
   .route-card .rc-time{font-size:13.5px;color:var(--muted);margin-top:6px}
-  .route-card .rc-dom{font-size:14px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .route-card .rc-src{font-size:12.5px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
-  .route-card .rc-host{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;color:var(--text);opacity:.85}
-  /* 域名一个一行：挤在一行里横排，长的域名会被截断成两截，看不清是哪个域名 */
-  .route-card .rc-extra{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin-top:6px}
-  .route-card .rc-extra code{
-    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text);
-    background:rgba(255,255,255,.08);border-radius:6px;padding:1px 6px;word-break:break-all;max-width:100%;
+  /* 域名一行一个，全部从同一条竖线开始：
+     第一行是主域名（实色），其余前面留固定宽度的 ＋ 号位，
+     缩进相同，所以第一个字符必然对齐——之前主域名跟「系列」挤在一行、
+     其余域名套在 code 里带内边距，两种缩进不一样，看着就是没对齐。 */
+  .route-card .rc-doms{margin-top:6px;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .route-card .rc-d{
+    position:relative;padding-left:15px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.7;
+    color:var(--muted);word-break:break-all;
   }
-  .route-card .rc-extra code::before{content:"＋ ";opacity:.55;font-weight:400}
-  html[data-theme="light"] .route-card .rc-extra code{background:rgba(20,40,80,.07)}
+  .route-card .rc-d.main{color:var(--text);opacity:.92}
+  .route-card .rc-d:not(.main)::before{content:"＋";position:absolute;left:0;opacity:.5;font-family:inherit}
   /* 推送正文预览：原样展示会发出去的那段文本 */
   .pushprev{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:8px 11px}
   .pushprev summary{font-size:12.5px;color:var(--muted);cursor:pointer;outline:none}
@@ -408,9 +416,11 @@
     .grid.c2{grid-template-columns:1fr}
     .grid.route{gap:10px}
     .grid.route > .route-card{flex-direction:column;gap:10px;padding:12px}
+    .route-card .rc-body{flex-direction:column;gap:10px}
     .route-card .rc-l{flex:none;max-width:100%;padding:0 0 10px;border-right:0;border-bottom:1px solid var(--border)}
-    .route-card .rc-r{flex:none;width:100%}
-    .route-card .rc-iplist{grid-template-columns:15.5ch minmax(0,1fr);column-gap:14px}
+    .route-card .rc-r{flex:none;width:100%;align-items:stretch}
+    .route-card .rc-iplist{grid-template-columns:max-content minmax(0,1fr);column-gap:14px;width:auto}
+    .rc-iprow.v6ip .ipcell{font-size:12px}
     .route-card{padding:12px}
     .route-card .rc-line{font-size:16px;gap:6px}
     .route-card .rc-line .ip.v6ip{font-size:14px}
@@ -1435,39 +1445,38 @@
       var div = document.createElement("div");
       div.className = "route-card";
 
+      /* 卡头整行：左边路名，右边系列标签 + 状态灯 */
       var left = document.createElement("div"); left.className = "rc-l";
       var top = document.createElement("div"); top.className = "rc-top";
       var name = document.createElement("div"); name.className = "rc-name"; name.textContent = ROUTE_LABEL[r];
-      var led = document.createElement("span"); led.className = "led " + (ips.length ? "ok" : "");
-      top.appendChild(name); top.appendChild(led);
-      left.appendChild(top);
-
-      /* 这一路给哪些域名用：主域名 + 同批映射的其余域名，全部列出来 */
-      var dm = document.createElement("div"); dm.className = "rc-dom";
+      var topRight = document.createElement("div"); topRight.className = "rc-topr";
       var chip = document.createElement("span"); chip.className = "rc-src"; chip.textContent = "系列 " + (meta.series || r);
-      dm.appendChild(chip);
-      var dmt = document.createElement("span"); dmt.className = "rc-host"; dmt.textContent = mainDom;
-      dm.appendChild(dmt);
-      dm.title = ROUTE_LABEL[r] + " 的 IP 只用于这些域名：" + ((item.domains && item.domains.length ? item.domains : [mainDom]).join("、")) + "（" + (meta.use || "") + "）";
-      left.appendChild(dm);
+      chip.title = meta.use ? ("这一路服务：" + meta.use) : "";
+      var led = document.createElement("span"); led.className = "led " + (ips.length ? "ok" : "");
+      topRight.appendChild(chip); topRight.appendChild(led);
+      top.appendChild(name); top.appendChild(topRight);
+      div.appendChild(top);
 
-      var extra = (item.domains || []).filter(function(d){ return d && d !== mainDom; });
-      if (extra.length) {
-        var ex = document.createElement("div");
-        ex.className = "rc-extra";
-        ex.title = "同一批 IP 也写给了这些域名";
-        extra.forEach(function(d){
-          var c = document.createElement("code");
-          c.textContent = d;
-          ex.appendChild(c);
-        });
-        left.appendChild(ex);
-      }
+      /* 域名一行一个，全部从同一条竖线开始 */
+      var domList = document.createElement("div"); domList.className = "rc-doms";
+      var allDoms = (item.domains && item.domains.length) ? item.domains.slice() : [mainDom];
+      if (allDoms.indexOf(mainDom) > 0) { allDoms.splice(allDoms.indexOf(mainDom), 1); allDoms.unshift(mainDom); }
+      allDoms.forEach(function(d){
+        var rowD = document.createElement("div");
+        rowD.className = "rc-d" + (d === mainDom ? " main" : "");
+        rowD.textContent = d;
+        domList.appendChild(rowD);
+      });
+      domList.title = "这一路的 IP 写给这些域名（共 " + allDoms.length + " 个）：" + allDoms.join("、");
+      left.appendChild(domList);
 
       var tm = document.createElement("div"); tm.className = "rc-time";
       tm.textContent = item.mtime ? fmtTime(item.mtime) : "未优选";
       left.appendChild(tm);
-      div.appendChild(left);
+
+      /* 卡身：左域名、右 IP，两栏并排 */
+      var bodyWrap = document.createElement("div"); bodyWrap.className = "rc-body";
+      bodyWrap.appendChild(left);
 
       /* 右列：这一路生效的 IP 全部列出来，一个不漏。
          之前只列前 6 个、剩下的折成「还有 N 个」，等于把信息藏起来——
@@ -1483,10 +1492,6 @@
           ipEl.innerHTML = ipHtml(x.ip, x.family === "v6");
           ipEl.title = x.ip;
           cell.appendChild(ipEl);
-          if (x.family === "v6") {
-            var t = document.createElement("span"); t.className = "tag v6"; t.textContent = "v6";
-            cell.appendChild(t);
-          }
           row.appendChild(cell);
           var ms = document.createElement("span"); ms.className = "ms";
           ms.textContent = speedText(x);
@@ -1516,7 +1521,8 @@
         }
       }
       if (sub.childNodes.length) right.appendChild(sub);
-      div.appendChild(right);
+      bodyWrap.appendChild(right);
+      div.appendChild(bodyWrap);
       host.appendChild(div);
     });
   }

@@ -29,7 +29,8 @@ export PREF_EXTRA_LINES="$PREF_DIR/.ghcr.extra"
 # github.com 那批（20.27.x / 172.182.x）不认这三个域名：实测 raw 直接超时，
 # 140.82.112.33 回的是 *.registry.github.com 证书。所以不能靠 github 路的 IP，
 # 必须各自解析、各自证书校验，通过了才写。
-for dom in pkg-containers.githubusercontent.com raw.githubusercontent.com objects.githubusercontent.com; do
+for dom in pkg-containers.githubusercontent.com raw.githubusercontent.com objects.githubusercontent.com \
+           gist.githubusercontent.com avatars.githubusercontent.com; do
   ips=$(resolve_ips "$dom" "" A)
   ok=""
   if [ -n "$ips" ]; then

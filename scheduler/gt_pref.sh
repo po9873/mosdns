@@ -24,7 +24,7 @@ export PREF_PROBE_EXPECT='translate'
 # 没加的：translate.goog（每个站点一个子域 xxx.translate.goog，hosts 只能精确匹配，
 # 挂上去也覆盖不到）；translate.google.com.hk（不存在，解析出来是别人家的地址）；
 # translate.google.cn（已关停）；gstatic 系列（国内本来就有本地 CDN，映射到国外反而更慢）。
-export PREF_EXTRA_DOMAINS="translate.googleapis.com translate.googleusercontent.com clients5.google.com"
+export PREF_EXTRA_DOMAINS="translate.googleapis.com translate.googleusercontent.com clients5.google.com www.gstatic.com fonts.gstatic.com ssl.gstatic.com"
 
 source /app/scheduler/common.sh
 acquire_lock || exit 1

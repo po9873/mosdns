@@ -7,6 +7,12 @@
 # 既然选不出来，就别每轮白探十几个、每个等 6 秒。哪天通了把这行删掉即可。
 export PREF_NO_V6=1
 
+# github.com 那批 IP 同时服务这些域名（实测逐个通过证书校验）：
+#   www/api/codeload/collector  github 自己的主机名
+#   avatars/camo/user-images   README 里的图片、头像
+#   raw/objects/gist           raw 文件、Release 附件、gist
+export PREF_EXTRA_DOMAINS="www.github.com api.github.com codeload.github.com collector.github.com avatars.githubusercontent.com camo.githubusercontent.com user-images.githubusercontent.com raw.githubusercontent.com objects.githubusercontent.com gist.githubusercontent.com"
+
 set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1
