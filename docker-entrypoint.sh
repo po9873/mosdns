@@ -23,6 +23,69 @@ mkdir -p "$DATA_DIR/prefs"
 
 # ---------- 初始化运行数据（只在不存在时创建，绝不覆盖用户数据）----------
 [ -f "$DATA_DIR/prefs/all.hosts" ] || : > "$DATA_DIR/prefs/all.hosts"
+
+# hosts 自检：每一行必须是「域名 + 全是 IP」。只要有一行不是，mosdns 会以
+# "invalid ip addr" 直接 FATAL，起来就死、DNS 全断。历史上有过一句日志被
+# 重定向写进 hosts 的先例，所以每次启动都过一遍，坏行丢掉、all.hosts 重算。
+python3 - "$DATA_DIR/prefs" <<'PY' || true
+import ipaddress, os, re, sys
+
+d = sys.argv[1]
+DOM = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z]{2,}$", re.I)
+
+def ok(line):
+    p = line.split()
+    if len(p) < 2 or not DOM.match(p[0]):
+        return None
+    ips = []
+    for x in p[1:]:
+        try:
+            ips.append(str(ipaddress.ip_address(x)))
+        except ValueError:
+            return None
+    return p[0], ips
+
+dropped = 0
+try:
+    names = sorted(n for n in os.listdir(d) if n.endswith(".hosts") and n != "all.hosts")
+except OSError:
+    names = []
+for n in names:
+    p = os.path.join(d, n)
+    out = []
+    try:
+        lines = open(p, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        continue
+    for ln in lines:
+        r = ok(ln)
+        if r is None:
+            if ln.strip():
+                dropped += 1
+            continue
+        out.append(ln.strip())
+    if len(out) != len([x for x in lines if x.strip()]):
+        tmp = p + ".fix"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + ("\n" if out else ""))
+        os.replace(tmp, p)
+
+allp = os.path.join(d, "all.hosts")
+merged = []
+try:
+    for n in names:
+        for ln in open(os.path.join(d, n), encoding="utf-8", errors="replace"):
+            if ok(ln):
+                merged.append(ln.strip())
+except OSError:
+    pass
+with open(allp + ".tmp", "w", encoding="utf-8") as f:
+    f.write("\n".join(sorted(set(merged))) + ("\n" if merged else ""))
+os.replace(allp + ".tmp", allp)
+
+if dropped:
+    print("[entrypoint] hosts 自检：丢掉 %d 行非法内容（不是「域名+IP」的），已重建 all.hosts" % dropped)
+PY
 # 清单：缺失时从镜像补齐（镜像里是构建时固化的完整版），并写入来源元数据
 python3 /app/scheduler/lib/lists.py init >/dev/null 2>&1 || true
 # 兜底（python 异常时也能保证文件存在）

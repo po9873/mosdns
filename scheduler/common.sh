@@ -18,7 +18,11 @@ BAD_TTL_H="${PREF_BAD_TTL_HOURS:-6}"
 log() {
   local m
   m="[$(date '+%m-%d %H:%M:%S')] $*"
-  echo "$m"
+  # 必须走 stderr：调用点常常整体被 > 重定向到某个文件（write_route 里就是
+  # { ... } > "$route.hosts"），echo 到 stdout 会把日志当成一行 hosts 写进文件，
+  # 之后 merge_hosts 再把它合进 all.hosts，mosdns 读到就以
+  # "invalid ip addr" 启动失败——02:05 那次整机 DNS 挂掉就是这么来的。
+  echo "$m" >&2
   echo "$m" >> "${PREF_LOG:-$DATA_DIR/pref.log}" 2>/dev/null || true
 }
 
@@ -281,6 +285,7 @@ merge_hosts() {
   # 同一域名只留一行；IP 先归一化再去重
   # （同一个 IPv6 可能有 2606:4700:0:af:… 和 2606:4700:0000:00af:… 两种写法，其实是同一个地址）
   python3 - "$out" <<'PY'
+import re
 import sys, ipaddress
 src = sys.argv[1]
 
@@ -288,22 +293,31 @@ def norm(x):
     try:
         return str(ipaddress.ip_address(x))
     except ValueError:
-        return x
+        return None          # 不是 IP 就丢掉，绝不写进 all.hosts
+
+# 域名必须在第一位；一行里出现任何非 IP 的字段就整行丢掉。
+# 以前不校验，日志里一句话被重定向进来就能让 mosdns 直接起不来。
+DOM_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z]{2,}$", re.I)
 
 best = {}
-for ln in open(src, encoding="utf-8"):
+for ln in open(src, encoding="utf-8", errors="replace"):
     p = ln.split()
-    if not p:
+    if len(p) < 2:
         continue
     dom = p[0]
-    ips, seen = [], set()
+    if not DOM_RE.match(dom):
+        continue
+    ips, seen, bad = [], set(), False
     for x in p[1:]:
         k = norm(x)
+        if k is None:
+            bad = True
+            break
         if k in seen:
             continue
         seen.add(k)
         ips.append(k)
-    if not ips:
+    if bad or not ips:
         continue
     cur = best.get(dom)
     if cur is None or len(ips) > len(cur):

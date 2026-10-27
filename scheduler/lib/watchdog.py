@@ -12,8 +12,10 @@
 
 用法： python3 watchdog.py [--once]
 """
+import ipaddress
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -53,6 +55,18 @@ def runtime_cfg():
     return sec, on
 
 HARD = ("cf", "cert", "wrong")   # 状态名以这些开头 = 明确不可用
+
+# hosts 行的合法性判定：域名 + 后面全是 IP。写文件前必须过这一关，
+# 否则一句日志、一段残留文本就能把 all.hosts 写坏，mosdns 直接起不来。
+RE_DOM = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z]{2,}$", re.I)
+
+
+def is_ip(x):
+    try:
+        ipaddress.ip_address(str(x))
+        return True
+    except ValueError:
+        return False
 
 # Google 系域名专用判定：这些节点的根路径回什么都有可能（翻译首页 200、其他路径 404），
 # 光看「HTTP 通不通」分不出好坏；而翻译接口有配额，巡检频繁调用会被 429，
@@ -134,19 +148,42 @@ def reload_mosdns():
 
 
 def read_hosts(path):
-    """返回 (domain, [ip...])，格式与 mosdns hosts 一致：域名在前。"""
+    """返回 (domain, [ip...])，格式与 mosdns hosts 一致：域名在前。
+
+    只认真正能解析成 IP 的字段；文件被写进过别的东西（日志、注释）时，
+    这里不会把它当成 IP 拿去探测，更不会原样写回去。
+    """
     try:
-        raw = open(path, encoding="utf-8").read().splitlines()
+        raw = open(path, encoding="utf-8", errors="replace").read().splitlines()
     except Exception:
         return None, []
     for ln in raw:
         p = ln.split()
-        if len(p) >= 2:
-            return p[0], p[1:]
+        if len(p) < 2:
+            continue
+        dom = p[0]
+        if not RE_DOM.match(dom):
+            continue
+        ips = []
+        for x in p[1:]:
+            try:
+                ips.append(str(ipaddress.ip_address(x)))
+            except ValueError:
+                continue
+        if ips:
+            return dom, ips
     return None, []
 
 
 def write_hosts(route, domain, ips):
+    # all.hosts 是各路合并出来的，绝不能把它当成一路来回写：
+    # 之前巡检到它（route 名就叫 all）就把整份合并文件压成了一行，
+    # mosdns 起不来、全屋 DNS 一起挂。
+    if route in ("all", ""):
+        return
+    if not RE_DOM.match(str(domain or "")):
+        return
+    ips = [i for i in ips if is_ip(i)]
     path = os.path.join(PREF_DIR, "%s.hosts" % route)
     if not ips:
         try:
@@ -162,10 +199,11 @@ def write_hosts(route, domain, ips):
     out = []
     try:
         for name in os.listdir(PREF_DIR):
-            if not name.endswith(".hosts"):
+            if not name.endswith(".hosts") or name == "all.hosts":
                 continue
-            for ln in open(os.path.join(PREF_DIR, name), encoding="utf-8"):
-                if ln.strip():
+            for ln in open(os.path.join(PREF_DIR, name), encoding="utf-8", errors="replace"):
+                p = ln.split()
+                if len(p) >= 2 and RE_DOM.match(p[0]) and all(is_ip(x) for x in p[1:]):
                     out.append(ln.strip())
     except Exception:
         pass
@@ -232,7 +270,9 @@ def run_once():
     swapped = 0
 
     for name in sorted(os.listdir(PREF_DIR)):
-        if not name.endswith(".hosts"):
+        if not name.endswith(".hosts") or name == "all.hosts":
+            # all.hosts 是各路合并出来的产物，不是一路优选结果；
+            # 把它当一路来巡检会反过来把合并文件写坏。
             continue
         route = name[:-6]
         domain, ips = read_hosts(os.path.join(PREF_DIR, name))
