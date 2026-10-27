@@ -128,31 +128,34 @@
      右列横排这一路生效的 IP（带响应时间和吞吐）。
      不再用网格——固定列数时七张卡必然排成 5+2，右边空一大片。 */
   .grid.route{display:flex;flex-direction:column;gap:12px}
-  .grid.route > .route-card{display:flex;flex-direction:column;gap:9px;padding:12px 14px}
+  .grid.route > .route-card{display:flex;flex-direction:column;gap:12px;padding:16px 18px}
   /* 卡头一行：左路名、右系列标签+状态灯；卡身再分左右两栏（域名 / IP） */
   .route-card .rc-topr{display:flex;align-items:center;gap:10px;flex:none}
-  .route-card .rc-body{display:flex;gap:18px;align-items:flex-start}
+  .route-card .rc-body{display:flex;gap:22px;align-items:flex-start}
   /* 左列和右列各占一半：域名最长也就三十来个字符，一半足够；
      右边一半放 IP 和数值，位置固定，不用挤也不用拉伸。 */
-  .route-card .rc-l{flex:0 0 50%;min-width:0;padding-right:18px;border-right:1px solid var(--border)}
+  .route-card .rc-l{flex:0 0 50%;min-width:0;padding-right:22px;border-right:1px solid var(--border)}
   .route-card .rc-r{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:6px}
   /* 右列：IP 分栏但不许拉伸。每栏宽度卡在 210–250px，用不完就靠左排，
      不会像 1fr 那样被拉成一条横贯整张卡的长条。 */
-  .route-card .rc-iplist{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,250px));column-gap:24px;row-gap:7px;align-items:baseline;justify-content:start}
-  .rc-iprow{display:grid;grid-template-columns:15.5ch minmax(0,1fr);column-gap:10px;align-items:baseline}
+  .route-card .rc-iplist{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,290px));column-gap:28px;row-gap:9px;align-items:baseline;justify-content:start}
+  /* 冒号前那一段是 IP 列，固定 16ch（等宽字体下正好放下 255.255.255.255），
+     所以每一行的延时都从同一条竖线上开始，不受 IP 长短影响 */
+  .rc-iprow{display:grid;grid-template-columns:16.5ch minmax(0,1fr);column-gap:12px;align-items:baseline;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px}
   /* IPv6 太长，独占一整行；数值排到它下面一行，既不挤断地址，
      也不会把延时推到卡片最右边 */
-  .rc-iprow.v6ip{grid-column:1/-1;grid-template-columns:minmax(0,1fr);row-gap:1px}
+  .rc-iprow.v6ip{grid-column:1/-1;grid-template-columns:minmax(0,1fr);row-gap:2px}
   .rc-iprow.v6ip .ms{grid-column:1;justify-self:start}
   .rc-iprow .ipcell{display:flex;align-items:baseline;gap:6px;white-space:nowrap;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px;font-weight:600;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;
     font-variant-numeric:tabular-nums}
-  .rc-iprow .ms{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;font-weight:400;
+  .rc-iprow .ms{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:400;
     color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:.2px}
   .rc-iprow .tag{align-self:center}
   /* IPv6 只在冒号处换行（ipHtml 已经插了 <wbr>），不会把 737f 这种字段从中间劈开；
      宽度够时整条一行放下 */
-  .rc-iprow.v6ip .ipcell{font-size:12px;letter-spacing:-.3px;white-space:normal;word-break:normal;overflow-wrap:break-word}
+  .rc-iprow.v6ip .ipcell{font-size:13px;letter-spacing:-.3px;white-space:normal;word-break:normal;overflow-wrap:break-word}
   .status-strip{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:16px}
   .pill{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--muted)}
   .led{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
@@ -162,31 +165,19 @@
 
   .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
   .route-card:hover{border-color:var(--blue)}
-  .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-  .route-card .rc-name{font-size:15px;color:var(--muted);letter-spacing:.3px}
+  .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .route-card .rc-name{font-size:17px;font-weight:600;color:var(--text);opacity:.9;letter-spacing:.2px}
   .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;word-break:break-all}
-  /* 卡片里直接列出每个 IP，不再只说「共 N 个」 */
-  .route-card .rc-list{margin:8px 0 0;display:flex;flex-direction:column;gap:6px}
-  .route-card .rc-line{display:flex;align-items:baseline;gap:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15.5px;font-weight:600;line-height:1.5}
-  .route-card .rc-line .n{color:var(--muted);font-weight:400;font-size:12.5px;min-width:12px;flex:none}
-  .route-card .rc-line .ip{word-break:normal;overflow-wrap:anywhere;min-width:0}
-  .route-card .rc-line .ip.v6ip{font-size:13.5px;letter-spacing:-.2px}
-  .route-card .rc-line .ms{color:var(--muted);font-weight:400;font-size:13.5px;margin-left:auto;padding-left:10px;white-space:nowrap;flex:none}
-  .route-card .rc-more{font-size:13.5px;color:var(--muted);margin-top:2px}
-  .route-card .rc-time{font-size:13.5px;color:var(--muted);margin-top:6px}
-  .route-card .rc-src{font-size:12.5px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
-  /* 域名一行一个，全部从同一条竖线开始：
-     第一行是主域名（实色），其余前面留固定宽度的 ＋ 号位，
-     缩进相同，所以第一个字符必然对齐——之前主域名跟「系列」挤在一行、
-     其余域名套在 code 里带内边距，两种缩进不一样，看着就是没对齐。 */
-  .route-card .rc-doms{margin-top:6px;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .route-card .rc-time{font-size:13px;color:var(--muted);margin-top:10px;font-variant-numeric:tabular-nums}
+  .route-card .rc-src{font-size:13px;line-height:1.6;padding:0 7px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
+  /* 域名一行一个，全部顶格左对齐：主域名用实色加粗区分，
+     其余域名同缩进、不加任何前缀符号 */
+  .route-card .rc-doms{margin-top:8px;display:flex;flex-direction:column;gap:3px;min-width:0}
   .route-card .rc-d{
-    position:relative;padding-left:15px;
-    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.7;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;line-height:1.62;
     color:var(--muted);word-break:break-all;
   }
-  .route-card .rc-d.main{color:var(--text);opacity:.92}
-  .route-card .rc-d:not(.main)::before{content:"＋";position:absolute;left:0;opacity:.5;font-family:inherit}
+  .route-card .rc-d.primary{color:var(--text);font-weight:600;opacity:.95}
   /* 推送正文预览：原样展示会发出去的那段文本 */
   .pushprev{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:8px 11px}
   .pushprev summary{font-size:12.5px;color:var(--muted);cursor:pointer;outline:none}
@@ -289,7 +280,6 @@
   .iplist{display:flex;flex-direction:column;gap:3px}
   .iplist .row{display:flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;word-break:break-all}
   .iplist .lat{color:var(--muted);font-size:13px}
-  .route-card .rc-time{font-size:13.5px;color:var(--muted);margin-top:6px}
 
   table{width:100%;border-collapse:collapse;font-size:14px}
   th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
@@ -416,17 +406,15 @@
     .grid.c5 > :last-child:nth-child(odd){grid-column:auto}
     .grid.c2{grid-template-columns:1fr}
     .grid.route{gap:10px}
-    .grid.route > .route-card{flex-direction:column;gap:10px;padding:12px}
-    .route-card .rc-body{flex-direction:column;gap:10px}
-    .route-card .rc-l{flex:none;width:100%;max-width:100%;padding:0 0 10px;border-right:0;border-bottom:1px solid var(--border)}
+    .grid.route > .route-card{flex-direction:column;gap:12px;padding:15px 14px}
+    .route-card .rc-body{flex-direction:column;gap:12px}
+    .route-card .rc-l{flex:none;width:100%;max-width:100%;padding:0 0 12px;border-right:0;border-bottom:1px solid var(--border)}
     .route-card .rc-r{flex:none;width:100%;align-items:stretch}
     .route-card .rc-iplist{grid-template-columns:1fr;column-gap:0}
-    .rc-iprow{grid-template-columns:15.5ch minmax(0,1fr)}
-    .rc-iprow.v6ip .ipcell{font-size:12px}
-    .route-card{padding:12px}
-    .route-card .rc-line{font-size:16px;gap:6px}
-    .route-card .rc-line .ip.v6ip{font-size:14px}
-    .route-card .rc-line .ms{font-size:13.5px}
+    .rc-iprow{grid-template-columns:16.5ch minmax(0,1fr)}
+    .rc-iprow.v6ip .ipcell{font-size:13px}
+    .route-card{padding:14px}
+    .route-card .rc-d{font-size:14px}
 
     .card{padding:14px}
     /* 表格在手机上变卡片列表，避免"操作"列被挤出屏幕 */
@@ -1465,7 +1453,7 @@
       if (allDoms.indexOf(mainDom) > 0) { allDoms.splice(allDoms.indexOf(mainDom), 1); allDoms.unshift(mainDom); }
       allDoms.forEach(function(d){
         var rowD = document.createElement("div");
-        rowD.className = "rc-d" + (d === mainDom ? " main" : "");
+        rowD.className = "rc-d" + (d === mainDom ? " primary" : "");
         rowD.textContent = d;
         domList.appendChild(rowD);
       });
