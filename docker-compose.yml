@@ -1,42 +1,45 @@
-# MosDNS 优选一体机（compose 示例）
-# 镜像地址请把 CHANGE_ME 换成你的 GitHub 用户名/组织（或 Docker Hub 用户名）
+# MosDNS 优选一体机 —— 最小可用配置
+#
+# 就这些，复制即用。所有调优参数镜像里都有默认值，
+# 想改再去 README「配置项」挑几个覆盖，或者直接进控制台「配置」页改（保存即生效，不用重启）。
+#
+# 镜像两个来源都行，内容完全一样：
+#   po9873/mosdns:latest           （Docker Hub）
+#   ghcr.io/po9873/mosdns:latest   （GitHub Container Registry）
+
 services:
   mosdns:
-    image: ghcr.io/CHANGE_ME/mosdns:latest
+    image: po9873/mosdns:latest
     container_name: mosdns
     restart: unless-stopped
     ports:
       - "53:53/udp"
       - "53:53/tcp"
-      - "80:80"
-    environment:
-      # ---- 账号密码：固定初始 admin / admin，首次登录强制修改 ----
-      # 不再支持用环境变量指定账号密码（避免环境变量泄露密码）。
-      # 忘记密码时删掉 /data/auth.json 再重启，会回到 admin / admin 强制改密。
-      # ---- 端口 ----
-      PREF_DNS_PORT: "53"
-      PREF_UI_PORT: "80"
-      # ---- 上游 DoH（刻意用 IP 形式，避免自解析循环）----
-      PREF_DOMESTIC_DOH: "https://223.5.5.5/dns-query"
-      PREF_FOREIGN_DOH: "https://1.1.1.1/dns-query"
-      PREF_FOREIGN_DOH_BACKUP: "https://8.8.8.8/dns-query"
-      # ---- 并发线程：留空=自动 ----
-      PREF_THREADS: ""
-      # ---- DNS 缓存条数上限（LRU 淘汰，不会无限增长；控制台可一键清空）----
-      PREF_CACHE_SIZE: "8192"
-      # ---- 换 IP 看门狗：每隔多少秒巡检一次当前生效 IP（发现 1034 立即换）----
-      PREF_WATCHDOG_SEC: "180"
-      # ---- 坏 IP 冷却时长（小时）：1034/证书/5xx 的 IP 在这段时间内不再使用 ----
-      PREF_BAD_TTL_HOURS: "6"
-      # ---- 候选池上限与失效清理（天）----
-      PREF_POOL_MAX: "4000"
-      PREF_SUB_TTL_DAYS: "14"
-      # ---- 官方网段展开时的采样数（每个 CIDR 取几个 IP 去测）----
-      PREF_CIDR_SAMPLE: "6"
-      # ---- 失效源处理：失败几次就处理（默认 1 = 拉不到就删），配合下面的删除开关 ----
-      PREF_SRC_DISABLE_AFTER: "1"
-      # ---- 1=到阈值直接删源（默认），0=只停用保留 ----
-      PREF_SRC_AUTO_DELETE: "1"
+      - "80:80"          # 控制台
     volumes:
       - ./data:/data
-    # 若宿主机 53 端口被占用（如 systemd-resolved），改用 "1053:53/udp" 等
+    environment:
+      TZ: "Asia/Shanghai"
+      # 下面几个是最常改的，默认值已经能用，需要时再取消注释
+      # PREF_DNS_PORT: "53"
+      # PREF_UI_PORT: "80"
+      # PREF_DOMESTIC_DOH: "https://223.5.5.5/dns-query"
+      # PREF_FOREIGN_DOH: "https://1.1.1.1/dns-query"
+      # PREF_FOREIGN_DOH_BACKUP: "https://8.8.8.8/dns-query"
+
+# ------------------------------------------------------------------
+# 想让容器有自己的局域网 IP（比如固定 192.168.1.101，DNS 直接指向它），
+# 改用 macvlan：去掉上面的 ports，换成下面的 networks。
+#
+#     networks:
+#       bridge-host:
+#         ipv4_address: 192.168.1.101
+#     cap_add: [NET_ADMIN, NET_RAW]        # 诊断页的 ping 需要
+#
+# networks:
+#   bridge-host:
+#     external: true
+#     name: bridge-host
+#
+# 注意：macvlan 下不需要 ports 映射，53/80 直接监听在容器自己的 IP 上。
+# ------------------------------------------------------------------

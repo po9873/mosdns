@@ -36,14 +36,31 @@
 
 ## 部署
 
-1. 复制 `docker-compose.yml`，把 `CHANGE_ME` 改成你的用户名。
-2. 首次启动的初始账号是 **`admin` / `admin`**（不设置也能直接用）。
-3. 浏览器打开 `http://<服务器IP>/` 登录，登录后在 **配置 → 账号与密码** 里改成自己的（可改可不改，不强制）。
+`docker-compose.yml` 就是最小可用配置，**复制即用，不用改任何东西**：
 
 ```bash
 docker compose up -d
 docker logs -f mosdns
 ```
+
+然后：
+
+1. 浏览器打开 `http://<服务器IP>/` 。
+2. 初始账号 **`admin` / `admin`**，登录后**强制要求改掉**（账号名也能一起改），改完才进得去。
+3. 忘记密码：删掉 `/data/auth.json` 再重启容器，回到 `admin` / `admin`。
+
+镜像两个来源内容一致，选一个：
+
+```bash
+docker pull po9873/mosdns:latest           # Docker Hub
+docker pull ghcr.io/po9873/mosdns:latest   # GitHub Container Registry
+```
+
+想让容器独占一个局域网 IP（比如固定 `192.168.1.101`，设备上 DNS 直接填它），
+改用 macvlan —— compose 文件末尾注释里有一份现成的写法。
+
+> 调优参数（缓存、看门狗间隔、上游 DoH…）**默认都不用写**，
+> 见下面「配置项」，或直接进控制台「配置」页改，保存即生效，不用重启容器。
 
 ## IP 源（官方 / 第三方 / 镜像，可勾选、可定时扫描）
 
