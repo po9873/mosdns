@@ -12,9 +12,8 @@ DATA_DIR="${PREF_DATA_DIR:-/data}"
 DNS_PORT="${PREF_DNS_PORT:-53}"
 API_PORT="${PREF_API_PORT:-9099}"
 UI_PORT="${PREF_UI_PORT:-80}"
-FOREIGN_DOH="${PREF_FOREIGN_DOH:-https://1.1.1.1/dns-query}"
-FOREIGN_DOH_BACKUP="${PREF_FOREIGN_DOH_BACKUP:-https://8.8.8.8/dns-query}"
-DOMESTIC_DOH="${PREF_DOMESTIC_DOH:-https://223.5.5.5/dns-query}"
+# 上游 DoH 不再写死：启动时本地探测 /data/doh_*_candidates.txt 候选清单，
+# 自动选用当地能通的（见下方「渲染配置」段）。如需整体替换，直接改这两个文本文件即可。
 THREADS="${PREF_THREADS:-}"
 CACHE_SIZE="${PREF_CACHE_SIZE:-8192}"
 
@@ -33,6 +32,10 @@ python3 /app/scheduler/lib/lists.py init >/dev/null 2>&1 || true
 elog "分流清单: $(wc -l < "$DATA_DIR/china_ip.txt" 2>/dev/null || echo 0) 条国内 IP 段"
 # IP 源与候选池：首次启动写入内置源（官方 + 第三方 + 镜像）
 python3 /app/scheduler/lib/subs.py init >/dev/null 2>&1 || true
+# 上游 DoH 候选清单：/data 缺文件时从镜像补齐，绝不覆盖用户已修改的版本
+[ -f "$DATA_DIR/doh_remote_candidates.txt" ] || cp /app/config/doh_remote_candidates.txt "$DATA_DIR/doh_remote_candidates.txt"
+[ -f "$DATA_DIR/doh_local_candidates.txt"  ] || cp /app/config/doh_local_candidates.txt  "$DATA_DIR/doh_local_candidates.txt"
+elog "DoH 候选清单: 国外 $(wc -l < "$DATA_DIR/doh_remote_candidates.txt" 2>/dev/null || echo 0) 行 / 国内 $(wc -l < "$DATA_DIR/doh_local_candidates.txt" 2>/dev/null || echo 0) 行（可改 /data 下文件增删）"
 
 # ---------- 自动线程 ----------
 if [ -z "$THREADS" ] || [ "$THREADS" = "auto" ]; then
@@ -60,19 +63,32 @@ fi
 # ---------- 默认设置 ----------
 if [ ! -f "$DATA_DIR/settings.json" ]; then
   cat > "$DATA_DIR/settings.json" <<EOF
-{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"top_n":3,"ipv6":true,"verify_https":true,"bad_ttl_hours":${PREF_BAD_TTL_HOURS:-6},"watchdog_sec":${PREF_WATCHDOG_SEC:-180},"sub_ttl_days":${PREF_SUB_TTL_DAYS:-14},"pool_max":${PREF_POOL_MAX:-4000},"push":{"enabled":false,"url":"","events":"round,warn,login"},"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true}}
+{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"top_n":3,"ipv6":true,"verify_https":true,"bad_ttl_hours":${PREF_BAD_TTL_HOURS:-6},"watchdog_sec":${PREF_WATCHDOG_SEC:-180},"sub_ttl_days":${PREF_SUB_TTL_DAYS:-14},"pool_max":${PREF_POOL_MAX:-4000},"stable_hours":${PREF_STABLE_HOURS:-6},"pref_stable":true,"push":{"enabled":false,"url":"","events":"round,warn,login"},"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true}}
 EOF
 fi
 
 # ---------- 渲染 mosdns 配置 ----------
+# 上游 DoH 由本地探测结果注入（不写死任何厂商）：
+#   select_doh.py 在【容器内】逐个连候选 IP、发真实 DoH 请求，只收录当地真能通的。
 esc() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
+
+REMOTE_LIST=$(python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_remote_candidates.txt" www.google.com 3 8 2>/tmp/remote_doh.log)
+LOCAL_LIST=$(python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_local_candidates.txt" www.baidu.com 3 8 2>/tmp/local_doh.log)
+# 兜底：极端情况下探测脚本无输出时，给一个占位上游保证配置合法（解析会失败但服务不崩）
+[ -n "$REMOTE_LIST" ] || REMOTE_LIST='        - addr: "https://1.1.1.1/dns-query"
+          insecure_skip_verify: true'
+[ -n "$LOCAL_LIST" ]  || LOCAL_LIST='        - addr: "https://223.5.5.5/dns-query"
+          insecure_skip_verify: true'
+printf '%s\n' "$REMOTE_LIST" > /tmp/remote_list.txt
+printf '%s\n' "$LOCAL_LIST"  > /tmp/local_list.txt
+elog "国外 DoH 本地探测选中 $(grep -c 'addr:' /tmp/remote_list.txt) 个；国内 $(grep -c 'addr:' /tmp/local_list.txt) 个"
+
 sed \
   -e "s|__DNS_PORT__|$(esc "$DNS_PORT")|g" \
   -e "s|__API_PORT__|$(esc "$API_PORT")|g" \
   -e "s|__CACHE_SIZE__|$(esc "$CACHE_SIZE")|g" \
-  -e "s|__DOMESTIC_DOH__|$(esc "$DOMESTIC_DOH")|g" \
-  -e "s|__FOREIGN_DOH__|$(esc "$FOREIGN_DOH")|g" \
-  -e "s|__FOREIGN_DOH_BACKUP__|$(esc "$FOREIGN_DOH_BACKUP")|g" \
+  -e "/__REMOTE_DOH_LIST__/r /tmp/remote_list.txt" -e "/__REMOTE_DOH_LIST__/d" \
+  -e "/__LOCAL_DOH_LIST__/r /tmp/local_list.txt"  -e "/__LOCAL_DOH_LIST__/d" \
   /app/config/config.yaml > "$DATA_DIR/config.yaml"
 elog "配置已渲染: $DATA_DIR/config.yaml (DNS:$DNS_PORT API:$API_PORT UI:$UI_PORT)"
 

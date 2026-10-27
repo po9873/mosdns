@@ -32,22 +32,22 @@ plugins:
       dump_file: /data/cache.dump
       dump_interval: 600
 
-  # ---- 国内上游（DoH，由 PREF_DOMESTIC_DOH 注入）----
+  # ---- 国内上游（DoH；由入口按 /data/doh_local_candidates.txt 本地探测结果注入）----
   - tag: forward_local
     type: forward
     args:
       concurrent: 2
       upstreams:
-        - addr: "__DOMESTIC_DOH__"
+__LOCAL_DOH_LIST__
 
-  # ---- 国外上游（DoH 直连，不依赖 socks5；由 PREF_FOREIGN_DOH 注入）----
+  # ---- 国外上游（DoH 直连；由入口按 /data/doh_remote_candidates.txt 本地探测结果注入）----
+  # 不写死任何特定厂商：启动时本地逐个探测候选清单，自动选用当地能通的。
   - tag: forward_remote
     type: forward
     args:
       concurrent: 2
       upstreams:
-        - addr: "__FOREIGN_DOH__"
-        - addr: "__FOREIGN_DOH_BACKUP__"
+__REMOTE_DOH_LIST__
 
   # ---- 国外/GFW 域名集合（强制走国外，避开国内污染）----
   - tag: gfw_domains

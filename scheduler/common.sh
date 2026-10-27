@@ -152,6 +152,11 @@ probe_best() {
   probe_top "$1" "${2:-443}" "${3:-4}" "${4:-3}" 1 | awk 'NR==1{print $1}'
 }
 
+# 取文件 mtime（秒），跨平台用 python 实现，避免 busybox/coreutils 差异
+stat_mtime() {
+  python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$1" 2>/dev/null
+}
+
 # 从候选里排除已经试过的一批
 exclude_ips() {
   local all="$1" drop="$2" a b
@@ -412,6 +417,31 @@ run_route() {
     false|False|0) want6=0 ;;
     *) want6=1 ;;
   esac
+
+  # ---- 稳定模式：守住已选 IP，不全量重探（多源池仅作「切换依据」）----
+  # 若本路已有选中结果、且近 stable_hours 内刚全量优选过、且当前 IP 轻量存活检测通过，
+  # 则跳过本轮全量重探直接沿用——IP 稳定不抖动、速度快。只有看门狗发现当前 IP 退化
+  # （1034/超时）或 stable 窗口到期时，才再触发全量重探，从多源候选池里重新选/换。
+  local rhf="$PREF_DIR/$route.hosts" stable_hours mnow mprev cur live_n
+  stable_hours=$(setting stable_hours)
+  case "$stable_hours" in ''|*[!0-9]*) stable_hours=6 ;; esac
+  if [ "${stable_hours:-0}" -gt 0 ] && [ -s "$rhf" ] && [ "$(setting pref_stable)" != "false" ]; then
+    mnow=$(date +%s)
+    mprev=$(stat_mtime "$rhf")
+    if [ -n "$mprev" ] && [ $(( (mnow - ${mprev:-0}) / 60 )) -lt "$stable_hours" ]; then
+      cur=$(awk 'NR==1{for(i=2;i<=NF;i++) print $i}' "$rhf" | grep -E '^[0-9a-fA-F:.]+$')
+      if [ -n "$cur" ]; then
+        live_n=$(probe_top "$cur" "$port" "$conc" 2 $((top_n)) 2>/dev/null | awk 'NF' | wc -l | tr -d ' ')
+        if [ "${live_n:-0}" -ge 1 ]; then
+          log "$route: 稳定模式，当前 $(printf '%s\n' "$cur" | awk 'NF' | wc -l | tr -d ' ') 个 IP 仍存活，跳过全量重探（约 $(( (mnow - mprev) / 60 )) 分钟前优选过）"
+          write_state "$route" "$target" "stable" "" "" "$(printf '%s\n' "$cur" | awk 'NF' | wc -l | tr -d ' ')" 0 0
+          return 0
+        else
+          log "$route: 稳定模式轻量存活检测失败，触发全量重探"
+        fi
+      fi
+    fi
+  fi
 
   # ---- 候选组装：种子域名全解析 + 订阅池 + 种子兜底 IP ----
   seed_doms=$(seed_domains "$seed")
