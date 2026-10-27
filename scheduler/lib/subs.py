@@ -680,17 +680,47 @@ def fetch_item(it, proxy="", merge=True):
             route = "cf"
         pool = load_pool(route)
         bucket = pool["ips"]
-        added = 0
+        # ---- 池子席位：第三方优先，官方不抢位 ----
+        # 现实数据：Google 官方段 = 2400 万个地址、AWS CloudFront = 422 万、
+        # GitHub = 219 万，而社区实测清单只有几千条（Ponderfly 8819、GitHub520 21）。
+        # 池子一共 POOL_MAX 格，以前谁先到谁占——官方源一灌就占满，后到的
+        # 第三方源整份被 continue 掉，等于「明明有实测清单却永远用不上」。
+        # 现在：官方源满了就不进；非官方源可以挤掉一个「从没验证过的官方」，
+        # 保证池子里永远给第三方留着位置。
+        kr = _kind_rank()
+        mykey = it.get("key", "")
+        myrank = kr(mykey)
+        victims = None      # 只给非官方源用，懒生成，免得每个 IP 都扫一遍 4000 条
+        evicted = added = 0
         for ip in uniq:
             if ip in bucket:
                 bucket[ip]["a"] = now
-                bucket[ip]["s"] = it.get("key", "")
-            else:
+                # 同一个 IP 被多个源收录时，归属记在「更可信」的那个源上，
+                # 否则官方的 last-write 会把第三方标成官方，优先级就白设了。
+                if kr(bucket[ip].get("s")) > myrank:
+                    bucket[ip]["s"] = mykey
+                continue
+            if len(bucket) >= POOL_MAX:
+                if myrank >= 2:
+                    continue
+                if victims is None:
+                    victims = sorted(
+                        [k for k, v in bucket.items()
+                         if kr(v.get("s")) >= 2 and int(v.get("ok", 0)) == 0],
+                        key=lambda k: int(bucket.get(k, {}).get("a", 0)))
+                while victims and len(bucket) >= POOL_MAX:
+                    v = victims.pop(0)
+                    vv = bucket.get(v)
+                    if vv is not None and kr(vv.get("s")) >= 2 and int(vv.get("ok", 0)) == 0:
+                        bucket.pop(v, None)
+                        evicted += 1
                 if len(bucket) >= POOL_MAX:
                     continue
-                bucket[ip] = {"s": it.get("key", ""), "a": now, "ok": 0, "fl": 0, "lo": 0}
-                added += 1
+            bucket[ip] = {"s": mykey, "a": now, "ok": 0, "fl": 0, "lo": 0}
+            added += 1
         save_pool(route, pool)
+        if evicted:
+            it["_evicted"] = evicted
     else:
         added = 0
 
@@ -1172,6 +1202,38 @@ def _bad_set():
     return {k for k, v in load_bad().items() if float(v.get("until", 0)) > now}
 
 
+_KIND_CACHE = None
+
+
+def _kind_rank():
+    """源 key → 优先级（数字越小越优先）。供取样排序用。
+
+    0 = 第三方实测清单 / 用户自己加的 / DNS 实时解析 / 种子
+    1 = 镜像（内容同官方，只是换了条能拉通的线路）
+    2 = 官方网段（全量地址空间，量最大、命中率最低）
+    """
+    global _KIND_CACHE
+    if _KIND_CACHE is None:
+        m = {}
+        try:
+            for it in load_src()["items"]:
+                k = it.get("kind")
+                m[it.get("key")] = 0 if k in ("thirdparty", "custom") else (2 if k == "official" else 1)
+        except Exception:
+            m = {}
+        _KIND_CACHE = m
+
+    def rank(s):
+        if not s or s in ("dns", "seed", "verify", "feed"):
+            return 0
+        if s in _KIND_CACHE:
+            return _KIND_CACHE[s]
+        # sources.json 读不到时的兜底：至少别让 official-* 被当成第三方，
+        # 否则「官方不许抢位」这条会失效，池子照样被官方灌满。
+        return 2 if str(s).startswith("official-") else 1
+    return rank
+
+
 def cmd_pool(route, n=120, smart=False, verified=False):
     n = max(1, min(1000, int(n)))
     bad = _bad_set()
@@ -1191,9 +1253,20 @@ def cmd_pool(route, n=120, smart=False, verified=False):
     fresh = [kv for kv in items if int(kv[1].get("ok", 0)) == 0 and int(kv[1].get("fl", 0)) == 0]
     ids = {ip for ip, _ in fresh}
     known = [kv for kv in items if kv[0] not in ids]
-    fresh.sort(key=lambda kv: -int(kv[1].get("a", 0)))
+
+    # 取样要「第三方优先」。
+    # 为什么：官方网段（GitHub meta 几万条、AWS ip-ranges 6000+ 条、Google 85 段）
+    # 是全量定义的地址空间，随机采样命中率极低——GitHub 的 140.82.112.0/20 里
+    # 4096 个地址只有 8 个真能服务 ghcr.io。而社区实测清单（IPDB、Ponderfly、
+    # GitHub520）本身就是一个个人肉筛过的 IP，命中率高一个数量级。
+    # 以前取样不区分来源，官方那堆「从没验过」的地址会把第三方挤掉，
+    # 结果就是「扫了半天没结果、机器还累」。
+    kr = _kind_rank()
+    fresh.sort(key=lambda kv: (kr(kv[1].get("s")), -int(kv[1].get("a", 0))))
     known.sort(key=lambda kv: (int(kv[1].get("fl", 0)), -int(kv[1].get("lo", 0))))
 
+    # 前 1/3 名额给「没测过的」，保证每轮都有新鲜候选；剩下用测过的补齐，
+    # 再不够才回头拿没测过的填满（不浪费这一轮的探测预算）。
     q = max(1, n // 3)
     pick = [ip for ip, _ in fresh[:q]]
     for ip, _ in known:
@@ -1285,6 +1358,19 @@ def cmd_prune(route=""):
                 kills.append((ip, "stale"))
         for ip, _ in kills:
             bucket.pop(ip, None)
+        # 按来源配额裁剪：官方段（没验证过的）最多占 70%，多余的从最旧的开始删。
+        # 为什么需要：升级前老池子已经被官方灌满了，第三方源从那一刻起就挤不进来。
+        # 光靠「新 IP 进来时挤掉一个」要等好几轮才腾出位置，不如这里一次性清掉。
+        kr = _kind_rank()
+        off = [(ip, v) for ip, v in bucket.items()
+               if kr(v.get("s")) >= 2 and int(v.get("ok", 0)) == 0]
+        cap_off = int(POOL_MAX * 0.7)
+        if len(off) > cap_off:
+            off.sort(key=lambda kv: int(kv[1].get("a", 0)))
+            drop = len(off) - cap_off
+            for ip, _ in off[:drop]:
+                bucket.pop(ip, None)
+            kills.extend((ip, "quota") for ip, _ in off[:drop])
         if len(bucket) > POOL_MAX:
             rank = sorted(bucket.items(),
                           key=lambda kv: (-int(kv[1].get("ok", 0)),

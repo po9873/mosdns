@@ -127,6 +127,10 @@ LISTS = {
         "sources": [
             {"url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt"},
             {"url": "https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/cn"},
+            # raw.githubusercontent.com 实测经常读超时（线上就掉过），
+            # 加两个国内可达的镜像：连不上官方仓库时还有得拉。
+            {"url": "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/direct-list.txt"},
+            {"url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt"},
         ],
     },
     "gfw_domains": {
@@ -138,6 +142,8 @@ LISTS = {
         "sources": [
             {"url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt"},
             {"url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt"},
+            {"url": "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/gfw.txt"},
+            {"url": "https://ghproxy.net/https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt"},
         ],
     },
     # CDN 网段库：用于诊断页判断「这个 IP 是谁的」。多源合并，任一可用即保留其余
@@ -153,6 +159,9 @@ LISTS = {
             {"url": "https://www.cloudflare.com/ips-v6", "parser": "cdn", "provider": "Cloudflare"},
             {"url": "https://www.gstatic.com/ipranges/goog.txt", "parser": "cdn_goog", "provider": "Google"},
             {"url": "https://api.fastly.com/public-ip-list", "parser": "cdn_fastly", "provider": "Fastly"},
+            # CloudFront 段：TMDB / IMDb 两路用的就是它。以前没有这份，
+            # 诊断页看这两路的 IP 全是「未知」，等于看不出是谁家的节点。
+            {"url": "https://ip-ranges.amazonaws.com/ip-ranges.json", "parser": "cdn_aws", "provider": "CloudFront"},
         ],
     },
 }
@@ -387,6 +396,21 @@ def _parse_source(src, spec):
             for k in ("addresses", "ipv6_addresses"):
                 for c in d.get(k) or []:
                     items.append("%s %s" % (provider, c))
+        except Exception:
+            pass
+    elif parser == "cdn_aws":
+        # AWS ip-ranges.json 里 90% 是 EC2/S3/AMAZON 段，只取 service=CLOUDFRONT
+        # （214 段 v4 / 34 段 v6）。不筛的话会把几万个 EC2 段全写进来，
+        # 诊断页面对任何 AWS 上的 IP 都显示「CloudFront」，等于没判断。
+        items = []
+        try:
+            d = json.loads(raw)
+            for p in d.get("prefixes") or []:
+                if p.get("service") == "CLOUDFRONT" and p.get("ip_prefix"):
+                    items.append("%s %s" % (provider, p["ip_prefix"]))
+            for p in d.get("ipv6_prefixes") or []:
+                if p.get("service") == "CLOUDFRONT" and p.get("ipv6_prefix"):
+                    items.append("%s %s" % (provider, p["ipv6_prefix"]))
         except Exception:
             pass
     else:
