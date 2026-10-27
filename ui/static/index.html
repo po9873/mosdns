@@ -83,12 +83,12 @@
     display:flex; flex-direction:column; padding:20px 14px; position:sticky; top:0; height:100vh;
   }
   .side-brand{display:flex;align-items:center;gap:11px;padding:6px 8px 20px}
-  .side-brand b{font-size:17px;letter-spacing:.3px}
-  .side-brand b span{color:var(--blue2)}
+  .side-brand b{font-size:16px;letter-spacing:.3px}
+  .side-brand b span{color:var(--muted);font-weight:400}
   nav{display:flex;flex-direction:column;gap:6px}
   nav a{
     display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;
-    color:var(--muted);text-decoration:none;font-size:15.5px;transition:.15s;cursor:pointer;
+    color:var(--muted);text-decoration:none;font-size:15px;transition:.15s;cursor:pointer;
   }
   nav a:hover{background:var(--panel);color:var(--text)}
   nav a.active{background:var(--panel);color:var(--blue2);font-weight:600}
@@ -104,7 +104,7 @@
   nav a[data-view=diag] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 12h-4l-3 9L9 3l-3 9H2'/%3E%3C/svg%3E")}
   nav a[data-view=config] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='4' y1='21' x2='4' y2='14'/%3E%3Cline x1='4' y1='10' x2='4' y2='3'/%3E%3Cline x1='12' y1='21' x2='12' y2='12'/%3E%3Cline x1='12' y1='8' x2='12' y2='3'/%3E%3Cline x1='20' y1='21' x2='20' y2='16'/%3E%3Cline x1='20' y1='12' x2='20' y2='3'/%3E%3Cline x1='1' y1='14' x2='7' y2='14'/%3E%3Cline x1='9' y1='8' x2='15' y2='8'/%3E%3Cline x1='17' y1='16' x2='23' y2='16'/%3E%3C/svg%3E")}
   nav a[data-view=source] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cellipse cx='12' cy='5' rx='9' ry='3'/%3E%3Cpath d='M21 12c0 1.66-4 3-9 3s-9-1.34-9-3'/%3E%3Cpath d='M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5'/%3E%3C/svg%3E")}
-  .side-foot{margin-top:auto;padding:14px 10px 6px;color:var(--muted);font-size:13px;border-top:1px solid var(--border)}
+  .side-foot{margin-top:auto;padding:14px 10px 6px;color:var(--muted);font-size:14px;border-top:1px solid var(--border)}
   .side-foot .row{display:flex;justify-content:space-between;margin-top:8px}
   .side-foot .row span:last-child{color:var(--text);opacity:.8}
   .main{flex:1;min-width:0;display:flex;flex-direction:column}
@@ -149,7 +149,7 @@
   .rc-iprow .ipcell{display:flex;align-items:baseline;gap:6px;white-space:nowrap;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;
     font-variant-numeric:tabular-nums}
-  .rc-iprow .ms{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;font-weight:400;
+  .rc-iprow .ms{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:400;
     color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:.2px}
   .rc-iprow .tag{align-self:center}
   /* IPv6 只在冒号处换行（ipHtml 已经插了 <wbr>），不会把 737f 这种字段从中间劈开 */
@@ -164,19 +164,19 @@
   .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
   .route-card:hover{border-color:var(--blue)}
   .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-  .route-card .rc-name{font-size:17px;font-weight:600;color:var(--text);opacity:.9;letter-spacing:.2px}
+  .route-card .rc-name{font-size:16px;font-weight:600;color:var(--text);letter-spacing:.2px}
   .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;word-break:break-all}
-  .route-card .rc-time{font-size:12.5px;color:var(--muted);margin-top:10px;font-variant-numeric:tabular-nums}
-  .route-card .rc-src{font-size:13px;line-height:1.6;padding:0 7px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
+  .route-card .rc-time{font-size:15px;color:var(--muted);margin-top:10px;font-variant-numeric:tabular-nums}
+  .route-card .rc-src{font-size:15px;line-height:1.6;padding:0 7px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
   /* 域名一行一个，全部顶格左对齐。
      字号/字重全部一样——主域名只用略亮的颜色区分，
      加粗会让等宽字体看起来「大一号」，整列就不齐了 */
   .route-card .rc-doms{margin-top:8px;display:flex;flex-direction:column;gap:4px;min-width:0}
   .route-card .rc-d{
     font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;line-height:1.6;font-weight:400;
-    color:var(--muted);word-break:break-all;
+    color:var(--text);opacity:.82;word-break:break-all;
   }
-  .route-card .rc-d.primary{color:var(--text);opacity:.92}
+  .route-card .rc-d.primary{color:var(--text)}
   /* 推送正文预览：原样展示会发出去的那段文本 */
   .pushprev{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:8px 11px}
   .pushprev summary{font-size:12.5px;color:var(--muted);cursor:pointer;outline:none}
@@ -184,7 +184,7 @@
     margin:9px 0 2px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.75;
     color:var(--text);white-space:pre-wrap;word-break:break-word;max-height:340px;overflow:auto;
   }
-  .route-card .rc-sub{font-size:13.5px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .route-card .rc-sub{font-size:15px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .tag{display:inline-block;font-size:11px;line-height:1.5;padding:0 5px;border-radius:4px;border:1px solid var(--border);color:var(--muted)}
   .tag.v6{color:#3b8eea;border-color:rgba(59,142,234,.45)}
   /* ---------- 源管理 ---------- */
@@ -386,7 +386,7 @@
     }
     .side-brand,.side-foot{display:none}
     nav{flex-direction:row;width:100%;justify-content:space-around;gap:0;min-width:0}
-    nav a{flex-direction:column;gap:5px;font-size:12.5px;padding:7px 2px;flex:1 1 0;min-width:0;text-align:center}
+    nav a{flex-direction:column;gap:5px;font-size:13px;padding:7px 2px;flex:1 1 0;min-width:0;text-align:center}
     nav a i{width:17px;height:17px}
     .main{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 
@@ -415,7 +415,9 @@
     .rc-iprow.v6ip .ms{justify-self:start}
     .rc-iprow.v6ip .ipcell{font-size:13px}
     .route-card{padding:14px}
-    .route-card .rc-d{font-size:14px}
+    .route-card .rc-d{font-size:14px;}
+    .route-card .rc-time{font-size:14px}
+    .rc-iprow .ms{font-size:14px}
 
     .card{padding:14px}
     /* 表格在手机上变卡片列表，避免"操作"列被挤出屏幕 */
