@@ -130,7 +130,7 @@
      不再用网格——固定列数时七张卡必然排成 5+2，右边空一大片。 */
   .grid.route{display:flex;flex-direction:column;gap:12px}
   .grid.route > .route-card{display:flex;gap:18px;align-items:stretch;padding:12px 14px}
-  .route-card .rc-l{flex:0 0 268px;min-width:0;padding-right:16px;border-right:1px solid var(--border)}
+  .route-card .rc-l{flex:0 0 300px;min-width:0;padding-right:16px;border-right:1px solid var(--border)}
   .route-card .rc-r{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:8px}
   .route-card .rc-iplist{display:flex;flex-wrap:wrap;gap:8px}
   .rc-ipchip{
@@ -166,12 +166,13 @@
   .route-card .rc-dom{font-size:14px;color:var(--muted);margin-top:4px;word-break:break-all;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
   .route-card .rc-src{font-size:12.5px;line-height:1.6;padding:0 6px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
   .route-card .rc-host{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;color:var(--text);opacity:.85}
-  .route-card .rc-extra{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;align-items:center}
-  .route-card .rc-extra::before{content:"＋";font-size:12.5px;color:var(--muted);opacity:.7}
+  /* 域名一个一行：挤在一行里横排，长的域名会被截断成两截，看不清是哪个域名 */
+  .route-card .rc-extra{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin-top:6px}
   .route-card .rc-extra code{
     font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text);
-    background:rgba(255,255,255,.08);border-radius:6px;padding:1px 6px;word-break:break-all;
+    background:rgba(255,255,255,.08);border-radius:6px;padding:1px 6px;word-break:break-all;max-width:100%;
   }
+  .route-card .rc-extra code::before{content:"＋ ";opacity:.55;font-weight:400}
   html[data-theme="light"] .route-card .rc-extra code{background:rgba(20,40,80,.07)}
   /* 推送正文预览：原样展示会发出去的那段文本 */
   .pushprev{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:8px 11px}
@@ -640,7 +641,7 @@
     backdrop-filter:blur(var(--blur)) saturate(180%);
     box-shadow:var(--glass-shadow), inset 0 1px 0 var(--glass-hi);
   }
-  .rcard .rc-l{flex:0 0 300px;min-width:0;padding-right:16px;border-right:1px solid var(--border)}
+  .rcard .rc-l{flex:0 0 330px;min-width:0;padding-right:16px;border-right:1px solid var(--border)}
   .rcard .rc-r{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:8px}
   .rcard .ipl{display:flex;flex-wrap:wrap;gap:8px}
   .rcard .ipl .r{
@@ -654,10 +655,10 @@
     border:1px solid var(--glass-brd);color:var(--muted);background:rgba(255,255,255,.06);flex:none;
   }
   .rcard .hd .chip.ser{color:var(--blue2);background:rgba(90,162,240,.13);border-color:rgba(90,162,240,.35)}
-  .rcard .use{font-size:12.5px;color:var(--muted);margin:6px 0 11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .rcard .use{font-size:12.5px;color:var(--muted);margin:6px 0 0;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
   .rcard .use code{
     font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--text);
-    background:rgba(255,255,255,.08);border-radius:7px;padding:1px 7px;
+    background:rgba(255,255,255,.08);border-radius:7px;padding:1px 7px;max-width:100%;
   }
   html[data-theme="light"] .rcard .use code{background:rgba(20,40,80,.07)}
   .rcard .use code.main{background:rgba(90,162,240,.16);color:var(--blue2)}
