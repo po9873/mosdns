@@ -602,8 +602,9 @@ run_route() {
             if [ "${live_n:-0}" -lt "$keep_min" ]; then
               orig_n="$live_n"
               local want hf candf candlist vres added extra2 nb2
-              want=$(( (keep_min - live_n) * 4 ))
-              [ "$want" -gt 12 ] && want=12
+              want=$(( (keep_min - live_n) * 8 ))
+              [ "$want" -lt 12 ] && want=12
+              [ "$want" -gt 24 ] && want=24
               hf="$PREF_DIR/.$route.have"; candf="$PREF_DIR/.$route.cand"
               printf '%s\n' "$live_rows" | awk 'NF{print $1}' > "$hf"
               sub_cli pool "$route" 40 > "$candf" 2>/dev/null

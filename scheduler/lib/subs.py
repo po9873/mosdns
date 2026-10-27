@@ -394,7 +394,11 @@ def expand_cidr(net, sample=None):
             pick = [cand[int(i * step)] for i in range(cap)]
     else:
         step = max(1, n // max(1, cap))
-        pick = [base + step * i + 1 for i in range(cap)]
+        # 取每一等份的「中间」而不是开头：开头是网段地址本身（::1 / .1 这种），
+        # 大段的第一个地址经常是边界地址、根本没路由。GitHub meta 的 v6 段
+        # （/32）按 +1 取出来全是 2a0a:a440::1 这种，探一轮全不通，白占候选。
+        off = step // 2 if step > 2 else 1
+        pick = [base + step * i + off for i in range(cap)]
     for v in pick:
         if v >= top:
             break
