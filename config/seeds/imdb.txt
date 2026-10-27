@@ -1,0 +1,7 @@
+# IMDb 路候选种子（公开、极小、不会变）
+#
+# 只放域名，不放兜底 IP：IMDb 同样在 AWS CloudFront 上，候选来自 AWS 官方
+# ip-ranges.json 的 CLOUDFRONT 段，能不能用由本机实测决定。
+www.imdb.com
+api.graphql.imdb.com
+m.media-amazon.com

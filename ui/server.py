@@ -41,7 +41,7 @@ DIAG_PY = "/app/scheduler/lib/diag.py"
 PUSH_PY = "/app/scheduler/lib/push.py"
 LISTS_META = os.path.join(DATA_DIR, "lists_meta.json")
 
-ROUTES = ["cf", "google", "gt", "github", "ghcr"]
+ROUTES = ["cf", "google", "gt", "github", "ghcr", "tmdb", "imdb"]
 SESSIONS = {}
 SESSION_TTL = 7 * 24 * 3600
 LOCK = threading.Lock()
@@ -768,10 +768,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/sources/add":
             data = self._body()
-            name = str(data.get("name") or "自定义源").strip()[:60]
+            name = str(data.get("name") or "").strip()[:60]
+            route = str(data.get("route") or "cf").strip()
+            if route not in ROUTES:
+                route = "cf"
             u4 = str(data.get("url_v4") or "").strip()
             u6 = str(data.get("url_v6") or "").strip()
-            r = run_subs(["add", name, u4, u6])
+            inline = str(data.get("inline") or "")
+            # 直贴 IP 清单模式：不走网络，只把清单交给 subs 存下来并立刻入池
+            if inline.strip():
+                args = ["add", name or "手动 IP 清单", "-", "", route]
+                r = run_subs(args, stdin_data=inline.encode("utf-8"), timeout=60)
+            else:
+                r = run_subs(["add", name or "自定义源", u4, u6, route], timeout=60)
             if not r.get("ok"):
                 return self._send(400, r)
             # 添加后立刻拉一次：手动添加的源要能马上生效，看到数量
@@ -865,6 +874,9 @@ class Handler(BaseHTTPRequestHandler):
                 cur["list_update_hours"] = max(1, int(data["list_update_hours"]))
             if isinstance(data.get("top_n"), (int, float)):
                 cur["top_n"] = min(8, max(1, int(data["top_n"])))
+            # 保底个数：每路至少留几个可用 IP（不足会从池里补历史验证过的）
+            if isinstance(data.get("keep_min"), (int, float)):
+                cur["keep_min"] = min(8, max(1, int(data["keep_min"])))
             if "ipv6" in data:
                 cur["ipv6"] = bool(data["ipv6"])
             if "verify_https" in data:

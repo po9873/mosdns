@@ -7,7 +7,7 @@
 set -u
 source /app/scheduler/common.sh
 
-ROUTES="cf google gt github ghcr"
+ROUTES="cf google gt github ghcr tmdb imdb"
 LISTS_PY="/app/scheduler/lib/lists.py"
 SUB_PY="/app/scheduler/lib/subs.py"
 
@@ -88,15 +88,16 @@ maybe_pull_sources() {
   log "源扫描完成：检查 ${cn} 个，可用 ${gn:-0} 个"
 }
 
-# 五路串行跑一遍，全部跑完只判断一次是否需要重载引擎
+# 七路串行跑一遍，全部跑完只判断一次是否需要重载引擎
 run_all() {
   local r en fp ok=0 bad=0 names="" rc
   fp=$(file_sig "$PREF_DIR/all.hosts")
   for r in $ROUTES; do
     en=$(setting "routes.$r")
+    # 只有明确关掉才跳过：老版本的 settings.json 里没有后加的几路键，
+    # 空值当成「没配置过」= 开着，否则新加的路永远跑不起来。
     case "$en" in
-      true|True|1) ;;
-      *) log "跳过 $r（已在配置中关闭）"; continue ;;
+      false|False|0) log "跳过 $r（已在配置中关闭）"; continue ;;
     esac
     log "== 开始 $r 路 =="
     "/app/scheduler/${r}_pref.sh"
@@ -113,9 +114,9 @@ run_all() {
       fi
     fi
   done
-  # 五路全部跑完，只在这里判断一次是否需要重载
+  # 七路全部跑完，只在这里判断一次是否需要重载
   reload_if_changed "$fp"
-  notify "round" "五路优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。"
+  notify "round" "七路优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。"
 }
 
 # UI 的「立即执行」走这里：once 单路 或 once all
@@ -145,7 +146,7 @@ lists_mode() {
 
 daemon_mode() {
   local interval
-  log "调度器启动，五路串行"
+  log "调度器启动，七路串行"
   maybe_update_lists
   maybe_pull_sources
   while true; do

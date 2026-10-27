@@ -1,13 +1,14 @@
 # MosDNS 优选一体机
 
-原版 [mosdns](https://github.com/IrineSistiana/mosdns) 源码构建 + 五路优选 + 单登录控制台。
+原版 [mosdns](https://github.com/IrineSistiana/mosdns) 源码构建 + 七路优选 + 单登录控制台。
 零第三方黑盒；运行时不下载任何东西；所有版本可由 `versions.env` 锁定。
 
 ## 特性
 
 - **原版核心**：从官方 v5 源码 `go build`，零第三方打包。
-- **五路优选**：Cloudflare / Google / Google 翻译 / GitHub / ghcr.io，串行执行（全局锁，CPU 弱也不怕）。
-- **多 IP + IPv6**：每路按延迟保留前 N 个 IP（IPv4 / IPv6 各自排序），一次写入 hosts，某个 IP 失效可自动切换。
+- **七路优选**：Cloudflare / Google 搜索 / Google 翻译 / GitHub / ghcr.io / TMDB / IMDb，串行执行（全局锁，CPU 弱也不怕）。
+- **只留最快的一批 + 备胎**：每路先取「延迟不超过最快 1.5 倍」的那一批（最多 N 个），不足保底个数就从池里补历史验证过的备胎——不让任何一路只剩一个 IP，一坏就没得换。
+- **多 IP + IPv6**：IPv4 / IPv6 各自排序，一次写入 hosts，某个 IP 失效可自动切换。
 - **HTTPS 校验（排除 1034）**：TCP 通不等于可用。对候选逐个发起真实 TLS 握手 + `Host` 请求，**Cloudflare 1034 / 1010 / 1020、证书不符、5xx 一律剔除**，避免优选到一个打开就报错的 IP。
 - **自包含**：候选 IP 靠运行时向本机 mosdns 实时解析，延迟靠 TCP 直连探测；工具与种子固化在镜像内，**不存在"拉不下来"**。
 - **默认国内优先**：未知域名先走国内 DoH，超时/失败才走国外；GFW 清单强制走国外。
@@ -71,7 +72,7 @@ docker pull ghcr.io/po9873/mosdns:latest   # GitHub Container Registry
 | 官方 | Cloudflare 官方 v4/v6 网段 · Google 官方网段（`gstatic/ipranges/goog.json`）· GitHub 官方网段（`api.github.com/meta`） | 最权威，但只有网段，按固定步长采样成具体 IP 再探测 |
 | 第三方 | IPDB 精选 v4 / v6、IPDB 接口、IPDB 反代优选 | 社区测速后维护，更新快、量小 |
 | 镜像 | jsDelivr、ghproxy | 同一份数据，raw.githubusercontent 直连不通时兜底 |
-| 自定义 | 你自己填的 v4 / v6 地址 | 添加后立刻拉一次，马上能看到能拿到多少 IP |
+| 自定义 | ① 你自己填的 v4 / v6 地址；② **直接粘贴 IP 清单** | 两种都支持：给地址就定时去拉，贴清单就直接进池（不走网络） |
 
 五路都有源，且不只是官方源：官方源给的是「全量网段」，社区 hosts 源给的是「当前真能用的前端 IP」，
 两者互补——官方网段采样展开后能连上的很少（GitHub 实测 60 个候选只选出 1 个 IP），
@@ -83,10 +84,24 @@ docker pull ghcr.io/po9873/mosdns:latest   # GitHub Container Registry
 | Google 搜索 | `gstatic.com/ipranges/goog.json` | GitHub 网段镜像（每日转文本）/ jsDelivr 镜像 / **社区实测 IP 清单（Ponderfly）** | v4 132 段 / v6 16 段 + 8819 个实测 IP |
 | Google 翻译 | 同上（同一份数据） | 同上 | v4 132 段 / v6 16 段 + 8819 个实测 IP |
 | GitHub 访问 | `api.github.com/meta` | GitHub520 社区 hosts（HelloGitHub）/ ineo6 hosts（GitLab）/ jsDelivr 镜像 | v4 254 段 / v6 6 段 |
-| ghcr | 同上（同一份数据） | GitHub520 社区 hosts | v4 254 段 / v6 6 段 |
+| ghcr | 同上（同一份数据） | （GitHub520 里没有 ghcr.io 记录，实测为空，默认关） | v4 254 段 / v6 6 段 |
+| TMDB | AWS 官方 `ip-ranges.amazonaws.com/ip-ranges.json`，**只取 `service=CLOUDFRONT`** | 无 | v4 214 段 / v6 34 段 |
+| IMDb | 同上（同一份数据，单独一条） | 无 | v4 214 段 / v6 34 段 |
 
-> 社区 hosts 源是「`IP 域名`」格式，解析时**只取其中的 IP**，域名不参与（校验仍按该路自己的目标域名做真实 HTTPS，
-> 通不过的不进 hosts）。所以这类源给的 IP 多不多不重要，**能通过校验的才算数**。
+> 社区 hosts 源是「`IP 域名`」格式。**这类清单按域名白名单收**：只保留本路真正用得上的域名那一行，
+> 其余行（别的站点、assets、Pages）整行跳过——以前整份照收，池子里一半 IP 根本不属于这一路
+> （实测 GitHub 池里混进过 Facebook、微软的地址），优选时抽到的全是「TCP 通但这域名不认」的垃圾。
+> 纯 IP 行（没有域名）不受影响。校验仍按该路自己的目标域名做真实 HTTPS，通不过的不进 hosts。
+
+### 手动加源：两种都行
+
+「源」页右上角「+ 添加」：
+
+1. **给清单地址**：填 v4 / v6 地址，选好「喂给哪一路」，添加后立刻拉一次，显示能拿到多少 v4 / v6。
+2. **直接粘贴 IP 清单**：选「直接粘贴 IP 清单」，把 IP 贴进去就行（纯 IP、网段 `1.2.3.0/24`、hosts 格式
+   `1.2.3.4 github.com` 都认）。不走网络，保存即入池——源拉不到、或者你从别处拿到几个能用的地址时，用这个兜。
+
+两种都要选「喂给哪一路」：拉到的 IP 只进那一池，只服务那个域名。
 
 > 候选不只来自订阅源。每轮优选结束会把 **DNS 实时解析到的 IP**、**种子兜底 IP**、**通过 HTTPS 校验的 IP** 都回填进该路候选池，
 > 控制台每张池子卡片下面的「来源明细」**逐源列出名字和数量**（比如 CF 池：IPDB 精选 66 / Cloudflare 官方网段 62 / IPDB 接口 15 …），
@@ -289,6 +304,41 @@ https://dns.nextdns.io/dns-query 45.90.28.1
 
 **明确坏**（1034/证书/5xx）→ 立刻拉黑并换 IP；**只是超时**→ 降级用但标「未校验」，
 绝不把坏 IP 当好的写进 hosts。
+
+## 每路留几个 IP：只留最快的一批，但绝不止一个
+
+选结果分两步（配置页可调「每路保留 IP 数」和「每路最少保留」）：
+
+1. **只留最快的那批**：先看这一路最快的那个，延迟不超过它 **1.5 倍**的才算「这批」，最多留 N 个
+   （默认 3）。慢一拍的不占位置——七路一个标准，不是只有 GitHub 这么干。
+2. **不够就补备胎**：这批不足「最少保留」（默认 3）时，从候选池里挑**历史上真验证通过过**的
+   IP 补上，标成「备胎」。备胎本轮不复测、不加减分，主力坏掉时守护进程会先拿它顶上。
+
+为什么非要保底：ghcr.io 这种路实测 768 个 `20.27.x` 地址里只有 `20.27.177.117` 的证书覆盖
+`ghcr.io`（`140.82.x` 全是 GitHub 自己的证书，根本不认 ghcr.io），一轮下来天然只选得出 1 个。
+只剩一个 IP 时它一抖，整路立刻没得换，只能干等下一轮重扫（几分钟）。留两个备胎，切换是秒级的。
+
+## TMDB / IMDb 两路是怎么回事
+
+这两站整站（网页 / API / 海报）都在 **AWS CloudFront** 上，而 CloudFront 是一张 anycast 大网：
+随便哪个边缘 IP，只要证书对，就能服务任何 CloudFront 站点（实测 `99.84.215.46` 同时能开
+themoviedb、api.tmdb、imdb、image.tmdb）。所以做法是——从 AWS 官方 `ip-ranges.json` 里
+**只取 `service=CLOUDFRONT`**（214 段 v4 / 34 段 v6），采样展开成本机候选，挨个实测，
+挑最快的写进 hosts。找对一个快的边缘 = 这两站都快。
+
+两个坑：
+
+- **不能拿官方全量清单**：那份 JSON 里 90% 以上是 EC2 / S3 / AMAZON 段（6000 多条），
+  全塞进池子只会把候选稀释掉，抽到的大多不是边缘节点。按 `service` 过滤后才是干净的。
+- **不能按页面正文判定**：`www.themoviedb.org` 根路径回 **403 + Cloudflare 挑战页**，
+  `www.imdb.com` 回 **202 + 反爬页**，正文里有没有站点名全看对方心情——批量探的时候
+  同一批 IP 单测能过、连测就判「不提供该服务」，误杀一大片。这两路只认**证书 + 有响应**：
+  CloudFront 对「不认识这个域名」的请求在 TLS 阶段就用默认证书（`*.cloudfront.net`）应答，
+  我们的证书校验根本过不去，能过就说明这个地址确实承载了这个站点。
+
+另外 `ghcr.io` 路会**单独**再写一行镜像层域名 `pkg-containers.githubusercontent.com`
+（走 Fastly，`185.199.10x.154`）。只映射 `ghcr.io` 的话，`docker pull` 会卡在拉层那一步——
+认证和 manifest 走 ghcr.io，镜像层数据走的是另一个域名、另一批节点。
 
 ## 优选稳定模式（不每次全跑）
 

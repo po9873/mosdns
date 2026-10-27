@@ -1,0 +1,8 @@
+# TMDB 路候选种子（公开、极小、不会变）
+#
+# 只放域名，不放兜底 IP：TMDB 走 AWS CloudFront，它是 anycast 大网，
+# 具体哪个边缘节点快，只能由本机实测决定（AWS 官方 ip-ranges.json 的
+# CLOUDFRONT 段会定时拉进候选池，这里只保证「至少能解析出当前入口」）。
+www.themoviedb.org
+api.tmdb.org
+image.tmdb.org

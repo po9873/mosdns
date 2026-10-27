@@ -43,9 +43,10 @@ SRC_FILE = os.path.join(DATA_DIR, "sources.json")
 BLACK_FILE = os.path.join(DATA_DIR, "blacklist.json")
 EVENT_FILE = os.path.join(DATA_DIR, "swap_events.json")
 POOL_DIR = os.path.join(DATA_DIR, "pool")
-ROUTES = ("cf", "google", "gt", "github", "ghcr")
+ROUTES = ("cf", "google", "gt", "github", "ghcr", "tmdb", "imdb")
 UA = "mosdns-pref/1.0 (+sources)"
-MAX_BYTES = 4 * 1024 * 1024
+# AWS ip-ranges.json 现在 2.7MB 还会涨，留足余量（CloudFront 的官方网段就在里面）
+MAX_BYTES = 8 * 1024 * 1024
 
 
 def _int(name, dft):
@@ -66,6 +67,23 @@ CYCLE_H = {"1h": 1, "2h": 2, "3h": 3, "4h": 4, "6h": 6, "8h": 8,
 
 # ---------------------------------------------------------------- 内置源
 # kind: official=厂商官方公布 / thirdparty=社区精选 / mirror=同一份数据的镜像
+
+# 社区 hosts 清单是「一堆域名 + IP」的大杂烩，里面有 raw、Pages、assets、
+# 甚至其它站点的地址。整份照收会把这些 IP 全灌进本路的池子，优选时抽到的
+# 大多是「TCP 通但这个域名不认」的地址（实测 GitHub 池里混进过 Facebook、
+# 微软的 IP）。所以这两路按域名白名单收：只认自己这一路真用得上的域名。
+GITHUB_DOMAINS = [
+    "github.com", "api.github.com", "gist.github.com", "codeload.github.com",
+    "raw.githubusercontent.com", "objects.githubusercontent.com",
+    "gist.githubusercontent.com", "avatars.githubusercontent.com",
+    "camo.githubusercontent.com", "user-images.githubusercontent.com",
+    "media.githubusercontent.com", "private-user-images.githubusercontent.com",
+    "github.githubassets.com", "collector.github.com",
+]
+GHCR_DOMAINS = [
+    "ghcr.io", "pkg-containers.githubusercontent.com",
+]
+
 PRESETS = [
     {"key": "official-cf", "name": "Cloudflare 官方网段", "kind": "official",
      "note": "官方公布的 IPv4/IPv6 网段，最权威；只有网段，需采样展开",
@@ -175,20 +193,46 @@ PRESETS = [
     {"key": "third-gh520", "name": "GitHub520 社区 hosts（HelloGitHub）", "kind": "thirdparty",
      "note": "每天更新的 github.com / api / raw 可用前端 IP，含 140.82 / 20.205 等真实入口",
      "route": "github", "url_v4": "https://raw.hellogithub.com/hosts",
-     "url_v6": "https://raw.hellogithub.com/hosts", "enabled": True},
+     "url_v6": "https://raw.hellogithub.com/hosts", "enabled": True,
+     "domains": GITHUB_DOMAINS},
     {"key": "third-ineo6", "name": "ineo6/hosts 社区 hosts（GitLab 直连）", "kind": "thirdparty",
      "note": "GitLab 托管的同类清单，与 GitHub520 互为备份，一份拉不到还有这份",
      "route": "github", "url_v4": "https://gitlab.com/ineo6/hosts/-/raw/master/next-hosts",
-     "url_v6": "https://gitlab.com/ineo6/hosts/-/raw/master/next-hosts", "enabled": True},
+     "url_v6": "https://gitlab.com/ineo6/hosts/-/raw/master/next-hosts", "enabled": True,
+     "domains": GITHUB_DOMAINS},
     {"key": "third-gh520-ghcr", "name": "GitHub520 社区 hosts（ghcr 路）", "kind": "thirdparty",
      "note": "ghcr.io 与 github.com 同属 GitHub 前端段，这份清单能补到 20.27.x 这类入口",
      "route": "ghcr", "url_v4": "https://raw.hellogithub.com/hosts",
-     "url_v6": "https://raw.hellogithub.com/hosts", "enabled": True},
+     "url_v6": "https://raw.hellogithub.com/hosts", "enabled": False,
+     "domains": GHCR_DOMAINS},
+    # ↑ 默认关闭：实测这份清单（40 行）里没有任何 ghcr.io / pkg-containers 的记录，
+    #   加了域名白名单后它一个 IP 都贡献不了，开着只会每轮报一次「没认出 IP」。
+    #   保留条目是为了让老部署能自愈（体检失败会自动删），需要时可手动打开对照。
     {"key": "mirror-gh520-jsd", "name": "GitHub520 镜像 · jsDelivr", "kind": "mirror",
      "note": "raw.hellogithub.com 拉不到时用这个 CDN 镜像（默认关，需要时在「源」页打开）",
      "route": "github",
      "url_v4": "https://cdn.jsdelivr.net/gh/521xueweihan/GitHub520@main/hosts",
-     "url_v6": "https://cdn.jsdelivr.net/gh/521xueweihan/GitHub520@main/hosts", "enabled": False},
+     "url_v6": "https://cdn.jsdelivr.net/gh/521xueweihan/GitHub520@main/hosts", "enabled": False,
+     "domains": GITHUB_DOMAINS},
+
+    # ---- TMDB / IMDb：都在 AWS CloudFront 上 ----
+    # 为什么用 AWS 官方清单：这两站整站（网页 / API / 图片）都是 CloudFront 分发的，
+    # 而 CloudFront 的边缘节点是一张大 anycast 网，随便哪个边缘 IP 只要证书对就能服务
+    # 任何 CloudFront 站点（实测 99.84.215.46 同时能开 themoviedb、api.tmdb、imdb）。
+    # 所以「找到一个快的 CloudFront 边缘」= 这两站都快。
+    # 只取 service=CLOUDFRONT 的分类（fmt=aws-cf），别把 6000 多条 EC2/S3 段灌进来。
+    {"key": "official-aws-cf", "name": "AWS 官方网段 · CloudFront（TMDB 路）", "kind": "official",
+     "note": "AWS 官方 ip-ranges.json，只取 CloudFront 分类（214 段 v4 / 34 段 v6）；TMDB 整站都在 CloudFront 上",
+     "route": "tmdb",
+     "url_v4": "https://ip-ranges.amazonaws.com/ip-ranges.json",
+     "url_v6": "https://ip-ranges.amazonaws.com/ip-ranges.json",
+     "fmt": "aws-cf", "enabled": True},
+    {"key": "official-aws-cf-imdb", "name": "AWS 官方网段 · CloudFront（IMDb 路）", "kind": "official",
+     "note": "同一份官方数据，IMDb 单独一条，两路拉取互不影响",
+     "route": "imdb",
+     "url_v4": "https://ip-ranges.amazonaws.com/ip-ranges.json",
+     "url_v6": "https://ip-ranges.amazonaws.com/ip-ranges.json",
+     "fmt": "aws-cf", "enabled": True},
 ]
 
 DEFAULT_PULL = {"enabled": True, "cycle": "6h", "hour": 4, "last": 0}
@@ -322,7 +366,14 @@ def _public(ip):
 
 
 def expand_cidr(net, sample=None):
-    """网段 -> 可探测 IP。小网段全展开，大网段固定步长采样（结果稳定）。"""
+    """网段 -> 可探测 IP。大段均匀采样，小段也限量。
+
+    早先的写法是「≤256 个地址全展开」，看起来更全面，实际是个坑：
+    CloudFront 的 214 个段全是 /22~/27，一展开就是几万个地址，池子上限
+    4000 直接被前 50 个段占满，后面 160 多个段一个都进不来 —— 表现为
+    「源显示 220 万个地址，池里却没有 99.84.x 那些真正好用的边缘」。
+    现在每段最多取 sample 个（小段取 2 倍），覆盖面反而更均匀。
+    """
     sample = sample or CIDR_SAMPLE
     out = []
     try:
@@ -331,14 +382,20 @@ def expand_cidr(net, sample=None):
         return out
     if n <= 2:
         return out
-    if n <= 256:
-        allips = [str(a) for a in net]
-        return allips[1:-1] if len(allips) > 2 else allips
+    cap = sample * 2 if n <= 256 else sample
     base = int(net.network_address)
     top = int(net.broadcast_address)
-    step = max(1, n // max(1, sample))
-    for i in range(sample):
-        v = base + step * i + 1
+    if n <= 256:
+        cand = [base + 1 + i for i in range(n - 2)]
+        if len(cand) <= cap:
+            pick = cand
+        else:
+            step = len(cand) / float(cap)
+            pick = [cand[int(i * step)] for i in range(cap)]
+    else:
+        step = max(1, n // max(1, cap))
+        pick = [base + step * i + 1 for i in range(cap)]
+    for v in pick:
         if v >= top:
             break
         try:
@@ -379,8 +436,66 @@ def _github_meta_filter(text):
     return "\n".join(out) if out else text
 
 
-def parse_source(text):
+def _aws_cf_filter(text):
+    """AWS ip-ranges.json → 只留 CloudFront 的网段。
+
+    TMDB 和 IMDb 都挂在 AWS CloudFront 上，但这份官方清单里 90% 以上是
+    EC2 / S3 / AMAZON 段（6000 多条），全塞进池子只会把候选稀释掉——
+    「有源」但抽到的大多不是边缘节点，等于没源。
+    只取 service=CLOUDFRONT（实测 214 段 v4 + 34 段 v6），每条都是真边缘。
+    """
+    s = text.lstrip()
+    if not s.startswith("{"):
+        return text
+    try:
+        d = json.loads(s)
+    except Exception:
+        return text
+    if not isinstance(d, dict) or "prefixes" not in d:
+        return text
+    out = []
+    for p in (d.get("prefixes") or []):
+        if isinstance(p, dict) and p.get("service") == "CLOUDFRONT" and p.get("ip_prefix"):
+            out.append(p["ip_prefix"])
+    for p in (d.get("ipv6_prefixes") or []):
+        if isinstance(p, dict) and p.get("service") == "CLOUDFRONT" and p.get("ipv6_prefix"):
+            out.append(p["ipv6_prefix"])
+    return "\n".join(out) if out else text
+
+
+_DOMRE = re.compile(r"^[a-z0-9]([a-z0-9._-]*[a-z0-9])?\.[a-z]{2,}$", re.I)
+
+
+def _line_domains(line):
+    """取出一行里出现的域名。hosts（两种顺序）、dnsmasq、纯文本都能认。"""
+    out = []
+    for tok in SPLIT.split(line):
+        t = tok.strip().strip(".").lower()
+        if not t:
+            continue
+        if _DOMRE.match(t):
+            out.append(t)
+    return out
+
+
+def _dom_hit(dom, allow):
+    """dom 是否属于白名单（allow 里写 example.com 等于 *.example.com 也算）。"""
+    for a in allow:
+        a = str(a or "").strip().lower().lstrip("*").lstrip(".")
+        if a and (dom == a or dom.endswith("." + a)):
+            return True
+    return False
+
+
+def parse_source(text, domains=None):
     """解析一个源的内容。
+
+    domains：域名白名单（可选）。社区的 hosts 类清单是一份「全 GitHub 域名」的
+    大杂烩，里面有 raw / Pages / assets / 甚至别的站点。整行照收的话，池子里
+    一半 IP 根本不属于这一路（实测 GitHub 池里混进过 Facebook、微软的地址），
+    优选时抽到的全是「TCP 通但这域名不认」的垃圾。
+    给了白名单就按行判断：这一行写了别的域名 → 整行跳过；
+    纯 IP 行（没有域名）照收。
 
     返回 dict：ips(实际入池候选) / v4(条目数) / v6(条目数) / v4_ips(地址总数) / v6_ips
     条目数用于「N 段/个」，地址总数用于「≈ X 万」。
@@ -388,6 +503,7 @@ def parse_source(text):
     ips, seen, nets = [], set(), set()
     n4 = n6 = t4 = t6 = 0
     s4 = s6 = 0                    # 网段条目数（「15 段」里的 15）
+    allow = [d for d in (domains or []) if str(d or "").strip()]
     if not text:
         return {"ips": [], "v4": 0, "v6": 0, "v4_ips": 0, "v6_ips": 0,
                 "s4": 0, "s6": 0}
@@ -410,6 +526,11 @@ def parse_source(text):
         if not line or line.startswith("#") or line.startswith("//"):
             continue
         line = line.split("#", 1)[0]
+        # 域名白名单：这一行写的是别的域名就整行跳过（纯 IP 行不受影响）
+        if allow:
+            ds = _line_domains(line)
+            if ds and not any(_dom_hit(d, allow) for d in ds):
+                continue
         for tok in SPLIT.split(line):
             tok = tok.strip().strip(".")
             if not tok:
@@ -505,11 +626,27 @@ def fetch_item(it, proxy="", merge=True):
     urls = [(it.get("url_v4"), "v4")]
     if it.get("url_v6") and it.get("url_v6") != it.get("url_v4"):
         urls.append((it.get("url_v6"), "v6"))
+
+    # 先把内容都取回来（内联源 / 网络源），再统一解析。
+    # 分开做是为了让「格式过滤」（fmt）和「域名白名单」（domains）对网络源都生效，
+    # 内联源本身是用户手贴的，不用过滤。
+    texts = []
+    if it.get("inline"):
+        texts.append(("inline", it["inline"]))
     for url, label in urls:
         if not url:
             continue
         try:
-            st = parse_source(_get(url, proxy))
+            t = _get(url, proxy)
+            if it.get("fmt") == "aws-cf":
+                t = _aws_cf_filter(t)
+            texts.append((label, t))
+        except Exception as e:
+            errs.append("%s: %s" % (label, str(e)[:70]))
+
+    for label, text in texts:
+        try:
+            st = parse_source(text, it.get("domains"))
             all_ips.extend(st["ips"])
             v4 += st["v4"]
             v6 += st["v6"]
@@ -520,10 +657,10 @@ def fetch_item(it, proxy="", merge=True):
         except Exception as e:
             errs.append("%s: %s" % (label, str(e)[:70]))
 
-    if not all_ips and errs:
-        it["status"] = "失败：" + errs[0]
+    if not all_ips and (errs or it.get("inline")):
+        it["status"] = "失败：" + (errs[0] if errs else "没认出任何 IP")
         it["last_fetch"] = now
-        return {"ok": False, "errors": errs}
+        return {"ok": False, "errors": errs or ["没认出任何 IP"]}
 
     # 去重
     uniq, seen = [], set()
@@ -590,23 +727,43 @@ def _next_ts(cfg, last, now=None):
 
 
 # ---------------------------------------------------------------- 源操作
-def cmd_add(name, u4, u6=""):
-    if not (u4 or u6):
-        return {"ok": False, "error": "至少填一个 v4 或 v6 地址"}
+def cmd_add(name, u4, u6="", route="cf", inline=""):
+    """新增源。两种用法：
+
+      1) 给清单地址：定时去拉（url_v4 / url_v6）
+      2) 直贴 IP 清单（inline）：不走网络，直接进候选池
+
+    为什么要有第 2 种：不是每个源都有可拉取的地址（自己测出来的、群里发的、
+    别人截图里的），而且源拉不到的时候也能手动兜一把。以前只能加地址，
+    想塞几个 IP 进去完全没办法。
+    """
+    if route not in ROUTES:
+        route = "cf"
+    inline = (inline or "").strip()
+    if not (u4 or u6 or inline):
+        return {"ok": False, "error": "至少填一个 v4/v6 地址，或直接粘贴 IP 清单"}
     for u in (u4, u6):
         if u and not re.match(r"^https?://", u, re.I):
             return {"ok": False, "error": "地址必须以 http:// 或 https:// 开头"}
+    if len(inline) > 256 * 1024:
+        return {"ok": False, "error": "粘贴的内容太多（上限 256KB）"}
     d = load_src()
     for it in d["items"]:
         if u4 and it.get("url_v4") == u4:
             return {"ok": False, "error": "这个 v4 地址已经存在", "key": it.get("key")}
+    # 直贴的清单里至少要能认出 1 个 IP，否则存下来只是个空源
+    if inline and not parse_source(inline)["ips"]:
+        return {"ok": False, "error": "粘贴的内容里没有识别到 IP 地址"}
     key = "custom-%d" % int(time.time() * 1000)
-    d["items"].append({"key": key, "name": name or "自定义源", "note": "手动添加",
-                       "kind": "custom", "url_v4": u4, "url_v6": u6,
-                       "enabled": True, "route": "cf", "status": "",
-                       "last_fetch": 0, "last_test": None})
+    it = {"key": key,
+          "name": name or ("手动 IP 清单" if inline else "自定义源"),
+          "note": "手动添加" + ("（直贴 IP）" if inline else ""),
+          "kind": "custom", "url_v4": u4, "url_v6": u6,
+          "inline": inline, "enabled": True, "route": route, "status": "",
+          "last_fetch": 0, "last_test": None}
+    d["items"].append(it)
     save_src(d)
-    return {"ok": True, "key": key}
+    return {"ok": True, "key": key, "route": route}
 
 
 def _purge_pool_src(keys):
@@ -695,6 +852,9 @@ def cmd_restore(keys=None):
             "key": p["key"], "name": p["name"], "note": p.get("note", ""),
             "kind": p["kind"], "url_v4": p["url_v4"], "url_v6": p["url_v6"],
             "enabled": p.get("enabled", True), "route": p.get("route", "cf"),
+            # fmt / domains 是「怎么解析这份源」的规则，必须跟着源走，
+            # 否则恢复出来的源会把整份 hosts 大杂烩都灌进池子。
+            "fmt": p.get("fmt", ""), "domains": p.get("domains"),
             "last_fetch": 0, "last_test": None, "status": "",
         })
         added.append(p["key"])
@@ -751,6 +911,11 @@ def cmd_save(payload):
                 "enabled": bool(it.get("enabled", True)),
                 "route": it.get("route") or prev.get("route") or "cf",
                 "from_sub": it.get("from_sub") or prev.get("from_sub", ""),
+                # 直贴的 IP 清单、格式过滤、域名白名单：前端列表里不显示这些内容，
+                # 保存时必须从原记录带过来，否则每保存一次就把用户贴的清单弄丢。
+                "inline": it.get("inline") or prev.get("inline", ""),
+                "fmt": it.get("fmt") or prev.get("fmt", ""),
+                "domains": it.get("domains") if it.get("domains") else prev.get("domains"),
                 "last_test": it.get("last_test") or prev.get("last_test"),
                 "last_fetch": prev.get("last_fetch", 0),
                 "status": prev.get("status", ""),
@@ -1002,11 +1167,18 @@ def _bad_set():
     return {k for k, v in load_bad().items() if float(v.get("until", 0)) > now}
 
 
-def cmd_pool(route, n=120, smart=False):
+def cmd_pool(route, n=120, smart=False, verified=False):
     n = max(1, min(1000, int(n)))
     bad = _bad_set()
     pool = load_pool(route)["ips"]
     items = [(ip, v) for ip, v in pool.items() if ip not in bad]
+    # verified：只要「历史上真验证通过过」的，按最近一次成功时间倒序。
+    # 给「保底备胎」用——某一路通过校验的太少（ghcr 就是），拿以前能用的补位，
+    # 比换一个从没验证过的 IP 安全得多。
+    if verified:
+        items = [(ip, v) for ip, v in items if int(v.get("ok", 0)) > 0]
+        items.sort(key=lambda kv: -int(kv[1].get("lo", 0)))
+        return [ip for ip, _ in items[:n]]
     if not smart:
         items.sort(key=lambda kv: (-int(kv[1].get("lo", 0)), int(kv[1].get("fl", 0))))
         return [ip for ip, _ in items[:n]]
@@ -1205,8 +1377,17 @@ def cmd_status():
             "by_source": _src_detail(ips, d["items"], d.get("deleted")),
         }
     ev = jload(EVENT_FILE, {"events": []})
+    # 源列表要给前端：直贴的 IP 清单可能有几十 KB，没必要每次都传过去，
+    # 只告诉界面「这条是直贴的、贴了多少个 IP」就够了。
+    items_out = []
+    for it in d["items"]:
+        row = {k: v for k, v in it.items() if k != "inline"}
+        inline = it.get("inline") or ""
+        if inline:
+            row["inline_ips"] = len(parse_source(inline)["ips"])
+        items_out.append(row)
     return {
-        "items": d["items"],
+        "items": items_out,
         "subs": d.get("subs", []),
         "proxy": d.get("proxy", ""),
         "pull": {**d["pull"], "next": _next_ts(d["pull"], d["pull"].get("last", 0), now)},
@@ -1247,6 +1428,7 @@ def main():
                 "key": p["key"], "name": p["name"], "note": p.get("note", ""),
                 "kind": p["kind"], "url_v4": p["url_v4"], "url_v6": p["url_v6"],
                 "enabled": p.get("enabled", True), "route": p.get("route", "cf"),
+                "fmt": p.get("fmt", ""), "domains": p.get("domains"),
                 "last_fetch": 0, "last_test": None, "status": "",
             })
         save_src(d)
@@ -1267,9 +1449,18 @@ def main():
 
     if cmd == "add":
         if len(a) < 2:
-            print(json.dumps({"ok": False, "error": "用法: add NAME V4URL [V6URL]"}))
+            print(json.dumps({"ok": False, "error":
+                              "用法: add NAME V4URL [V6URL] [ROUTE]（V4URL 写 - 表示直贴 IP，清单从 stdin 读）"}))
             return 1
-        print(json.dumps(cmd_add(a[0], a[1], a[2] if len(a) > 2 else ""), ensure_ascii=False))
+        route = a[3] if len(a) > 3 else "cf"
+        u4 = a[1]
+        inline = ""
+        if u4 == "-":
+            # 直贴模式：不拉网络，清单从 stdin 读
+            u4 = ""
+            inline = sys.stdin.read()
+        print(json.dumps(cmd_add(a[0], u4, a[2] if len(a) > 2 else "", route, inline),
+                         ensure_ascii=False))
         return 0
 
     if cmd == "del":
@@ -1315,8 +1506,9 @@ def main():
     if cmd in ("pool", "take"):
         if not a:
             return 1
-        n = int(a[1]) if len(a) > 1 else 120
-        for ip in cmd_pool(a[0], n, smart=(cmd == "take")):
+        n = int(a[1]) if len(a) > 1 and a[1].isdigit() else 120
+        # --verified：只要历史上真验证通过过的（给「保底备胎」用）
+        for ip in cmd_pool(a[0], n, smart=(cmd == "take"), verified=("--verified" in a)):
             print(ip)
         return 0
 

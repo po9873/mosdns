@@ -242,6 +242,13 @@ write_route() {
       printf '\n'
     done
   } > "$PREF_DIR/$route.hosts"
+  # 额外域名组：写在文件里，每行「域名 ip1 ip2 ...」，每个域名配自己的那批 IP。
+  # 为什么不能复用 PREF_EXTRA_DOMAINS：那是「同一批节点」的域名（翻译的网页端和
+  # 接口端）。ghcr 不一样——ghcr.io 与 pkg-containers.githubusercontent.com
+  # 是两个完全不同的 CDN，共用一批 IP 必然有一个打不开。
+  if [ -n "${PREF_EXTRA_LINES:-}" ] && [ -s "$PREF_EXTRA_LINES" ]; then
+    awk 'NF' "$PREF_EXTRA_LINES" >> "$PREF_DIR/$route.hosts"
+  fi
   printf '%s\n' "$pairs" > "$PREF_DIR/$route.meta"
   merge_hosts
 }
@@ -435,13 +442,40 @@ notify() {
   timeout 8 python3 "$SELF_DIR/lib/push.py" "$url" "$title" "$body" >/dev/null 2>&1 || true
 }
 
+# ---------- 选结果：最快的一批 + 保底备胎 ----------
+# 输入 stdin：「ip TTFB 状态 吞吐」（已按 TTFB 升序），输出选中的若干行。
+#   1) 先只看最快的那个，同族里 TTFB 不超过它 1.5 倍的都算「最快的一批」，
+#      最多留 n 个 —— 慢的没必要留着占位置，用户要的就是最快的那批。
+#   2) 但这批不足 k 个时，按 TTFB 顺序继续往下补到 k 个。
+#      为什么：一路只剩 1 个 IP 是最危险的，它抖一下整路就没得换，只能等下一轮
+#      重扫（几分钟）。宁可多留两个稍慢的备胎，也不要「孤零零一个」。
+pick_best() {
+  local n="${1:-3}" k="${2:-3}"
+  awk -v n="$n" -v k="$k" '
+    NF { cnt++; rows[cnt] = $0; t = $2 + 0; if (t <= 0) t = 999999; tv[cnt] = t }
+    END {
+      if (!cnt) exit
+      for (i = 1; i <= cnt; i++)
+        for (j = i + 1; j <= cnt; j++)
+          if (tv[j] < tv[i]) {
+            x = tv[i]; tv[i] = tv[j]; tv[j] = x
+            y = rows[i]; rows[i] = rows[j]; rows[j] = y
+          }
+      lim = tv[1] * 1.5
+      if (lim < tv[1] + 150) lim = tv[1] + 150   # 最快只有 100ms 时 1.5 倍太苛刻，放宽到 +150ms
+      out = 0
+      for (i = 1; i <= cnt && out < n; i++)
+        if (tv[i] <= lim || out < k) { print rows[i]; out++ }
+    }'
+}
+
 # ---------- 单路优选主流程 ----------
 run_route() {
   local route="$1" seed="$2" port="${3:-443}"
   local target conc top_n want6
   local seed_v4 seed_v6 seed_doms pool_ips pool_v4 pool_v6 pool_n
   local v4 v6 n4 n6 b4 b6 batch vres
-  local ok hard soft best4 best6 total downgrade=0
+  local ok hard soft best4 best6 total downgrade=0 keep_min
 
   target=$(first_domain "$seed")
   if [ -z "$target" ]; then
@@ -482,6 +516,13 @@ run_route() {
   case "$top_n" in ''|*[!0-9]*) top_n=3 ;; esac
   [ "$top_n" -lt 1 ] && top_n=1
   [ "$top_n" -gt 8 ] && top_n=8
+
+  # 保底个数：每路至少留几个可用 IP（不足就从池里历史验证通过的补）。
+  # 默认 3，且不超过 top_n —— 「留几个」本来就不该超过「每轮最多留几个」。
+  keep_min=$(setting keep_min)
+  case "$keep_min" in ''|*[!0-9]*) keep_min=3 ;; esac
+  [ "$keep_min" -lt 1 ] && keep_min=1
+  [ "$keep_min" -gt "$top_n" ] && keep_min=$top_n
 
   case "$(setting ipv6)" in
     false|False|0) want6=0 ;;
@@ -578,7 +619,11 @@ run_route() {
     seed_v6=""
   fi
 
-  pool_ips=$(sub_cli take "$route" $(( top_n * 20 )))
+  # 每轮从池子里取多少个候选来试。
+  # 为什么不是 top_n*20：CloudFront 这条路池里有 2000 多个边缘地址（AWS 官方段
+  # 展开），一轮只试 60 个的话，要把池子摸一遍得几十轮。TCP 粗筛很快
+  # （16 并发、3 秒超时，120 个也就半分钟），多试一些反而更快摸到快的节点。
+  pool_ips=$(sub_cli take "$route" $(( top_n * 40 )))
   pool_n=$(printf '%s\n' "$pool_ips" | awk 'NF' | wc -l | tr -d ' ')
   pool_v4=$(printf '%s\n' "$pool_ips" | awk 'NF && !/:/')
   pool_v6=$(printf '%s\n' "$pool_ips" | awk 'NF && /:/')
@@ -613,9 +658,14 @@ run_route() {
 
   log "$route: 目标 $target，候选 v4 ${n4} / v6 ${n6}（订阅池贡献 ${pool_n}），并发 $conc，每族保留 $top_n"
 
-  # ---- 第一步：TCP 粗筛（多取 3 倍，给校验失败留补位余量）----
-  b4=$(probe_top "$v4" "$port" "$conc" 3 $((top_n * 3)))
-  b6=$(probe_top "$v6" "$port" "$conc" 3 $((top_n * 3)))
+  # ---- 第一步：TCP 粗筛（多取若干倍，给校验失败留补位余量）----
+  # 为什么取 12 倍而不是 3 倍：TCP 快 ≠ 能用。CloudFront 的中国大陆边缘
+  # （120.52 / 180.163 / 111.13 这几段）就在国内，TCP 延迟最低，但它们只服务
+  # 已备案的中国区加速域名，对 TMDB/IMDb 这种境外 distribution 一律不回话。
+  # 只拿最快的 9 个去校验，等于让这批「快但不可用」的 IP 把真正能用的全挤掉，
+  # 结果是「一个都选不出来」。多取一些一起校验，才能把能用的捞出来。
+  b4=$(probe_top "$v4" "$port" "$conc" 3 $((top_n * 12)))
+  b6=$(probe_top "$v6" "$port" "$conc" 3 $((top_n * 12)))
   batch=$( { printf '%s\n' "$b4"; printf '%s\n' "$b6"; } | awk 'NF' )
 
   if [ -z "$batch" ]; then
@@ -669,12 +719,35 @@ run_route() {
   fi
 
   # ---- 第四步：选结果。绝不把「明确坏」的 IP 写进 hosts ----
+  # 只留最快的那批（不只看 github，所有路一个标准），不足 keep_min 个再往下补。
   best4=""; best6=""
   if [ -n "$ok" ]; then
-    best4=$(printf '%s\n' "$ok" | awk '!/:/' | head -n "$top_n")
-    best6=$(printf '%s\n' "$ok" | awk '/:/' | head -n "$top_n")
+    best4=$(printf '%s\n' "$ok" | awk '!/:/' | pick_best "$top_n" "$keep_min")
+    best6=$(printf '%s\n' "$ok" | awk '/:/' | pick_best "$top_n" "$keep_min")
   fi
   total=$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF' | wc -l | tr -d ' ' )
+
+  # ---- 保底备胎：通过校验的太少时，从池里「历史验证通过过」的 IP 补到 keep_min ----
+  # 典型就是 ghcr.io：实测 768 个 20.27.x 地址里只有 20.27.177.117 的证书覆盖
+  # ghcr.io，本轮通过校验的自然只有 1 个。只剩 1 个的话它一抖整路就没得换，
+  # 只能干等下一轮重扫。所以从池里挑「以前真验证通过、最近还成功过」的补上，
+  # 标 backup —— 界面上看得出来是备胎，守护进程也会优先复核它们。
+  local n_backup=0
+  if [ "${total:-0}" -gt 0 ] && [ "$total" -lt "$keep_min" ]; then
+    local havef="$PREF_DIR/.$route.have" candf="$PREF_DIR/.$route.cand" extra need
+    need=$(( keep_min - total ))
+    { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF{print $1}' > "$havef"
+    sub_cli pool "$route" 40 --verified > "$candf" 2>/dev/null
+    extra=$(grep -vxF -f "$havef" "$candf" 2>/dev/null | awk 'NF' | head -n "$need")
+    rm -f "$havef" "$candf" 2>/dev/null
+    if [ -n "$extra" ]; then
+      best4=$(printf '%s\n%s\n' "$best4" "$(printf '%s\n' "$extra" | awk '!/:/{print $1, "-", "backup", "-"}')" | awk 'NF')
+      best6=$(printf '%s\n%s\n' "$best6" "$(printf '%s\n' "$extra" | awk '/:/{print $1, "-", "backup", "-"}')" | awk 'NF')
+      n_backup=$(printf '%s\n' "$extra" | awk 'NF' | wc -l | tr -d ' ')
+      total=$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF' | wc -l | tr -d ' ' )
+      log "$route: 本轮只选出 $(( total - n_backup )) 个，从池里补了 ${n_backup} 个历史验证过的备胎（防止只剩 1 个没得换）"
+    fi
+  fi
 
   if [ "$total" = "0" ]; then
     if [ -n "$soft" ] && [ -s "$rhf" ]; then
@@ -686,8 +759,11 @@ run_route() {
       write_state "$route" "$target" "degraded" "" "" "${n4:-0}" 0 "${pool_n}"
       return 2
     fi
-    if [ -n "$soft" ]; then
-      # 只有超时/连不上，没有明确拒绝 → 允许降级，但标 unverified
+    if [ -n "$soft" ] && [ "${PREF_ALLOW_DOWNGRADE:-0}" = "1" ]; then
+      # 只有 Cloudflare 路允许这么干（见 cf_pref.sh）：它的「TCP 通」基本等于能开，
+      # 首轮没结果时降级使用，起码让站点能动。
+      # 其它路（Google / GitHub / TMDB / IMDb…）端口开着完全不代表这个 IP 认这个域名，
+      # 降级写进去就是给用户一个打不开的 IP——不如让域名走上游解析，好歹能用。
       downgrade=1
       best4=$(printf '%s\n' "$soft" | awk '!/:/{print $1, "?", "unverified", "-"}' | head -n "$top_n")
       best6=$(printf '%s\n' "$soft" | awk '/:/{print $1, "?", "unverified", "-"}' | head -n "$top_n")
@@ -695,34 +771,39 @@ run_route() {
       log "$route: 无 IP 通过校验（仅超时/连接失败），降级用 TCP 结果并标记 unverified"
       notify "warn" "$route 路优选降级" "无 IP 通过 HTTPS 校验（仅超时），已降级使用 TCP 结果，控制台显示为 unverified。"
     else
-      # 全部被明确拒绝（1034/证书/5xx）→ 撤下该路，宁可回退上游也不用坏 IP
+      # 全都没通过校验 → 撤下该路，宁可回退上游解析也不用没验证过的 IP
       rm -f "$PREF_DIR/$route.hosts" 2>/dev/null
       merge_hosts
-      write_state "$route" "$target" "no_valid" "" "$hard" "${n4:-0}" 0 "${pool_n}"
-      log "$route: 全部候选被拒绝（$(printf '%s' "$hard" | awk '{print $2}' | sort -u | tr '\n' ' ')），已撤下该路 hosts，域名回退上游解析"
-      notify "warn" "$route 路无可用 IP" "全部候选被 HTTPS 校验拒绝（1034/证书/5xx），已撤下该路 hosts，回退上游解析，不使用任何坏 IP。"
+      write_state "$route" "$target" "no_valid" "" "${hard:-$soft}" "${n4:-0}" 0 "${pool_n}"
+      if [ -n "$hard" ]; then
+        log "$route: 全部候选被拒绝（$(printf '%s' "$hard" | awk '{print $2}' | sort -u | tr '\n' ' ')），已撤下该路 hosts，域名回退上游解析"
+        notify "warn" "$route 路无可用 IP" "全部候选被 HTTPS 校验拒绝（1034/证书/5xx），已撤下该路 hosts，回退上游解析，不使用任何坏 IP。"
+      else
+        log "$route: ${n4:-0} 个候选全部超时/连不上，没有验证通过的 IP，已撤下该路 hosts（不做未验证降级），域名回退上游解析，下一轮继续找"
+      fi
       log "$route: 已进入退避（$(retry_fail "$route" | awk "{print \"第 \"\$1\" 次失败\"}")），期间不再空跑"
       return 3
     fi
   fi
 
   # ---- 第五步：回写池统计（通过的加分，超时的记失败）----
+  # 备胎本轮没验证过，不参与加减分（否则「没测过」会被记成「通过」）
   {
     printf '%s\n' "$best4"; printf '%s\n' "$best6"
-  } | awk 'NF{print $1, "ok"}' | sub_cli bump-many "$route" >/dev/null
+  } | awk 'NF && $3!="backup"{print $1, "ok"}' | sub_cli bump-many "$route" >/dev/null
   if [ -n "$soft" ]; then
     printf '%s\n' "$soft" | awk 'NF{print $1, "fail"}' | sub_cli bump-many "$route" >/dev/null
   fi
 
   # 通过 HTTPS 校验的 IP 记进池（verify 来源，权重最高）
   { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } \
-    | awk 'NF{print $1, "verify"}' | sub_cli feed "$route" >/dev/null 2>&1
+    | awk 'NF && $3!="backup"{print $1, "verify"}' | sub_cli feed "$route" >/dev/null 2>&1
 
   retry_clear "$route"
   write_route "$route" "$target" "$best4" "$best6" || return 1
   write_state "$route" "$target" "$( [ "$downgrade" = "1" ] && echo degraded || echo ok )" \
               "$(printf '%s\n%s\n' "$best4" "$best6")" "$hard" "${n4:-0}" 0 "${pool_n}"
-  log "$route: 选中 $total 个 -> $target：$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF {printf "%s(%sms) ", $1, $2}' )"
+  log "$route: 选中 $total 个 -> $target：$( { printf '%s\n' "$best4"; printf '%s\n' "$best6"; } | awk 'NF {printf "%s(%s) ", $1, ($3=="backup" ? "备胎" : $2"ms")}' )"
   [ "$downgrade" = "1" ] && return 2
   return 0
 }

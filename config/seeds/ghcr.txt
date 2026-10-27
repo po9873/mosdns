@@ -1,5 +1,11 @@
 # ghcr.io 路候选种子（公开、极小、不会变）
-# 兜底同上：只放 GitHub 网页入口段，不放 Fastly / Cloudflare 的通用地址。
+#
+# ghcr.io 的证书只部署在 GitHub 少数入口上：实测 768 个 20.27.x 地址里，
+# 只有 20.27.177.117 的证书覆盖 ghcr.io，140.82.x 全线都是 cert（那是
+# github.com 的证书，根本不认 ghcr.io）。所以这里的兜底 IP 只放 ghcr.io
+# 的真实入口，别拿 github.com 的地址凑数——写进来也只会被校验拒掉。
+#
+# 镜像层域名 pkg-containers.githubusercontent.com 由 ghcr_pref.sh 单独处理
+# （它走 Fastly，和 ghcr.io 不是同一批节点，不能共用 IP）。
 ghcr.io
-20.205.243.166
-140.82.112.3
+20.205.243.164

@@ -775,7 +775,7 @@
             <span id="txtListTime" style="color:var(--muted)"></span>
           </span>
           <span class="pill" style="margin-left:auto">
-            <button class="btn primary" id="btnRunAll">立即执行五路优选</button>
+            <button class="btn primary" id="btnRunAll">立即执行七路优选</button>
           </span>
         </div>
 
@@ -816,7 +816,7 @@
       <!-- 结果 -->
       <section class="view" id="view-results">
         <div class="card">
-          <h3>五路优选结果 <span class="muted" style="font-weight:400;font-size:13px">（按系列分开；每一路的 IP 只用于它自己的域名，写入 /data/prefs 后重启引擎生效）</span></h3>
+          <h3>七路优选结果 <span class="muted" style="font-weight:400;font-size:13px">（按系列分开；每一路的 IP 只用于它自己的域名，写入 /data/prefs 后重启引擎生效）</span></h3>
           <div id="resultsTable"><div class="empty">加载中…</div></div>
         </div>
       </section>
@@ -836,7 +836,7 @@
           <h3>定时任务 <span class="muted" style="font-weight:400;font-size:13px">（所有定时都在这，改完点保存立即生效，不用重启容器）</span></h3>
           <div class="schedtable">
             <div class="srow">
-              <div class="sname">五路优选<small>一轮五路跑完后的等待时间</small></div>
+              <div class="sname">七路优选<small>一轮七路跑完后的等待时间</small></div>
               <label class="switch"><input type="checkbox" id="scPrefOn"><span class="slider"></span></label>
               <div class="sfreq"><span class="u">每</span><input type="number" id="cfgInterval" min="1" max="1440" step="1"><span class="u">分钟</span></div>
               <div class="snext" id="scPrefNext">—</div>
@@ -927,8 +927,12 @@
             <input type="number" id="cfgThreads" min="0" step="1">
           </div>
           <div class="form-row">
-            <div class="lab">每路保留 IP 数<small>按延迟取前 N 个写入 hosts（IPv4 / IPv6 各自排），解析失败可自动切换</small></div>
+            <div class="lab">每路保留 IP 数<small>只留最快的那批（延迟不超过最快的 1.5 倍），最多 N 个写入 hosts</small></div>
             <input type="number" id="cfgTopN" min="1" max="8" step="1">
+          </div>
+          <div class="form-row">
+            <div class="lab">每路最少保留<small>上面那批不足这个数就从池里补历史验证过的备胎；防止一路只剩 1 个 IP，坏了没得换</small></div>
+            <input type="number" id="cfgKeepMin" min="1" max="8" step="1">
           </div>
           <div class="form-row">
             <div class="lab">同时优选 IPv6<small>解析 AAAA 并按延迟探测；目标站有 IPv6 时会一起写入 hosts</small></div>
@@ -959,9 +963,11 @@
           <div class="form-row"><div class="lab">Google 翻译</div><label class="switch"><input type="checkbox" data-route="gt"><span class="slider"></span></label></div>
           <div class="form-row"><div class="lab">GitHub 访问</div><label class="switch"><input type="checkbox" data-route="github"><span class="slider"></span></label></div>
           <div class="form-row"><div class="lab">ghcr 镜像仓库</div><label class="switch"><input type="checkbox" data-route="ghcr"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">TMDB 影视库<small>网页 / API / 海报，走 AWS CloudFront</small></div><label class="switch"><input type="checkbox" data-route="tmdb"><span class="slider"></span></label></div>
+          <div class="form-row"><div class="lab">IMDb 影视库<small>网页 / 海报，走 AWS CloudFront</small></div><label class="switch"><input type="checkbox" data-route="imdb"><span class="slider"></span></label></div>
           <div style="display:flex;gap:10px;margin-top:16px">
             <button class="btn primary" id="btnSaveCfg">保存配置</button>
-            <button class="btn" id="btnRunAll2">立即执行五路</button>
+            <button class="btn" id="btnRunAll2">立即执行七路</button>
           </div>
         </div>
 
@@ -1127,17 +1133,32 @@
           <div id="srcAddForm" hidden style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)">
             <div class="rowline" style="border:0;padding-top:0">
               <label class="grow">名称 <input id="addName" placeholder="我的 CF 源"></label>
+              <label style="margin-left:10px">喂给 <select id="addRoute"></select></label>
             </div>
             <div class="rowline">
-              <label class="grow">v4 地址 <input id="addV4" placeholder="https://example.com/ips-v4.txt"></label>
+              <label class="chk"><input type="radio" name="addMode" value="url" checked> 给清单地址（定时去拉）</label>
+              <label class="chk" style="margin-left:16px"><input type="radio" name="addMode" value="ip"> 直接粘贴 IP 清单</label>
             </div>
-            <div class="rowline">
-              <label class="grow">v6 地址（可空） <input id="addV6" placeholder="https://example.com/ips-v6.txt"></label>
+            <div id="addUrlBox">
+              <div class="rowline">
+                <label class="grow">v4 地址 <input id="addV4" placeholder="https://example.com/ips-v4.txt"></label>
+              </div>
+              <div class="rowline">
+                <label class="grow">v6 地址（可空） <input id="addV6" placeholder="https://example.com/ips-v6.txt"></label>
+              </div>
+            </div>
+            <div id="addIpBox" hidden>
+              <div class="rowline" style="align-items:flex-start">
+                <label class="grow">IP 清单
+                  <textarea id="addIps" rows="5" placeholder="一行一个 IP，也可以直接贴 hosts（1.2.3.4 github.com）或网段（1.2.3.0/24）"></textarea>
+                  <span class="muted" style="font-size:12.5px">贴进来就进候选池，不走网络；这是「源拉不到但我知道几个能用的 IP」时的兜底。</span>
+                </label>
+              </div>
             </div>
             <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
               <button class="btn primary" id="btnAddOk">添加并立即拉取</button>
               <button class="btn" id="btnAddCancel">取消</button>
-              <span class="muted" style="font-size:13px;align-self:center">添加后会马上拉一次，显示能拿到多少 v4 / v6</span>
+              <span class="muted" style="font-size:13px;align-self:center">地址模式会马上拉一次，显示能拿到多少 v4 / v6</span>
             </div>
           </div>
 
@@ -1197,15 +1218,17 @@
 <script>
 (function(){
   "use strict";
-  var ROUTES = ["cf","google","gt","github","ghcr"];
-  var ROUTE_LABEL = {cf:"Cloudflare 优选",google:"Google 搜索",gt:"Google 翻译",github:"GitHub 访问",ghcr:"ghcr 镜像仓库"};
+  var ROUTES = ["cf","google","gt","github","ghcr","tmdb","imdb"];
+  var ROUTE_LABEL = {cf:"Cloudflare 优选",google:"Google 搜索",gt:"Google 翻译",github:"GitHub 访问",ghcr:"ghcr 镜像仓库",tmdb:"TMDB 影视库",imdb:"IMDb 影视库"};
   /* 每路的「系列」定义：这一路优选出来的 IP 只给这些域名用，不是通用的 */
   var ROUTE_META = {
     cf:     {series:"cf",    domain:"cloudflare.com",          use:"所有走 Cloudflare CDN 的站点"},
     google: {series:"google",domain:"www.google.com",          use:"谷歌搜索"},
     gt:     {series:"gt",    domain:"translate.googleapis.com", use:"谷歌翻译接口"},
     github: {series:"github",domain:"github.com",              use:"GitHub 网页 / raw"},
-    ghcr:   {series:"ghcr",  domain:"ghcr.io",                 use:"GitHub 容器镜像仓库"}
+    ghcr:   {series:"ghcr",  domain:"ghcr.io",                 use:"GitHub 容器镜像仓库"},
+    tmdb:   {series:"tmdb",  domain:"www.themoviedb.org",      use:"TMDB 网页 / API / 海报（AWS CloudFront）"},
+    imdb:   {series:"imdb",  domain:"www.imdb.com",            use:"IMDb 网页 / 海报（AWS CloudFront）"}
   };
   var state = { view:"overview", settings:{}, results:{}, logSrc:"pref", timers:[] };
   var $ = function(s){ return document.querySelector(s); };
@@ -1872,7 +1895,8 @@
     busy:    "对方限速（429），这一会儿忙，不算坏，下一轮再试",
     timeout: "连接或响应超时",
     fail:    "连接被重置或握手失败",
-    unverified: "只测到 TCP 能连，没通过 HTTPS 校验（页面可能打不开）"
+    unverified: "只测到 TCP 能连，没通过 HTTPS 校验（页面可能打不开）",
+    backup:  "备胎：以前验证通过过、最近没复测（主力 IP 坏了才会用它）"
   };
   function errText(st){
     if (!st || st === "ok") return "";
@@ -1885,7 +1909,7 @@
   function emptyReason(it){
     switch (it.status) {
       case "paused":
-        return "当地直连整层不通：已暂停全量优选，域名照常走上游解析（能用）。到点会自动重试，想立刻试就点「立即执行五路优选」。";
+        return "当地直连整层不通：已暂停全量优选，域名照常走上游解析（能用）。到点会自动重试，想立刻试就点「立即执行七路优选」。";
       case "no_valid":
         return "上一轮全部候选被拒绝（1034 / 证书不符 / 5xx），已撤下换回上游解析，不使用坏 IP。";
       case "no_tcp":
@@ -1893,12 +1917,13 @@
       case "no_candidate":
         return "这一路没有候选 IP：去「源」页加一个源，或检查已有源是否拉取失败。";
       default:
-        return "这一路还没有优选结果，点「立即执行五路优选」跑一轮。";
+        return "这一路还没有优选结果，点「立即执行七路优选」跑一轮。";
     }
   }
   function errLabel(st){
     if (!st || st === "ok") return "";
     if (st === "unverified") return "未校验";
+    if (st === "backup") return "备胎";
     if (/^cf(\d+)$/.test(st)) return "CF " + st.slice(2);
     if (/^http5(\d\d)$/.test(st)) return "HTTP 5" + st.slice(6);
     if (st === "cert") return "证书错";
@@ -1974,8 +1999,10 @@
         '<button class="btn" data-act="test" data-key="' + k + '">看有多少IP</button>' +
         '<button class="btn" data-act="del" data-key="' + k + '">删除</button>' +
       "</div>" +
-      '<input class="u4" data-act="url" data-field="url_v4" data-key="' + k + '" value="' + escH(it.url_v4) + '" placeholder="v4 地址">' +
-      '<input class="u6" data-act="url" data-field="url_v6" data-key="' + k + '" value="' + escH(it.url_v6) + '" placeholder="v6 地址（可空）">' +
+      (it.inline_ips
+        ? '<div class="srcnum" style="margin-top:6px">直贴 IP 清单：' + it.inline_ips + ' 个地址（不走网络，已在池子里）</div>'
+        : '<input class="u4" data-act="url" data-field="url_v4" data-key="' + k + '" value="' + escH(it.url_v4) + '" placeholder="v4 地址">' +
+          '<input class="u6" data-act="url" data-field="url_v6" data-key="' + k + '" value="' + escH(it.url_v6) + '" placeholder="v6 地址（可空）">') +
       (it.status ? '<div class="srcnum" style="margin-top:6px">' + escH(it.status) + "</div>" : "") +
     "</div>";
   }
@@ -2081,7 +2108,7 @@
     });
   }
   function renderPool(pools){
-    var N = {cf:"Cloudflare", google:"Google", gt:"翻译", github:"GitHub", ghcr:"ghcr"};
+    var N = {cf:"Cloudflare", google:"Google", gt:"翻译", github:"GitHub", ghcr:"ghcr", tmdb:"TMDB", imdb:"IMDb"};
     $("#poolStat").innerHTML = ROUTES.map(function(r){
       var p = pools[r] || {};
       var meta = ROUTE_META[r] || {series:r, domain:"", use:""};
@@ -2218,32 +2245,70 @@
     saveSources().then(function(r){ var n = (r && typeof r.items === "number") ? r.items : collectSources().length; toast("已保存 " + n + " 个源"); loadSources(); })
       .catch(function(err){ toast("保存失败：" + err.message); });
   });
+  /* 添加源：两种模式 —— 给清单地址（定时拉） / 直贴 IP 清单（不走网络） */
+  function fillAddRoute(){
+    var sel = $("#addRoute");
+    if (sel.options.length) return;
+    ROUTES.forEach(function(r){
+      var o = document.createElement("option");
+      var m = ROUTE_META[r] || {};
+      o.value = r;
+      o.textContent = (ROUTE_LABEL[r] || r) + " → " + (m.domain || r);
+      sel.appendChild(o);
+    });
+  }
+  function syncAddMode(){
+    var v = (document.querySelector('input[name="addMode"]:checked') || {}).value || "url";
+    $("#addUrlBox").hidden = (v !== "url");
+    $("#addIpBox").hidden = (v !== "ip");
+    $("#btnAddOk").textContent = (v === "ip" ? "添加并立即入池" : "添加并立即拉取");
+  }
+  $$('input[name="addMode"]').forEach(function(r){ r.addEventListener("change", syncAddMode); });
   $("#btnSrcAdd").addEventListener("click", function(){
+    fillAddRoute();
     $("#srcAddForm").hidden = false;
+    syncAddMode();
     $("#addName").focus();
   });
   $("#btnAddCancel").addEventListener("click", function(){
     $("#srcAddForm").hidden = true;
     $("#addName").value = $("#addV4").value = $("#addV6").value = "";
+    $("#addIps").value = "";
   });
   $("#btnAddOk").addEventListener("click", function(){
-    var name = $("#addName").value.trim() || "自定义源";
-    var u4 = $("#addV4").value.trim();
-    var u6 = $("#addV6").value.trim();
-    if (!u4 && !u6) { toast("至少填一个 v4 或 v6 地址"); return; }
+    var mode = (document.querySelector('input[name="addMode"]:checked') || {}).value || "url";
+    var route = $("#addRoute").value || "cf";
+    var name = $("#addName").value.trim();
+    var body = {route: route};
+    if (mode === "ip") {
+      var ips = $("#addIps").value.trim();
+      if (!ips) { toast("请先粘贴 IP 清单"); return; }
+      body.name = name || "手动 IP 清单";
+      body.inline = ips;
+    } else {
+      body.name = name || "自定义源";
+      body.url_v4 = $("#addV4").value.trim();
+      body.url_v6 = $("#addV6").value.trim();
+      if (!body.url_v4 && !body.url_v6) { toast("至少填一个 v4 或 v6 地址"); return; }
+    }
     $("#btnAddOk").disabled = true;
-    $("#btnAddOk").textContent = "拉取中…";
-    api("/api/sources/add", {method:"POST", body: JSON.stringify({name:name, url_v4:u4, url_v6:u6})})
+    $("#btnAddOk").textContent = "处理中…";
+    api("/api/sources/add", {method:"POST", body: JSON.stringify(body)})
       .then(function(r){
         var t = r.test || {};
-        if (t.ok) toast("已添加：" + name + " · v4 " + (t.v4 || 0) + " · v6 " + (t.v6 || 0));
+        var label = r.name || (mode === "ip" ? "手动 IP 清单" : "自定义源");
+        if (t.ok) toast("已添加：" + label + " · v4 " + (t.v4 || 0) + " · v6 " + (t.v6 || 0) + "（进 " + (ROUTE_LABEL[route] || route) + " 池）");
         else toast("已添加，但拉取失败：" + ((t.errors || [])[0] || "未知错误"));
         $("#srcAddForm").hidden = true;
         $("#addName").value = $("#addV4").value = $("#addV6").value = "";
+        $("#addIps").value = "";
         loadSources();
       })
       .catch(function(err){ toast("添加失败：" + err.message); })
-      .then(function(){ $("#btnAddOk").disabled = false; $("#btnAddOk").textContent = "添加并立即拉取"; });
+      .then(function(){
+        $("#btnAddOk").disabled = false;
+        syncAddMode();
+      });
   });
   $("#btnSrcPull").addEventListener("click", function(){
     $("#btnSrcPull").disabled = true;
@@ -2417,6 +2482,9 @@
     if (s.top_n !== undefined && document.activeElement !== $("#cfgTopN")) {
       $("#cfgTopN").value = s.top_n;
     }
+    if (s.keep_min !== undefined && document.activeElement !== $("#cfgKeepMin")) {
+      $("#cfgKeepMin").value = s.keep_min;
+    }
     if (s.ipv6 !== undefined) { $("#cfgIpv6").checked = !!s.ipv6; }
     if (s.verify_https !== undefined) { $("#cfgVerify").checked = !!s.verify_https; }
     $("#cfgStableHours").value = s.stable_hours != null ? s.stable_hours : 6;
@@ -2427,11 +2495,13 @@
       if (document.activeElement !== $("#cfgPushEvents")) $("#cfgPushEvents").value = s.push.events || "";
       $("#cfgPushOn").checked = !!s.push.enabled;
     }
-    if (s.routes) {
-      $$("input[data-route]").forEach(function(cb){
-        if (document.activeElement !== cb) cb.checked = !!s.routes[cb.dataset.route];
-      });
-    }
+    /* 只有明确关掉（false）才算关：老配置里没有新加的那几路键，
+       不能因此显示成「已关闭」，否则新路永远跑不起来 */
+    $$("input[data-route]").forEach(function(cb){
+      if (document.activeElement === cb) return;
+      var v = (s.routes || {})[cb.dataset.route];
+      cb.checked = (v !== false);
+    });
   }
   function fillAuth(a){
     if (!a) return;
@@ -2499,7 +2569,7 @@
       $("#cfgInterval").disabled = !prefOn;
       $("#scPrefNext").innerHTML = prefOn
         ? "运行中 · 每 <b>" + (st.interval_min || 60) + "</b> 分钟一轮；改完保存后下一轮就按新间隔"
-        : "已暂停，不会自动跑（「立即执行五路」仍可手动触发）";
+        : "已暂停，不会自动跑（「立即执行七路」仍可手动触发）";
 
       var listOn = st.list_upd_enabled !== undefined
         ? st.list_upd_enabled !== false : st.list_auto_update !== false;
@@ -2585,6 +2655,7 @@
       interval_min: parseInt($("#cfgInterval").value, 10) || 60,
       threads: parseInt($("#cfgThreads").value, 10) || 0,
       top_n: parseInt($("#cfgTopN").value, 10) || 3,
+      keep_min: parseInt($("#cfgKeepMin").value, 10) || 3,
       ipv6: $("#cfgIpv6").checked,
       verify_https: $("#cfgVerify").checked,
       stable_hours: Number($("#cfgStableHours").value || 0),
@@ -2617,7 +2688,7 @@
 
   function trigger(route){
     api("/api/trigger", {method:"POST", body:{route:route}}).then(function(){
-      toast("已开始执行" + (route === "all" ? "五路优选" : "：" + ROUTE_LABEL[route]));
+      toast("已开始执行" + (route === "all" ? "七路优选" : "：" + ROUTE_LABEL[route]));
       setTimeout(loadStatus, 1500);
     }).catch(function(err){
       toast(err.message);

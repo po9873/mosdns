@@ -59,6 +59,10 @@ HARD = ("cf", "cert", "wrong")   # 状态名以这些开头 = 明确不可用
 # 反而把好 IP 判成坏的换掉。所以统一看首页标题（<title>Google…）。
 _TRANS_DOMS = ("translate.googleapis.com", "translate.google.com")
 _GOOGLE_DOMS = ("www.google.com", "www.google.com.hk")
+# TMDB / IMDb 故意不做正文校验：它们前面有 Cloudflare / Amazon 的反爬，
+# 批量探测时会连续返回挑战页，正文里有没有站点字样全凭对方心情，
+# 拿它判反而会误杀一片好 IP。这两路只认「证书对 + 有响应」——
+# CloudFront 对不认识域名的请求在 TLS 阶段就用默认证书，校验根本过不去。
 
 
 def spec_for(domain):
