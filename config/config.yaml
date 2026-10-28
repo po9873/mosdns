@@ -129,5 +129,5 @@ __REMOTE_DOH_LIST__
       entry: main_sequence
       listen: ":__DNS_PORT__"
 
-  # ---- 监测页测速入口：每条在用上游一个只走它的环回入口，由 entrypoint 生成 ----
+  # ---- 监测页测速入口：整池每条上游各开一个只走它的环回入口，由 entrypoint 生成 ----
   # __DIAG_PLUGINS__

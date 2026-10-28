@@ -182,25 +182,58 @@ def reload_engine(timeout=25):
 # 问它一次，得到的就是 mosdns 内部真实的一次转发耗时。
 # ============================================================
 DIAG_MARK = "__DIAG_PLUGINS__"
-DIAG_BASE = {"local": 16001, "remote": 16011}
-DIAG_MAX = 9
+DIAG_BASE = {"local": 16001, "remote": 16061}
+DIAG_MAX = 60
 DIAG_RE = re.compile(r"^\s*#\s*diag\s+(local|remote)\s+(\d+)\s+(.+?)\s*->\s*(\d+)\s*$")
+
+
+def _pool_lines(side):
+    """读这一侧的候选池文件（/data 下的那份，含用户加的和内置种子补进来的）。"""
+    path = os.path.join(DATA_DIR, "doh_%s_candidates.txt" % side)
+    out, seen = [], set()
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                ln = ln.split("#", 1)[0].strip()
+                if ln and ln not in seen:
+                    seen.add(ln)
+                    out.append(ln)
+    except Exception:
+        pass
+    return out
+
+
+def full_set(text, side):
+    """要测的全集 = 候选池全部 + 正在用但不在池里的（手动加的）。
+
+    用户要看的是「有哪些上游、各自多快」，不是只看「现在用了哪几条」。
+    所以测速入口按整池开，在用的排最前面。
+    """
+    act = active(text)[side]
+    out, seen = [], set()
+    for line in list(act) + _pool_lines(side):
+        line = str(line).strip()
+        if line and line not in seen:
+            seen.add(line)
+            out.append(line)
+    return out
 
 
 def render_diag(text, local=None, remote=None):
     """把模板里的 __DIAG_PLUGINS__ 占位换成逐条上游的测速入口。
 
-    local/remote 传 None 表示「按配置文件里此刻在用的那几条生成」。
+    默认按「整池」生成（在用的排最前），这样监测页能把所有候选都测一遍，
+    而不是只测现在选中的那几条。
     每条上方留一行注释记录 side/序号/上游/端口，server 靠它反查，
     不用去猜 tag 命名规则（改过名也不会错位）。
     """
     text = text.replace("\r\n", "\n")
     if DIAG_MARK not in text:
         return text
-    if local is None or remote is None:
-        act = active(text)
-        local = act["local"] if local is None else local
-        remote = act["remote"] if remote is None else remote
+    if local is None:
+        local = full_set(text, "local")
+    if remote is None:
+        remote = full_set(text, "remote")
 
     out = []
     for side, entries, base in (("local", local or [], DIAG_BASE["local"]),

@@ -766,29 +766,87 @@ def ensure_diag_ports():
     return doh_cfg.diag_ports(doh_cfg.read_cfg())
 
 
+# 上游是「哪家的」：按主机名和 IP 认。认不出来就如实显示主机名，
+# 不编一个看起来像厂商的名字。
+PROVIDERS = [
+    ("alidns.com", "阿里 DNS"), ("223.5.5.5", "阿里 DNS"), ("223.6.6.6", "阿里 DNS"),
+    ("dns.pub", "腾讯 DNSPod"), ("doh.pub", "腾讯 DNSPod"),
+    ("119.29.29.29", "腾讯 DNSPod"), ("1.12.12.12", "腾讯 DNSPod"), ("120.53.53.53", "腾讯 DNSPod"),
+    ("doh.360.cn", "360 安全 DNS"),
+    ("180.76.76.76", "百度 DNS"),
+    ("117.50.10.10", "OneDNS"),
+    ("cloudflare-dns.com", "Cloudflare"), ("1.1.1.1", "Cloudflare"), ("1.0.0.1", "Cloudflare"),
+    ("dns.google", "Google"), ("8.8.8.8", "Google"), ("8.8.4.4", "Google"),
+    ("dns.quad9.net", "Quad9"), ("9.9.9.9", "Quad9"), ("149.112.112.112", "Quad9"),
+    ("doh.opendns.com", "OpenDNS"), ("208.67.222.222", "OpenDNS"),
+    ("adguard-dns.com", "AdGuard DNS"), ("94.140.14.14", "AdGuard DNS"),
+    ("dns.nextdns.io", "NextDNS"), ("45.90.28.1", "NextDNS"), ("45.90.30.1", "NextDNS"),
+    ("controld.com", "ControlD"), ("76.76.2.", "ControlD"),
+    ("quad101.net", "Quad101"), ("101.101.101.101", "Quad101"),
+    ("dns-over-https.com", "DNS-over-HTTPS"), ("185.235.81.1", "DNS-over-HTTPS"),
+    ("snopyta.org", "Snopyta"), ("95.216.24.100", "Snopyta"),
+    ("doh.li", "doh.li"), ("178.216.201.70", "doh.li"),
+    ("mullvad.net", "Mullvad"), ("194.242.2.", "Mullvad"),
+    ("dns.sb", "DNS.SB"), ("185.222.222.222", "DNS.SB"),
+    ("digitale-gesellschaft.ch", "Digitale Gesellschaft"), ("185.95.218.4", "Digitale Gesellschaft"),
+]
+
+
+def provider_of(line):
+    """判断这条上游属于哪家。返回 (厂商名, 主机名)。"""
+    parts = str(line or "").split()
+    url = parts[0] if parts else ""
+    host = url.split("//")[-1].split("/")[0]
+    if host.startswith("["):
+        host = host[1:host.find("]")] if "]" in host else host.strip("[]")
+    elif host.count(":") == 1:
+        host = host.split(":")[0]
+    boot = parts[1].strip("[]") if len(parts) > 1 else ""
+    for key, name in PROVIDERS:
+        if key in host or (boot and key == boot):
+            return name, host
+    return host or url, host
+
+
 def diag_speed():
     """逐条问 mosdns 自己：这一条上游此刻转发一次要多久。
 
-    不是从外部直连 DoH——那样测的是「我这条连接有多快」，
-    跟 mosdns 实际解析用的连接池、并发策略、缓存都不是一回事。
+    测的是整池（候选清单里的每一条），不只是正在用的那几条——
+    用户要看的是「都有哪些上游、各自多快」，只给 3 条等于把其余全藏了。
+    不是从外部直连 DoH：那样测的是「我这条连接有多快」，跟 mosdns 实际
+    解析用的连接池、并发策略、缓存都不是一回事。
     """
     items = ensure_diag_ports()
     if not items:
-        return {"at": int(time.time()), "items": [],
+        return {"at": int(time.time()), "items": [], "counts": {},
                 "note": "测速入口还没有，可能是旧配置；保存一次上游或重启容器后自动生成"}
     qname = {"local": "www.baidu.com", "remote": "www.google.com"}
+    act = doh_cfg.active() if doh_cfg else {"local": [], "remote": []}
 
     def one(it):
-        r = _dns_udp(it["port"], qname.get(it["side"], "www.baidu.com"))
-        return dict(it, **r)
+        r = _dns_udp(it["port"], qname.get(it["side"], "www.baidu.com"), timeout=4)
+        cur = {str(x).strip() for x in (act.get(it["side"]) or [])}
+        name, host = provider_of(it["line"])
+        return dict(it, **r, active=(it["line"] in cur), provider=name, host=host)
 
     try:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=6) as ex:
+        with ThreadPoolExecutor(max_workers=12) as ex:
             out = list(ex.map(one, items))
     except Exception:
         out = [one(it) for it in items]
-    return {"at": int(time.time()), "items": out, "note": ""}
+
+    counts = {}
+    for it in out:
+        c = counts.setdefault(it["side"], {"total": 0, "active": 0, "alive": 0, "dead": 0})
+        c["total"] += 1
+        if not it["ok"]:
+            c["dead"] += 1
+        elif it["active"]:
+            c["active"] += 1
+        else:
+            c["alive"] += 1
+    return {"at": int(time.time()), "items": out, "counts": counts, "note": ""}
 
 
 def probe_upstreams():
@@ -913,9 +971,9 @@ def read_versions():
 
     items = [{"label": "mosdns 核心", "ver": build.get("mosdns") or "未知",
               "note": "官方源码编译，DNS 引擎与分流"}]
-    # 七路优选实际都走 common.sh + probe.py 的内置探测，
-    # 先把这条写清楚，免得以为有七种外部工具在跑。
-    items.append({"label": "优选探测", "ver": "内置脚本", "note": "七路共用，TCP 延迟 + HTTPS 实测"})
+    # 优选实际都走 common.sh + probe.py 的内置探测，
+    # 先把这条写清楚，免得以为跑了一堆外部工具。
+    items.append({"label": "优选探测", "ver": "内置脚本", "note": "各路共用，TCP 延迟 + HTTPS 实测"})
     if cft_v:
         items.append({"label": "CloudflareSpeedTest", "ver": cft_v, "note": "已固化，备用测速器"})
     else:

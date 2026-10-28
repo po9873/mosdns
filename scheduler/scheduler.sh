@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# 主调度：daemon 模式按间隔轮询七路（串行，靠全局锁保证互斥）；
+# 主调度：daemon 模式按间隔轮询优选任务（串行，靠全局锁保证互斥）；
 #         once 模式供 UI 手动触发单路或全部；
 #         lists 供 UI 手动更新分流清单；reload 让 mosdns 重载配置。
 # ============================================================
@@ -97,7 +97,7 @@ maybe_scan_doh() {
   python3 "$DOH_WATCH" scan >/dev/null 2>>"${PREF_LOG:-$DATA_DIR/pref.log}" || true
 }
 
-# 七路串行跑一遍，全部跑完只判断一次是否需要重载引擎
+# 各路串行跑一遍，全部跑完只判断一次是否需要重载引擎
 run_all() {
   local r en fp ok=0 bad=0 names="" rc
   fp=$(file_sig "$PREF_DIR/all.hosts")
@@ -123,18 +123,18 @@ run_all() {
       fi
     fi
   done
-  # 七路全部跑完，只在这里判断一次是否需要重载
+  # 全部跑完，只在这里判断一次是否需要重载
   reload_if_changed "$fp"
   # 推送正文带上每路当前生效的域名和 IP：只报「几路成功」看不出到底用了什么
   local brief
   brief=$(route_brief)
-  notify "round" "七路优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。${brief:+$'\n'}${brief}"
+  notify "round" "优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。${brief:+$'\n'}${brief}"
 }
 
-# UI 的「立即执行」走这里：once 单路 或 once all
+# UI 的「立即测试」走这里：once 单路 或 once all
 once_mode() {
   local which="${1:-all}" fp
-  # 手动点「立即执行」= 我说了算：忽略失败退避，立刻真跑
+  # 手动点「立即测试」= 我说了算：忽略失败退避，立刻真跑
   export PREF_FORCE=1
   if [ "$which" = "all" ]; then
     run_all
@@ -158,7 +158,7 @@ lists_mode() {
 
 daemon_mode() {
   local interval
-  log "调度器启动，七路串行"
+  log "调度器启动，各路串行"
   maybe_update_lists
   maybe_pull_sources
   while true; do

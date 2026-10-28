@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# 公共函数库（被 entrypoint 与七路优选脚本 source）
+# 公共函数库（被 entrypoint 与优选脚本 source）
 # 设计原则：运行时零外网下载；候选 IP 靠向 mosdns 实时查询 +
 #           订阅池 + 种子兜底；延迟靠纯 TCP 直连探测；
 #           真实 HTTPS 校验，1034 一出现就换 IP，绝不降级使用坏 IP。
@@ -166,7 +166,7 @@ stat_mtime() {
 # 每轮全量探测都要白跑 2~3 分钟，最后仍然「TCP 探测全部失败」。
 # 既然这条路本来就走上游解析、能用，就不该反复折腾。
 # 规则：连续失败 → 退避 1h → 2h → 4h → 6h（封顶）；一旦选出结果立即清零。
-# 手动「立即执行」走 PREF_FORCE=1，忽略退避。
+# 手动「立即测试」走 PREF_FORCE=1，忽略退避。
 retry_next() {   # 打印下次可重试的时间戳；无退避则打印 0
   python3 - "$PREF_DIR/$1.retry" <<'PY'
 import json, sys
@@ -598,7 +598,7 @@ run_route() {
   case "$stable_hours" in ''|*[!0-9]*) stable_hours=6 ;; esac
   st_ttfb=$(setting stable_ttfb_ms); case "$st_ttfb" in ''|*[!0-9]*) st_ttfb=1200 ;; esac
   st_speed=$(setting stable_speed_kbps); case "$st_speed" in ''|*[!0-9]*) st_speed=200 ;; esac
-  # 手动点「立即执行」= 你说了算：PREF_FORCE=1 时不做稳定模式判断，直接真跑
+  # 手动点「立即测试」= 你说了算：PREF_FORCE=1 时不做稳定模式判断，直接真跑
   # （否则点了按钮只看到「跳过全量重探」，会以为按钮坏了）
   if [ "${stable_hours:-0}" -gt 0 ] && [ -s "$rhf" ] && [ "$(setting pref_stable)" != "false" ] \
      && [ "${PREF_FORCE:-0}" != "1" ]; then
