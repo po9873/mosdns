@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -173,6 +174,158 @@ def rotate_qlog_if_big(max_bytes=32 * 1024 * 1024, keep_bytes=8 * 1024 * 1024):
 
 _PREF_DOM_CACHE = {"mtime": 0, "domains": set()}
 
+# ---------------- 应答归属：这个域名解析出来的 IP 是谁家的 ----------------
+# 面板里只看得到「回源/命中」，看不出这个站到底套没套 CDN。这里自己查一次 A 记录，
+# 拿答案 IP 去比网段：CDN 段命中就标 Cloudflare/Google/...，落在国内段标「国内」。
+_CDN_CACHE = {"mtime": (), "nets": []}
+_ANS_CACHE = {}          # qname -> (ts, ip, owner)
+_ANS_TTL = 180           # 3 分钟：够新，又不会每 5 秒刷一轮查询
+_ANS_MAX = 1500
+
+
+def _cdn_nets():
+    """读 CDN/大厂网段库：/data 里可在线更新的那份 + 镜像内置那份，合并去重。
+
+    两份都读是因为 /data 那份是线上更新器写的（常常只有 Cloudflare 一段），
+    内置那份才带 Google/GitHub/Fastly；只读其一都会认漏。
+    """
+    paths = (os.path.join(DATA_DIR, "cdn_ranges.txt"), "/app/config/cdn_ranges.txt")
+    mt = []
+    for p in paths:
+        try:
+            mt.append(os.path.getmtime(p))
+        except Exception:
+            mt.append(0)
+    if not any(mt):
+        return []
+    if tuple(mt) == tuple(_CDN_CACHE["mtime"]):
+        return _CDN_CACHE["nets"]
+    nets, seen = [], set()
+    for p in paths:
+        try:
+            with open(p, encoding="utf-8") as f:
+                for ln in f:
+                    ln = ln.strip()
+                    if not ln or ln.startswith("#"):
+                        continue
+                    parts = ln.split()
+                    if len(parts) < 2:
+                        continue
+                    try:
+                        net = ipaddress.ip_network(parts[1], strict=False)
+                    except Exception:
+                        continue
+                    key = (str(net), parts[0])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    nets.append((net, parts[0]))
+        except Exception:
+            continue
+    _CDN_CACHE["mtime"] = tuple(mt)
+    _CDN_CACHE["nets"] = nets
+    return nets
+
+
+def _cn_nets():
+    for p in (os.path.join(DATA_DIR, "china_ip.txt"), "/app/config/china_ip.txt"):
+        try:
+            nets = []
+            with open(p, encoding="utf-8") as f:
+                for ln in f:
+                    ln = ln.strip()
+                    if not ln or ln.startswith("#"):
+                        continue
+                    try:
+                        nets.append(ipaddress.ip_network(ln.split()[0], strict=False))
+                    except Exception:
+                        continue
+            if nets:
+                return nets
+        except Exception:
+            continue
+    return []
+
+
+_CN_CACHE = {"nets": None}
+
+
+def owner_of(ip):
+    """IP 归属：先比 CDN/大厂段，再比国内段。认不出就返回「海外」。"""
+    try:
+        a = ipaddress.ip_address(ip)
+    except Exception:
+        return ""
+    for net, name in _cdn_nets():
+        if a in net:
+            return name
+    if a.version == 4:
+        if _CN_CACHE["nets"] is None:
+            _CN_CACHE["nets"] = _cn_nets()
+        for net in _CN_CACHE["nets"]:
+            if a in net:
+                return "国内"
+    return "海外"
+
+
+def dns_a(qname, timeout=0.8):
+    """向本机 mosdns 查一次 A 记录，返回第一个 IP（失败返回 None）。
+
+    只是为了让面板能显示「这个域名现在解析到哪个 IP、这 IP 是谁家的」，
+    查的是自己家引擎，通常直接命中缓存，开销极小。
+    """
+    try:
+        tid = secrets.randbelow(65536)
+        hdr = struct.pack("!HHHHHH", tid, 0x0100, 1, 0, 0, 0)
+        qn = b"".join(bytes([len(p)]) + p.encode() for p in qname.split(".") if p) + b"\x00"
+        pkt = hdr + qn + struct.pack("!HH", 1, 1)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(timeout)
+        try:
+            s.sendto(pkt, ("127.0.0.1", DNS_PORT))
+            data, _ = s.recvfrom(2048)
+        finally:
+            s.close()
+        if len(data) < 12 or (data[3] & 0x0F):
+            return None
+        an = struct.unpack("!H", data[6:8])[0]
+        i = 12
+        while i < len(data) and data[i]:
+            if data[i] & 0xC0 == 0xC0:
+                i += 1
+                break
+            i += 1 + data[i]
+        i += 5
+        for _ in range(an):
+            while i < len(data) and data[i] and data[i] & 0xC0 != 0xC0:
+                i += 1 + data[i]
+            i += 2 if (i < len(data) and data[i] & 0xC0 == 0xC0) else 1
+            if i + 10 > len(data):
+                break
+            rtype, _rclass, _ttl, rdlen = struct.unpack("!HHIH", data[i:i + 10])
+            i += 10
+            if rtype == 1 and rdlen == 4:
+                return socket.inet_ntoa(data[i:i + 4])
+            i += rdlen
+    except Exception:
+        return None
+    return None
+
+
+def answer_of(qname):
+    """带缓存的「域名 -> (IP, 归属)」。"""
+    now = time.time()
+    hit = _ANS_CACHE.get(qname)
+    if hit and now - hit[0] < _ANS_TTL:
+        return hit[1], hit[2]
+    ip = dns_a(qname)
+    own = owner_of(ip) if ip else ""
+    if len(_ANS_CACHE) > _ANS_MAX:
+        _ANS_CACHE.clear()
+    _ANS_CACHE[qname] = (now, ip, own)
+    return ip, own
+
+
 
 def pref_domains():
     """优选 hosts 里写了哪些域名（按文件 mtime 缓存，没必要每行都重读）。"""
@@ -217,11 +370,12 @@ def _elapsed_ms(v):
         return None
 
 
-def read_qlog(limit=30, uniq=False):
+def read_qlog(limit=30, uniq=False, resolve=0):
     """从 mosdns 日志尾部解析 query_summary，返回最近若干条 + 命中统计。
 
     uniq=True 时按域名去重：同一个域名被查了 20 次也只留最近那一次，
     这样面板列的是「现在有哪些域名在解析」而不是同一批域名反复刷屏。
+    resolve=N 时给前 N 条补上应答 IP 与归属（N=0 表示不查）。
 
     兼容两种日志格式：
       ① 老版 mosdns：INFO ... query summary {json}
@@ -249,6 +403,11 @@ def read_qlog(limit=30, uniq=False):
         head = ln.split("\t", 1)[0]
         if "T" in head:
             clock = head.split("T", 1)[1][:8]
+        cli = re.sub(r"^::ffff:", "", str(d.get("client", "")))
+        # 面板自己为了显示应答 IP 会问一次本机引擎，那些查询的 client 是环回地址，
+        # 不能算进"谁在解析"，否则列表会被自己刷一遍。
+        if cli in ("127.0.0.1", "::1", "localhost"):
+            continue
         items.append({
             "time": clock,
             "qname": qname,
@@ -259,7 +418,7 @@ def read_qlog(limit=30, uniq=False):
             "cached": bool(ms is not None and ms <= CACHE_MS),
             # mosdns 给的 client 不带端口，但 IPv4 会写成 ::ffff:192.168.1.252；
             # 之前用 rsplit(":") 会把这种地址截成 "::ffff"，这里只剥前缀。
-            "client": re.sub(r"^::ffff:", "", str(d.get("client", ""))),
+            "client": cli,
         })
     recent = items[-limit:][::-1]
     if uniq:
@@ -277,6 +436,12 @@ def read_qlog(limit=30, uniq=False):
     # 规则命中情况：域名写进了优选 hosts 就是被规则覆盖，否则走上游解析。
     # 只看「几路成功」看不出效果，这里把命中/没命中分别计数。
     pref = pref_domains()
+    if resolve and recent:
+        # 只给最上面那几条补应答（用户真正在看的那一屏），越往下越没必要。
+        for x in recent[:resolve]:
+            x["pref"] = x["qname"] in pref
+            ip, own = answer_of(x["qname"])
+            x["ip"], x["owner"] = ip or "", own or ""
     hit = miss = 0
     hit_d, miss_d = set(), set()
     for x in items:
@@ -1443,8 +1608,12 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     n = 30
                 uniq = (q.get("uniq") or [""])[0] in ("1", "true", "yes")
+                try:
+                    resolve = max(0, min(60, int((q.get("resolve") or ["0"])[0])))
+                except Exception:
+                    resolve = 0
                 rotate_qlog_if_big()
-                return self._send(200, read_qlog(n, uniq))
+                return self._send(200, read_qlog(n, uniq, resolve))
             if path == "/api/upstreams":
                 return self._send(200, upstreams_payload())
             if path == "/api/diag/speed":

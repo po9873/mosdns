@@ -506,6 +506,13 @@
   .q-live .q-ok{color:var(--green);font-size:13px}
   .q-live .q-hit{color:var(--blue2);font-size:13px}
   .q-live .q-bad{color:var(--red);font-size:13px}
+  /* 应答列：IP 用等宽灰，归属做成小标签；Cloudflare 单独一个颜色，一眼能看是不是套了 CF */
+  .q-live .col-ans{color:var(--muted);font-size:12.5px}
+  .q-live .col-net{white-space:nowrap}
+  .q-live .tag-net{display:inline-block;font-size:11px;line-height:16px;border:1px solid var(--border);
+    border-radius:4px;padding:0 4px;margin-right:4px;color:var(--muted)}
+  .q-live .tag-net.cf{color:#f6821f;border-color:rgba(246,130,31,.45)}
+  .q-live .tag-net.pref{color:var(--blue2);border-color:rgba(90,150,255,.45)}
 
   .logbox{
     background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;
@@ -1039,7 +1046,7 @@
         <div class="card" style="margin-top:16px">
           <div class="flexhead">
             <h3>实时解析域名</h3>
-            <span class="hint" style="margin:0">每个域名一行、全部列出，框内滚动 · 每 5 秒刷新</span>
+            <span class="hint" style="margin:0">每个域名一行、全部列出 · 最近 40 条带应答 IP 与线路 · 框内滚动</span>
           </div>
           <form class="resolve-row" id="resolveForm">
             <input id="resolveInput" placeholder="输入域名，例如 www.google.com" autocomplete="off">
@@ -2314,7 +2321,7 @@
 
     /* 数据没变就不重建表：否则每 5 秒重排一次，你正往下滚看第 40 个域名，刷新一到就跳回顶上。 */
     var sig = items.length + "|" + items.map(function(x){
-      return x.time + x.qname + x.ms + x.cached + x.rcode;
+      return x.time + x.qname + x.ms + x.cached + x.rcode + (x.ip || "") + (x.owner || "");
     }).join(",");
     if (sig === qSig) return;
     qSig = sig;
@@ -2334,7 +2341,7 @@
     }
     var t = document.createElement("table");
     var thead = document.createElement("thead");
-    thead.innerHTML = "<tr><th>时间</th><th>域名</th><th class=\"col-cache\">缓存</th><th>用时</th><th>状态</th><th class=\"col-client\">客户端</th></tr>";
+    thead.innerHTML = "<tr><th>时间</th><th>域名</th><th>应答 IP</th><th>线路</th><th>用时</th><th>状态</th><th class=\"col-client\">客户端</th></tr>";
     var tbody = document.createElement("tbody");
     items.forEach(function(it){
       var tr = document.createElement("tr");
@@ -2342,24 +2349,40 @@
       var td0 = document.createElement("td"); td0.className = "mono"; td0.textContent = it.time || "-";
       var td1 = document.createElement("td"); td1.className = "qname"; td1.textContent = it.qname;
       if (it.qtype) { var sp = document.createElement("span"); sp.className = "qtype"; sp.textContent = it.qtype; td1.appendChild(sp); }
-      var td2 = document.createElement("td"); td2.className = "col-cache";
-      var hit = document.createElement("span");
-      hit.className = it.cached ? "q-hit" : "muted";
-      hit.textContent = it.cached ? "命中" : "回源";
-      td2.appendChild(hit);
-      var td3 = document.createElement("td");
+      /* 应答：这个域名现在解析到哪个 IP */
+      var td2 = document.createElement("td"); td2.className = "col-ans mono";
+      if (it.ip) {
+        td2.textContent = it.ip;
+      } else {
+        td2.innerHTML = '<span class="muted">—</span>';
+      }
+      /* 线路：IP 是谁家的（Cloudflare / 国内 / 海外…），以及是不是我们自己挑的优选 IP */
+      var td3 = document.createElement("td"); td3.className = "col-net";
+      if (it.pref) {
+        var pd = document.createElement("span"); pd.className = "tag-net pref"; pd.textContent = "优选";
+        td3.appendChild(pd);
+      }
+      if (it.owner) {
+        var od = document.createElement("span");
+        od.className = "tag-net" + (it.owner === "Cloudflare" ? " cf" : "");
+        od.textContent = it.owner;
+        td3.appendChild(od);
+      } else if (!it.pref) {
+        td3.innerHTML = '<span class="muted">—</span>';
+      }
+      var td4 = document.createElement("td");
       var pill = document.createElement("span");
       pill.className = "lat-pill " + msClass(it.ms);
       pill.textContent = it.ms === null ? "—" : it.ms + " ms";
-      td3.appendChild(pill);
-      var td4 = document.createElement("td");
+      td4.appendChild(pill);
+      var td5 = document.createElement("td");
       var st = document.createElement("span");
       var ok = it.rcode === 0;
       st.className = ok ? "q-ok" : "q-bad";
       st.textContent = ok ? "正常" : (it.status || "失败");
-      td4.appendChild(st);
-      var td5 = document.createElement("td"); td5.className = "col-client muted"; td5.textContent = it.client || "-";
-      [td0, td1, td2, td3, td4, td5].forEach(function(x){ tr.appendChild(x); });
+      td5.appendChild(st);
+      var td6 = document.createElement("td"); td6.className = "col-client muted"; td6.textContent = it.client || "-";
+      [td0, td1, td2, td3, td4, td5, td6].forEach(function(x){ tr.appendChild(x); });
       tbody.appendChild(tr);
     });
     t.innerHTML = "";
@@ -2378,7 +2401,7 @@
     if (!$("#qLive")) return Promise.resolve();
     /* uniq=1：同一个域名只留最近一次，列的是"现在都在解析哪些域名"，
        不再被同一批域名反复刷屏；条数给满，超出的部分由框内滚动看。 */
-    return api("/api/qlog?n=2000&uniq=1").then(renderQLive).catch(function(){});
+    return api("/api/qlog?n=2000&uniq=1&resolve=40").then(renderQLive).catch(function(){});
   }
 
   /* ---------- 缓存与日志 ---------- */
