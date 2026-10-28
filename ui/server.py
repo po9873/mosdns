@@ -596,10 +596,11 @@ _VERSIONS_CACHE = {"at": 0, "data": None}
 
 
 def read_versions():
-    """工具与版本：引擎/测速器都按「镜像里实际装了什么」来报，不照抄 versions.env。
+    """工具与版本：按「镜像里实际装了什么」来报。
 
-    versions.env 是「想装的版本」，构建时下载失败就会退化成脚本探测；
-    这里先看文件在不在、能问到就报真实版本，问不到才回落到构建参数。
+    /app/VERSIONS 是构建时写进去的（CI 每周探测上游最新 release 后传给
+    build-arg），所以它就是镜像里装的那个版本；测速器文件不在就直说缺工具，
+    不要照抄 versions.env 里「想要」的版本。
     """
     now = int(time.time())
     if _VERSIONS_CACHE["data"] and now - _VERSIONS_CACHE["at"] < 300:
