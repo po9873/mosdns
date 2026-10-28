@@ -400,6 +400,13 @@ def read_results():
                             # 1034/证书/5xx 一律不展示，记下来供界面提示「已剔除」
                             entry["dropped"].append({"ip": ip, "reason": st})
                             continue
+                        if lt is None and sp is None:
+                            # hosts 里有这个 IP，但这一轮根本没测到它（meta 里没有记录）。
+                            # 界面上延时、速度两栏都是空的，只剩一个「—」——
+                            # 列出来既没用，还让人以为这一路总共就这么几个 IP。
+                            # 记进 untested，不当作可用 IP 展示。
+                            entry.setdefault("untested", []).append(ip)
+                            continue
                         ips.append({
                             "ip": ip,
                             "family": "v6" if ":" in ip else "v4",
@@ -724,7 +731,7 @@ def _dns_udp(port, qname, timeout=5):
         raw, _ = sock.recvfrom(4096)
     except socket.timeout:
         return {"ok": False, "ms": int((time.time() - t0) * 1000), "answers": 0, "rcode": None,
-                "err": "%d 秒内没响应" % timeout}
+                "err": "%d 秒内没响应（这条上游没回，或该地址根本没有 DoH 服务）" % timeout}
     except ConnectionRefusedError:
         return {"ok": False, "ms": 0, "answers": 0, "rcode": None,
                 "err": "入口没在监听（mosdns 可能还没重载完）"}
@@ -740,7 +747,11 @@ def _dns_udp(port, qname, timeout=5):
     rcode = raw[3] & 0x0F
     an = int.from_bytes(raw[6:8], "big")
     if rcode != 0:
-        return {"ok": False, "ms": ms, "answers": an, "rcode": rcode, "err": "DNS 返回 rcode=%d" % rcode}
+        # 2/SERVFAIL 最常见：连上了、请求也发出去了，但对面上游自己解析失败
+        # （路径不对、要 client id、或者这条根本不是 DoH 端点）
+        why = {2: "上游回了 SERVFAIL（连得上，但它自己解析失败）",
+               5: "上游拒绝这次查询（REFUSED）"}.get(rcode, "上游返回 rcode=%d" % rcode)
+        return {"ok": False, "ms": ms, "answers": an, "rcode": rcode, "err": why}
     if an < 1:
         return {"ok": False, "ms": ms, "answers": 0, "rcode": rcode, "err": "能转发但查不到记录"}
     return {"ok": True, "ms": ms, "answers": an, "rcode": rcode, "err": ""}
@@ -823,18 +834,31 @@ def diag_speed():
     qname = {"local": "www.baidu.com", "remote": "www.google.com"}
     act = doh_cfg.active() if doh_cfg else {"local": [], "remote": []}
 
-    def one(it):
-        r = _dns_udp(it["port"], qname.get(it["side"], "www.baidu.com"), timeout=4)
+    def one(it, timeout=5):
+        r = _dns_udp(it["port"], qname.get(it["side"], "www.baidu.com"), timeout=timeout)
         cur = {str(x).strip() for x in (act.get(it["side"]) or [])}
         name, host = provider_of(it["line"])
         return dict(it, **r, active=(it["line"] in cur), provider=name, host=host)
 
     try:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=12) as ex:
+        # 并发压到 6：37 条一起抢的时候，每条都要新建 TLS，慢的那几条会被同批的快条目
+        # 挤掉——明明能通也报「没响应」，看着就是一屏「不通」，还都是知名公共 DNS。
+        with ThreadPoolExecutor(max_workers=6) as ex:
             out = list(ex.map(one, items))
     except Exception:
         out = [one(it) for it in items]
+
+    # 没通的单独再问一次，这次一条一条来、超时放到 6 秒。
+    # 第一次的「不通」里有相当一部分只是并发抖动（同厂商 4 个入口通 2 个、挂 2 个，
+    # 或者上一轮 1690ms 这轮超时），不复测就把它写成「不通」是在骗人。
+    for i, it in enumerate(out):
+        if it["ok"]:
+            continue
+        again = one(it, timeout=6)
+        if again["ok"]:
+            again["retried"] = True
+            out[i] = again
 
     counts = {}
     for it in out:

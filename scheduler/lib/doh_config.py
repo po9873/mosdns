@@ -187,20 +187,88 @@ DIAG_MAX = 60
 DIAG_RE = re.compile(r"^\s*#\s*diag\s+(local|remote)\s+(\d+)\s+(.+?)\s*->\s*(\d+)\s*$")
 
 
+# 老版本内置清单里写错的条目。
+#
+# 百度 DNS(180.76.76.76)、OneDNS(117.50.10.10) 只有 UDP/DoT，443 上根本没有
+# DoH 服务；dns.pub 的 DoH 在 120.53.53.53 / 1.12.12.21，119.29.29.29 是它
+# 普通 DNS 的地址。把这些当成 DoH 端点写进池子，测出来必然是「几秒没响应」——
+# 看着像「连百度都打不开」，其实是地址填错了。
+#
+# 为什么要在这里再修一遍：/data 下的清单只在文件不存在时从镜像拷贝，
+# 镜像升级不会覆盖它。老机器上那几行会一直留着，每次扫描、每次测速都白跑一趟，
+# 界面上还挂着「不通」。所以读取时统一纠正。
+POOL_FIX = {
+    "https://dns.pub/dns-query 119.29.29.29": "https://dns.pub/dns-query 120.53.53.53",
+}
+POOL_DROP = (
+    "https://180.76.76.76/dns-query 180.76.76.76",
+    "https://117.50.10.10/dns-query 117.50.10.10",
+)
+
+
+def normalize_pool(lines):
+    """把清单里的坏条目改掉/丢掉，同时按整行去重（保留顺序）。"""
+    out, seen = [], set()
+    for ln in lines:
+        s = str(ln).split("#", 1)[0].strip()
+        if not s:
+            continue
+        s = POOL_FIX.get(s, s)
+        if s in POOL_DROP or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def normalize_file(path):
+    """就地修 /data 下的候选清单：注释原样留着，条目按 normalize_pool 处理。
+
+    返回 (改了几行, 现在几条)。改不动也不报错——解析能不能用不靠这个文件。
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            raw = f.read().splitlines()
+    except Exception:
+        return 0, 0
+    keep, items = [], []
+    for ln in raw:
+        s = ln.strip()
+        if not s:
+            continue
+        if s.startswith("#"):
+            keep.append(s)
+            continue
+        items.append(s)
+    fixed = normalize_pool(items)
+    dropped = len(items) - len(fixed)
+    # 只把注释保留在开头：条目可能被改写、顺序不变，混排没意义
+    body = keep + fixed
+    if body == [x.strip() for x in raw if x.strip()]:
+        return 0, len(fixed)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(body) + "\n")
+        os.replace(tmp, path)
+    except Exception:
+        return 0, len(fixed)
+    return dropped, len(fixed)
+
+
 def _pool_lines(side):
     """读这一侧的候选池文件（/data 下的那份，含用户加的和内置种子补进来的）。"""
     path = os.path.join(DATA_DIR, "doh_%s_candidates.txt" % side)
-    out, seen = [], set()
+    out = []
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for ln in f:
                 ln = ln.split("#", 1)[0].strip()
-                if ln and ln not in seen:
-                    seen.add(ln)
+                if ln:
                     out.append(ln)
     except Exception:
         pass
-    return out
+    return normalize_pool(out)
 
 
 def full_set(text, side):
@@ -281,6 +349,14 @@ def diag_ports(text=None):
 
 if __name__ == "__main__":
     import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "pool-fix":
+        # 启动时把 /data 清单里的坏条目修掉（老机器的清单不会被镜像覆盖）
+        for side in ("local", "remote"):
+            p = os.path.join(DATA_DIR, "doh_%s_candidates.txt" % side)
+            n, total = normalize_file(p)
+            if n:
+                print("%s 清单整理掉 %d 条（无效地址或重复），现在 %d 条" % (side, n, total))
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "diag":
         t = read_cfg()
         n = render_diag(t)

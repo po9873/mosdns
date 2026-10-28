@@ -79,36 +79,36 @@
   .app{display:flex;min-height:100vh}
   .app[hidden]{display:none!important}
   .sidebar{
-    width:244px; flex:0 0 244px; background:var(--bg2); border-right:1px solid var(--border);
-    display:flex; flex-direction:column; padding:20px 14px; position:sticky; top:0; height:100vh;
+    width:272px; flex:0 0 272px; background:var(--bg2); border-right:1px solid var(--border);
+    display:flex; flex-direction:column; padding:22px 16px; position:sticky; top:0; height:100vh;
   }
-  .side-brand{display:flex;align-items:center;gap:12px;padding:4px 6px 22px}
-  .side-brand .dot-logo{width:36px;height:36px;border-radius:11px;font-size:17px}
+  .side-brand{display:flex;align-items:center;gap:13px;padding:4px 8px 26px}
+  .side-brand .dot-logo{width:42px;height:42px;border-radius:13px;font-size:20px}
   .side-brand .sb-name{display:flex;flex-direction:column;min-width:0;line-height:1.25}
-  .side-brand .sb-name b{font-size:15.5px;letter-spacing:.2px}
-  .side-brand .sb-name span{font-size:11.5px;color:var(--muted);margin-top:3px;
+  .side-brand .sb-name b{font-size:18px;letter-spacing:.2px}
+  .side-brand .sb-name span{font-size:12.5px;color:var(--muted);margin-top:4px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  nav{display:flex;flex-direction:column;gap:4px}
+  nav{display:flex;flex-direction:column;gap:5px}
   /* 每项：左边一个带底色的图标块，右边文字。--tint 是这一路的色，图标和底色都吃它 */
   nav a{
     --tint:96,165,250;
-    position:relative;display:flex;align-items:center;gap:11px;padding:7px 10px;border-radius:12px;
-    color:var(--muted);text-decoration:none;font-size:14.5px;transition:.15s;cursor:pointer;
+    position:relative;display:flex;align-items:center;gap:13px;padding:9px 12px;border-radius:13px;
+    color:var(--muted);text-decoration:none;font-size:16px;transition:.15s;cursor:pointer;
   }
   nav a:hover{background:var(--panel);color:var(--text)}
   nav a.active{background:var(--panel);color:var(--text);font-weight:600}
   /* 选中项左侧那道竖条：DC Panel 用这个标记当前位置，比整块变蓝更轻 */
   nav a.active::before{
     content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
-    width:3px;height:20px;border-radius:0 3px 3px 0;background:rgb(var(--tint));
+    width:3px;height:22px;border-radius:0 3px 3px 0;background:rgb(var(--tint));
   }
   nav a i{
     --icon:none;
-    width:30px;height:30px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;
+    width:36px;height:36px;border-radius:11px;flex:0 0 auto;display:grid;place-items:center;
     color:rgb(var(--tint));background:rgba(var(--tint),.14);
   }
   nav a i::before{
-    content:"";width:16px;height:16px;background:currentColor;
+    content:"";width:19px;height:19px;background:currentColor;
     -webkit-mask:var(--icon) center/contain no-repeat;
     mask:var(--icon) center/contain no-repeat;
   }
@@ -123,22 +123,22 @@
   nav a[data-view=diag] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 12h-4l-3 9L9 3l-3 9H2'/%3E%3C/svg%3E")}
   nav a[data-view=config] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='4' y1='21' x2='4' y2='14'/%3E%3Cline x1='4' y1='10' x2='4' y2='3'/%3E%3Cline x1='12' y1='21' x2='12' y2='12'/%3E%3Cline x1='12' y1='8' x2='12' y2='3'/%3E%3Cline x1='20' y1='21' x2='20' y2='16'/%3E%3Cline x1='20' y1='12' x2='20' y2='3'/%3E%3Cline x1='1' y1='14' x2='7' y2='14'/%3E%3Cline x1='9' y1='8' x2='15' y2='8'/%3E%3Cline x1='17' y1='16' x2='23' y2='16'/%3E%3C/svg%3E")}
   nav a[data-view=source] i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cellipse cx='12' cy='5' rx='9' ry='3'/%3E%3Cpath d='M21 12c0 1.66-4 3-9 3s-9-1.34-9-3'/%3E%3Cpath d='M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5'/%3E%3C/svg%3E")}
-  .side-foot{margin-top:auto;padding:10px 4px 2px;color:var(--muted);font-size:13px;border-top:1px solid var(--border)}
+  .side-foot{margin-top:auto;padding:12px 4px 2px;color:var(--muted);font-size:13.5px;border-top:1px solid var(--border)}
   .sflink{
-    display:flex;align-items:center;gap:10px;padding:8px 8px;border-radius:10px;cursor:pointer;
-    color:var(--muted);font-size:14px;text-decoration:none;transition:.15s;
+    display:flex;align-items:center;gap:11px;padding:10px 10px;border-radius:11px;cursor:pointer;
+    color:var(--muted);font-size:15px;text-decoration:none;transition:.15s;
   }
   .sflink:hover{background:var(--panel);color:var(--text)}
-  .sflink i{--icon:none;width:16px;height:16px;flex:none;background:currentColor;
+  .sflink i{--icon:none;width:18px;height:18px;flex:none;background:currentColor;
     -webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat;opacity:.9}
   .sflink span{flex:1;min-width:0}
-  .sflink em{font-style:normal;font-size:12.5px;color:var(--muted)}
+  .sflink em{font-style:normal;font-size:13.5px;color:var(--muted)}
   .sflink.danger{color:#e5534b}
   .sflink.danger:hover{background:rgba(229,83,75,.13);color:#ff756c}
   #sideTheme i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='4'/%3E%3Cpath d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/%3E%3C/svg%3E")}
   #sideLogout i{--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpolyline points='16 17 21 12 16 7'/%3E%3Cline x1='21' y1='12' x2='9' y2='12'/%3E%3C/svg%3E")}
-  .sfsep{height:1px;background:var(--border);margin:8px 6px 8px}
-  .side-foot .row{display:flex;justify-content:space-between;margin-top:6px;padding:0 8px;font-size:12.5px}
+  .sfsep{height:1px;background:var(--border);margin:10px 6px 10px}
+  .side-foot .row{display:flex;justify-content:space-between;margin-top:8px;padding:0 10px;font-size:13px}
   .side-foot .row span:last-child{color:var(--text);opacity:.75}
   .main{flex:1;min-width:0;display:flex;flex-direction:column}
   .topbar{
@@ -338,7 +338,9 @@
   .route-card:hover{border-color:var(--blue)}
   .route-card .rc-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
   .route-card .rc-name{font-size:16px;font-weight:600;color:var(--text);letter-spacing:.2px}
-  .route-card .rc-ip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;word-break:break-all}
+  /* 空态是句说明，不是数据：不能跟 IP 一样用 18px 粗等宽，否则看着像个标题 */
+  .route-card .rc-ip{font-family:inherit;font-size:14px;font-weight:400;color:var(--muted);
+    word-break:break-all;line-height:1.6}
   .route-card .rc-time{font-size:15px;color:var(--muted);margin-top:10px;font-variant-numeric:tabular-nums}
   .route-card .rc-src{font-size:15px;line-height:1.6;padding:0 7px;border-radius:999px;border:1px solid var(--glass-brd);color:var(--blue2);background:rgba(90,162,240,.12);flex:none}
   /* 域名每行两个：一行一个时 18 个域名能把卡片拉到半屏高，
@@ -1749,12 +1751,13 @@
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
     return (n / 1048576).toFixed(1) + " MB";
   }
+  /* 只留「有实测数据」的 IP。延时和速度都是空的那种，列出来只有一屏「—」，
+     还让人以为这一路总共就这么几个 IP；其实池子里还有别的，只是没测到它。
+     后端已经过滤过一遍，这里再挡一次，旧接口/缓存返回时也兜得住。 */
   function routeIps(it){
-    if (it && it.ips && it.ips.length) return it.ips;
-    if (it && it.ip) {
-      return [{ip: it.ip, family: it.ip.indexOf(":") >= 0 ? "v6" : "v4", latency: null}];
-    }
-    return [];
+    var raw = (it && it.ips && it.ips.length) ? it.ips
+            : (it && it.ip ? [{ip: it.ip, family: it.ip.indexOf(":") >= 0 ? "v6" : "v4", latency: null}] : []);
+    return raw.filter(function(x){ return x && x.ip && (x.latency != null || x.speed != null); });
   }
   function renderRouteCards(results){
     var host = $("#routeCards");
@@ -1831,7 +1834,12 @@
         });
         right.appendChild(list);
       } else {
-        var none = document.createElement("div"); none.className = "rc-ip"; none.textContent = "—";
+        /* 一个能用的 IP 都没有：别只甩一个「—」，说清楚是没测到还是还没优选 */
+        var none = document.createElement("div"); none.className = "rc-ip";
+        var pend = (item.untested || []).length;
+        none.textContent = pend ? "本轮没测到这几个 IP 的延时" : "还没有优选结果";
+        none.title = pend ? ("这些地址在 hosts 里，但这一轮没测到延时和速度，所以不列：" + item.untested.join("、"))
+                          : "这一路还没跑过优选";
         right.appendChild(none);
       }
 

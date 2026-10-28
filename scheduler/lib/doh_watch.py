@@ -82,7 +82,9 @@ def read_pool(path):
                     out.append(ln)
     except Exception:
         pass
-    return out
+    # 老清单里可能有写错的地址（把普通 DNS 的 IP 当 DoH 端点），
+    # 扫描时先统一纠正，免得每轮都白跑一趟还写进「不通」
+    return dc.normalize_pool(out)
 
 
 def _url(line):

@@ -2,14 +2,19 @@
 # 每行: <DoH地址> [bootstrap IP]
 # 说明：国内 DoH 同样在容器内本地探测后自动选用；这里列的是公开可达的国内解析器。
 # 同一家写多个入口是为了冗余：主入口被限速/被掐时还能切到另一个。
+# 只收「真的提供 DoH」的地址：百度 DNS(180.76.76.76)、OneDNS(117.50.10.10)
+# 只有 UDP/DoT，443 上根本没有 DoH 服务，写进来必然「4 秒没响应」——
+# 那不是服务挂了，是地址填错了，所以不列。
 https://223.5.5.5/dns-query 223.5.5.5
 https://dns.alidns.com/dns-query 223.5.5.5
 https://223.6.6.6/dns-query 223.6.6.6
-https://dns.pub/dns-query 119.29.29.29
+# dns.pub 和 doh.pub 是同一个后端，但前端 IP 不同：dns.pub 走 120.53.53.53，
+# doh.pub 走 1.12.12.12。以前把 dns.pub 指到 119.29.29.29（那是普通 DNS 的 IP，
+# 443 上没有 DoH），于是常年显示不通。同 IP 不同 SNI 的结果也不一样，两条都留着。
+https://dns.pub/dns-query 120.53.53.53
 https://doh.pub/dns-query 1.12.12.12
 https://1.12.12.12/dns-query 1.12.12.12
+https://1.12.12.21/dns-query 1.12.12.21
 https://120.53.53.53/dns-query 120.53.53.53
 https://doh.360.cn/dns-query 101.226.4.6
 https://101.226.4.6/dns-query 101.226.4.6
-https://180.76.76.76/dns-query 180.76.76.76
-https://117.50.10.10/dns-query 117.50.10.10

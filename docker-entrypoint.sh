@@ -99,6 +99,13 @@ python3 /app/scheduler/lib/subs.py init >/dev/null 2>&1 || true
 [ -f "$DATA_DIR/doh_remote_candidates.txt" ] || cp /app/config/doh_remote_candidates.txt "$DATA_DIR/doh_remote_candidates.txt"
 [ -f "$DATA_DIR/doh_local_candidates.txt"  ] || cp /app/config/doh_local_candidates.txt  "$DATA_DIR/doh_local_candidates.txt"
 elog "DoH 候选清单: 国外 $(wc -l < "$DATA_DIR/doh_remote_candidates.txt" 2>/dev/null || echo 0) 行 / 国内 $(wc -l < "$DATA_DIR/doh_local_candidates.txt" 2>/dev/null || echo 0) 行（可改 /data 下文件增删）"
+# 老清单里可能留着写错的 DoH 地址（把普通 DNS 的 IP 当成 DoH 端点），
+# 这种条目每次探测都白跑、页面上还挂着「不通」。启动时统一修一次。
+if FIXED=$(PREF_DATA_DIR="$DATA_DIR" python3 /app/scheduler/lib/doh_config.py pool-fix 2>&1); then
+  [ -n "$FIXED" ] && elog "候选清单整理: $(echo "$FIXED" | tr '\n' ' ')"
+else
+  elog "候选清单整理跳过（不影响解析）"
+fi
 
 # ---------- 自动线程 ----------
 if [ -z "$THREADS" ] || [ "$THREADS" = "auto" ]; then
