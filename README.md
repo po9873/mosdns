@@ -107,7 +107,7 @@ docker logs mosdns | tail -20              # 应看到 UI listening on 0.0.0.0:8
 docker compose pull && docker compose up -d    # 跟到最新
 ```
 
-生产环境更建议**钉死不可变 tag**：
+生产环境更建议**钉死不可变 tag**（格式 `<mosdns版本>-<日期>-<commit>`，去 Actions 那次构建里抄）：
 
 ```yaml
     image: po9873/mosdns:v5.3.4-20260101-abc1234
