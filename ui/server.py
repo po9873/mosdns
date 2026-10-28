@@ -974,7 +974,7 @@ def _speed_scheduler():
                 deadline = time.time() + 300
                 while _SPEED["running"] and time.time() < deadline:
                     time.sleep(5)
-                prune_dead()
+                # 清理逻辑已在 _speed_worker 收尾时跑过，这里不用再调
         except Exception as e:
             _SCAN_INFO["last_error"] = str(e)
         _SCAN_INFO["next_at"] = int(time.time()) + _SCAN_INFO["interval_min"] * 60
@@ -1067,6 +1067,9 @@ def _speed_worker(items, qname, act):
             _SPEED["phase"] = ""
             _SPEED["retry_left"] = 0
             _SPEED["done"] = len(out)
+        # 不管这轮是手动点的还是后台定时跑的，扫完都把确认死的候选池条目删掉——
+        # 之前只挂在后台调度里，手动点「立即测速」不会清理，等于留个口子。
+        prune_dead()
 
 
 def diag_speed(refresh=False):
