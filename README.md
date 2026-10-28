@@ -101,15 +101,19 @@ docker logs mosdns | tail -20              # 应看到 UI listening on 0.0.0.0:8
 
 ### 升级 / 回退
 
+`latest` 只在**你**推代码或手动触发构建时才变，上游发版不会碰它，所以 `pull` 不会突然给你换个版本。
+
 ```bash
 docker compose pull && docker compose up -d    # 跟到最新
 ```
 
-生产环境建议**钉死不可变 tag**，不受 `latest` 变动影响（每次构建都会打这样一个 tag）：
+生产环境更建议**钉死不可变 tag**：
 
 ```yaml
     image: po9873/mosdns:v5.3.4-20260101-abc1234
 ```
+
+回退就是把它改回上一个 tag，再 `up -d`。`known-good.env` 里记着上一份验证过的上游版本组合。
 
 ### 常见问题
 
@@ -138,16 +142,31 @@ docker compose pull && docker compose up -d    # 跟到最新
 
 ## 构建镜像（维护者）
 
-推送 `main` 即触发；也可在 Actions 页手动 Run workflow：
+**没有定时任务、不探测上游发版**——上游出新版本也不会动你的仓库。构建只在两种情况下跑：
+推 `main` 且改到了 `scheduler/`、`ui/`、`config/`、`Dockerfile`、`docker-entrypoint.sh`、`versions.env`；
+或者在 Actions 页手动 Run workflow。
 
 | 输入 | 作用 |
 |---|---|
-| `auto_update` | 自动探测所有上游最新版（含 golang / alpine 大版本） |
-| `mosdns_version` | 指定 mosdns 版本 |
-| `push_latest` | 是否更新 `latest` 标签 |
+| `mosdns_version` | 只这一次换 mosdns 版本（留空就用 `versions.env`，不写回仓库） |
+| `push_latest` | 是否更新 `latest` 标签（默认是；关掉就只出不可变 tag） |
 
-流程：解析版本 → 构建 → **自检门禁**（UI 健康检查 / mosdns 可执行 / 配置生成）→ 通过才推 → 失败回退 `known-good.env` 并报警。
-另有 **每周一 03:00 UTC** 定时任务，自动探测上游版本。
+流程：读 `versions.env` → 构建 → **自检门禁**（UI 健康检查 / mosdns 可执行 / 配置生成）。**自检不过就不推任何镜像**，
+线上保持不动，不会出现"tag 是新版、内容其实是旧版"这种坑镜像。
+
+### 升级上游版本
+
+```bash
+# 1. 只改这一个文件，比如 mosdns v5.3.4 -> v5.4.0
+vi versions.env
+# 2. 推上去，等 Actions 变绿
+git commit -am "chore: bump mosdns" && git push
+# 3. 到服务器手动拉（CI 不会自己部署）
+docker compose pull && docker compose up -d
+```
+
+自检只是"起得来"，不代表"行为没变"（插件改了日志格式、配置项改名都算行为变化）。
+所以先钉不可变 tag 跑一段，没问题再把 `latest` 跟上去；出问题就 `docker compose` 里把 tag 改回 `known-good.env` 里那份。
 
 产物：`ghcr.io/<用户名>/mosdns`、`docker.io/<用户名>/mosdns`（需 Secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`）。
 每次构建同时打不可变 tag `<mosdns版本>-<日期>-<commit>`，回退时用它。
@@ -589,8 +608,8 @@ KB/s 是噪音，拿来判决只会让系统一直折腾。
 config/       mosdns 配置模板 + 公开种子（cn/gfw 清单、优选候选种子）
 scheduler/    调度 + 优选 + 公共函数 + DNS/探测/清单库（lib/lists.py）
 ui/           控制台后端(server.py) + 前端(static/index.html)
-versions.env  上游版本锁定
-known-good.env 最后一份通过自检的组合
+versions.env  上游版本锁定（想升级只改这里）
+known-good.env 上一份验证过的组合（回退基准，供参考）
 docker-entrypoint.sh  渲染配置 / 种入账号 / 拉起三进程
 ```
 

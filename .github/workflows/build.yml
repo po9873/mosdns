@@ -1,22 +1,21 @@
 name: build
 
+# 只在你主动触发时构建：
+#   1) 推 main 且改到下面 paths 里的文件
+#   2) 手动 Run workflow
+# 不监听上游发版、没有定时任务 —— 上游更新与否由你决定，版本只认 versions.env。
+
 on:
   workflow_dispatch:
     inputs:
       mosdns_version:
-        description: "指定 mosdns 版本（留空则用 versions.env）"
+        description: "临时指定 mosdns 版本（留空则用 versions.env，仅本次生效）"
         required: false
         default: ""
-      auto_update:
-        description: "自动探测所有上游最新版（含 golang/alpine 大版本）"
-        type: boolean
-        default: false
       push_latest:
         description: "是否更新 latest 标签"
         type: boolean
         default: true
-  schedule:
-    - cron: "0 3 * * 1"   # 每周一 03:00 UTC 自动探测
   push:
     branches: [main]
     paths:
@@ -29,14 +28,12 @@ on:
       - ".github/workflows/build.yml"
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
 env:
-  AUTO: ${{ github.event.inputs.auto_update || 'false' }}
   MV: ${{ github.event.inputs.mosdns_version || '' }}
   PUSH_LATEST: ${{ github.event.inputs.push_latest || 'true' }}
-  EVENT: ${{ github.event_name }}
   DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
   DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
@@ -47,28 +44,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---------- 1. 解析版本（支持自动探测最新，含大版本）----------
+      # ---------- 1. 读版本（只来自 versions.env，可被手动输入临时覆盖）----------
       - id: ver
-        name: 解析上游版本
+        name: 解析版本
         run: |
           set -uo pipefail
           set -a; . ./versions.env; set +a
           MOSDNS="${MOSDNS_VERSION}"; CFT="${CFT_VERSION}"; GT="${GT_VERSION}"
           GOLANG="${GOLANG_IMAGE}"; ALPINE="${ALPINE_IMAGE}"
-
-          if [ "$AUTO" = "true" ] || [ "$EVENT" = "schedule" ]; then
-            echo "== 自动探测上游最新版 =="
-            L=$(curl -fsSL --retry 3 https://api.github.com/repos/IrineSistiana/mosdns/releases/latest | jq -r '.tag_name // empty' || true)
-            [ -n "$L" ] && MOSDNS="$L"
-            L=$(curl -fsSL --retry 3 https://api.github.com/repos/XIU2/CloudflareSpeedTest/releases/latest | jq -r '.tag_name // empty' || true)
-            [ -n "$L" ] && CFT="$L"
-            L=$(curl -fsSL --retry 3 https://api.github.com/repos/Ponderfly/GoogleTranslateIpCheck/releases/latest | jq -r '.tag_name // empty' || true)
-            [ -n "$L" ] && GT="$L"
-            GOLANG="golang:alpine"
-            ALPINE="alpine:latest"
-          fi
           [ -n "$MV" ] && MOSDNS="$MV"
 
           echo "mosdns=$MOSDNS"   >> "$GITHUB_OUTPUT"
@@ -170,34 +154,33 @@ jobs:
           if build_and_test "$MOSDNS" "$CFT" "$GT" "$GOLANG" "$ALPINE"; then
             push_image || { echo "::error::推送失败"; exit 1; }
             echo "== 构建并推送成功: $GHCR:$TAG =="
-            if [ "$AUTO" = "true" ] || [ "$EVENT" = "schedule" ]; then
-              cat > known-good.env <<EOF
-          MOSDNS_VERSION=$MOSDNS
-          CFT_VERSION=$CFT
-          GT_VERSION=$GT
-          GOLANG_IMAGE=$GOLANG
-          ALPINE_IMAGE=$ALPINE
-          EOF
-              git config user.name "github-actions[bot]"
-              git config user.email "github-actions[bot]@users.noreply.github.com"
-              git add known-good.env
-              if ! git diff --cached --quiet; then
-                git commit -m "chore: known-good -> mosdns $MOSDNS" || true
-                git push || true
-              fi
+            # 提示：versions.env 与 known-good.env 不一致时，把回退基准同步一下（不自动改文件）
+            if [ -z "$MV" ] && ! diff -q <(grep -v '^#' versions.env | grep -v '^$') \
+                                             <(grep -v '^#' known-good.env | grep -v '^$') >/dev/null 2>&1; then
+              {
+                echo "### 这版已通过自检，但 known-good.env 还是旧的"
+                echo ""
+                echo "确认线上稳定后，把 \`known-good.env\` 改成下面内容，下次构建失败的回退基准才对得上："
+                echo '```'
+                grep -v '^#' versions.env | grep -v '^$'
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
             fi
           else
-            echo "::error::新版本构建或自检失败，回退到 known-good 组合重建"
-            set -a; . ./known-good.env; set +a
-            if build_and_test "$MOSDNS_VERSION" "$CFT_VERSION" "$GT_VERSION" "$GOLANG_IMAGE" "$ALPINE_IMAGE"; then
-              push_image || true
-              echo "::warning::已用 known-good 组合出包，请检查上游是否有 breaking change"
-            else
-              echo "::error::known-good 组合也失败，请人工介入"
-            fi
-            echo "### 上游更新失败报告" >> "$GITHUB_STEP_SUMMARY"
-            echo "- 尝试组合: mosdns=$MOSDNS golang=$GOLANG alpine=$ALPINE" >> "$GITHUB_STEP_SUMMARY"
-            echo "- 已回退到 known-good 并报警" >> "$GITHUB_STEP_SUMMARY"
+            # 不做「偷偷用旧版本出个包」这种事：那种包 tag 是新版本、内容是旧版本，最容易误上线。
+            # 直接失败，线上不动，把上一份可用的组合贴出来供你改回去。
+            echo "::error::构建或自检未通过，本次不出包，线上保持不动"
+            {
+              echo "### 构建失败：本次没有推送任何镜像"
+              echo ""
+              echo "- 尝试组合: mosdns=$MOSDNS cft=$CFT gt=$GT golang=$GOLANG alpine=$ALPINE"
+              echo "- 线上不受影响，不需要回滚"
+              echo ""
+              echo "如果怀疑是新版本本身的问题，把 \`versions.env\` 改回上一份可用组合（\`known-good.env\`）："
+              echo '```'
+              grep -v '^#' known-good.env | grep -v '^$'
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
