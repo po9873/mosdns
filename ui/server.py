@@ -196,12 +196,39 @@ def pref_domains():
     return _PREF_DOM_CACHE["domains"]
 
 
+def _elapsed_ms(v):
+    """把 mosdns 的耗时字段统一换算成毫秒。
+
+    新版 query_summary 输出的是带单位的字符串：`493.684495ms` / `105.026µs` / `1.2s` / `900ns`，
+    老版是秒为单位的数字。两种都要能认，否则耗时列全空、缓存命中判断也失效。
+    """
+    try:
+        s = str(v).strip()
+        if s.endswith("µs") or s.endswith("us"):
+            return round(float(s[:-2]) / 1000.0, 3)
+        if s.endswith("ms"):
+            return round(float(s[:-2]), 1)
+        if s.endswith("ns"):
+            return round(float(s[:-2]) / 1e6, 3)
+        if s.endswith("s"):
+            return round(float(s[:-1]) * 1000.0, 1)
+        return round(float(s) * 1000.0, 1)   # 老版：纯秒数
+    except Exception:
+        return None
+
+
 def read_qlog(limit=30):
-    """从 mosdns 日志尾部解析 query_summary，返回最近若干条 + 命中统计。"""
+    """从 mosdns 日志尾部解析 query_summary，返回最近若干条 + 命中统计。
+
+    兼容两种日志格式：
+      ① 老版 mosdns：INFO ... query summary {json}
+      ② 新版 query_summary 插件：INFO <tag> qlog {"uqid": ..., "qname": ...}
+    只认 "query summary" 会导致新版完全解析不出数据（面板一直显示"还没有查询记录"）。
+    """
     lines = tail(MOSDNS_LOG, 2000)
     items = []
     for ln in lines:
-        if "query summary" not in ln:
+        if "query summary" not in ln and '"uqid"' not in ln:
             continue
         pos = ln.find("{")
         if pos < 0:
@@ -213,11 +240,7 @@ def read_qlog(limit=30):
         qname = str(d.get("qname", "")).rstrip(".")
         if not qname:
             continue
-        ms = None
-        try:
-            ms = round(float(d.get("elapsed", 0)) * 1000.0, 1)
-        except Exception:
-            pass
+        ms = _elapsed_ms(d.get("elapsed"))
         rcode = d.get("rcode")
         clock = ""
         head = ln.split("\t", 1)[0]
@@ -231,7 +254,9 @@ def read_qlog(limit=30):
             "status": RCODE.get(rcode, "无响应" if rcode is None else "异常"),
             "ms": ms,
             "cached": bool(ms is not None and ms <= CACHE_MS),
-            "client": str(d.get("client", "")).rsplit(":", 1)[0],
+            # mosdns 给的 client 不带端口，但 IPv4 会写成 ::ffff:192.168.1.252；
+            # 之前用 rsplit(":") 会把这种地址截成 "::ffff"，这里只剥前缀。
+            "client": re.sub(r"^::ffff:", "", str(d.get("client", ""))),
         })
     recent = items[-limit:][::-1]
     total = len(items)
