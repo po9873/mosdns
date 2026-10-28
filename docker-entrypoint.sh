@@ -227,6 +227,13 @@ sed \
   -e "/__REMOTE_DOH_LIST__/r /tmp/remote_list.txt" -e "/__REMOTE_DOH_LIST__/d" \
   -e "/__LOCAL_DOH_LIST__/r /tmp/local_list.txt"  -e "/__LOCAL_DOH_LIST__/d" \
   /app/config/config.yaml > "$DATA_DIR/config.yaml"
+
+# 给每条在用上游开一个只走它的环回入口（监测页用它测 mosdns 自己的转发耗时）
+if PREF_DATA_DIR="$DATA_DIR" python3 /app/scheduler/lib/doh_config.py diag >>"$DATA_DIR/pref.log" 2>&1; then
+  elog "$(tail -1 "$DATA_DIR/pref.log" 2>/dev/null | sed 's/^/测速入口: /')"
+else
+  elog "测速入口生成失败（不影响解析，监测页会显示不出来）"
+fi
 elog "配置已渲染: $DATA_DIR/config.yaml (DNS:$DNS_PORT API:$API_PORT UI:$UI_PORT)"
 
 # ---------- mosdns supervisor ----------

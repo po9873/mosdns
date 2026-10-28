@@ -86,6 +86,14 @@ def read_cfg():
         return ""
 
 
+def write_cfg(text):
+    """整份配置写回（先写临时文件再换，避免写一半被 mosdns 读到）。"""
+    tmp = CFG + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, CFG)
+
+
 def active(text=None):
     """读出此刻真正在用的上游，条目形式与候选文件一致：`url [ip]`。"""
     if text is None:
@@ -128,6 +136,8 @@ def apply_entries(local, remote):
         new = replace_block(new, TAG_OF["local"], yaml_block(local))
     if remote:
         new = replace_block(new, TAG_OF["remote"], yaml_block(remote))
+    # 上游换了，测速入口要跟着重建（端口集合按当前条数走）
+    new = render_diag(new)
     if new == text:
         return False
     tmp = CFG + ".tmp"
@@ -160,3 +170,95 @@ def reload_engine(timeout=25):
         return True
     except Exception:
         return False
+
+
+# ============================================================
+# 监测页测速入口
+#
+# 为什么不用外部脚本直连 DoH：用户要看的是「mosdns 此刻转发有多快」。
+# 外部探测自己有 TLS、自己建连接、自己定并发，测出来的数和实际解析对不上
+# （mosdns 有连接复用、并发取最快、还可能命中缓存）。
+# 所以给每条在用上游开一个「只指向它」的 mosdns 入口，
+# 问它一次，得到的就是 mosdns 内部真实的一次转发耗时。
+# ============================================================
+DIAG_MARK = "__DIAG_PLUGINS__"
+DIAG_BASE = {"local": 16001, "remote": 16011}
+DIAG_MAX = 9
+DIAG_RE = re.compile(r"^\s*#\s*diag\s+(local|remote)\s+(\d+)\s+(.+?)\s*->\s*(\d+)\s*$")
+
+
+def render_diag(text, local=None, remote=None):
+    """把模板里的 __DIAG_PLUGINS__ 占位换成逐条上游的测速入口。
+
+    local/remote 传 None 表示「按配置文件里此刻在用的那几条生成」。
+    每条上方留一行注释记录 side/序号/上游/端口，server 靠它反查，
+    不用去猜 tag 命名规则（改过名也不会错位）。
+    """
+    text = text.replace("\r\n", "\n")
+    if DIAG_MARK not in text:
+        return text
+    if local is None or remote is None:
+        act = active(text)
+        local = act["local"] if local is None else local
+        remote = act["remote"] if remote is None else remote
+
+    out = []
+    for side, entries, base in (("local", local or [], DIAG_BASE["local"]),
+                                ("remote", remote or [], DIAG_BASE["remote"])):
+        tag_side = "l" if side == "local" else "r"
+        for i, line in enumerate(list(entries)[:DIAG_MAX], 1):
+            parts = str(line).split()
+            if not parts:
+                continue
+            url = parts[0]
+            boot = parts[1].strip("[]") if len(parts) > 1 else ""
+            port = base + i - 1
+            out.append("  # diag %s %d %s%s -> %d"
+                       % (side, i, url, (" " + boot) if boot else "", port))
+            out.append("  - tag: diag_%s%d" % (tag_side, i))
+            out.append("    type: forward")
+            out.append("    args:")
+            out.append("      upstreams:")
+            out.append('        - addr: "%s"' % url)
+            if boot:
+                out.append('          dial_addr: "%s:443"' % boot)
+            out.append("          insecure_skip_verify: true")
+            out.append("  - tag: diag_srv_%s%d" % (tag_side, i))
+            out.append("    type: udp_server")
+            out.append("    args:")
+            out.append("      entry: diag_%s%d" % (tag_side, i))
+            out.append('      listen: "127.0.0.1:%d"' % port)
+    block = "\n".join(out)
+    return re.sub(r"^[ \t]*#\s*" + re.escape(DIAG_MARK) + r".*$", lambda m: block,
+                  text, count=1, flags=re.M)
+
+
+def diag_ports(text=None):
+    """读出测速入口：每条在用的上游对应一个 127.0.0.1 端口。"""
+    if text is None:
+        text = read_cfg()
+    out = []
+    for ln in text.replace("\r\n", "\n").splitlines():
+        m = DIAG_RE.match(ln)
+        if m:
+            out.append({"side": m.group(1), "idx": int(m.group(2)),
+                        "line": m.group(3).strip(), "port": int(m.group(4))})
+    return out
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "diag":
+        t = read_cfg()
+        n = render_diag(t)
+        if n != t:
+            tmp = CFG + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(n)
+            os.replace(tmp, CFG)
+            print("diag 入口已刷新：%d 条" % len(diag_ports(n)))
+        else:
+            print("diag 入口无变化")
+    else:
+        print("用法: doh_config.py diag", file=sys.stderr)
+        sys.exit(2)

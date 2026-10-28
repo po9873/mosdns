@@ -19,6 +19,14 @@ DATA_DIR = os.environ.get("PREF_DATA_DIR", "/data")
 DNSQ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dnsq.py")
 DNS_PORT = int(os.environ.get("PREF_DNS_PORT", "53"))
 
+# 真实 HTTPS 判定（能不能打开）复用优选那套实现：
+# 同一套「SNI + Host + 状态码 + 1034/证书」规则，诊断和优选不会给出两种结论。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import https_probe
+except Exception:
+    https_probe = None
+
 # 常见 CDN / 大厂网段（只用于「这是谁的 IP」的粗判，不是权威归属）
 CDN = [
     ("Cloudflare", ["104.16.0.0/12", "172.64.0.0/13", "162.158.0.0/15", "173.245.48.0/20",
@@ -295,21 +303,60 @@ def dns_lookup(domain):
 
 
 def domain_check(domain):
+    """解析 + 逐个真打开。
+
+    解析只问 127.0.0.1（就是 mosdns 自己），拿到的就是用户此刻真实会得到的 IP；
+    然后对每个 IP 发一次真实 HTTPS 请求（SNI/Host 都是这个域名），
+    看它到底能不能打开——TCP 握手成功不代表能打开（1034、证书错、5xx 全是握手成功）。
+    """
     ips = dns_lookup(domain)
     items = []
-    for ip in ips[:20]:
+    if not ips:
+        return {"domain": domain, "count": 0, "items": [], "ok_count": 0,
+                "verdict": "nxdomain", "verdict_note": "mosdns 没有解析出任何 A/AAAA 记录"}
+
+    def one(ip):
         b = ip_basic(ip)
-        lat, _ = tcp_check(ip, 443, 2.5, 1)
-        items.append({
+        st, ttfb = "fail", None
+        if https_probe is not None:
+            try:
+                _ip, st, ttfb, _sp, _est = https_probe.check(ip, domain, 443, 5.0, 1, "/")
+            except Exception:
+                st = "fail"
+        else:
+            # 没有 https_probe 时退回 TCP 握手（只能说通，不保证能打开）
+            lat, _ = tcp_check(ip, 443, 2.5, 1)
+            st = "ok" if lat is not None else "timeout"
+            ttfb = lat
+        return {
             "ip": ip,
             "family": "v6" if ":" in ip else "v4",
             "scope": b.get("scope", ""),
             "cdn": b.get("cdn", ""),
             "ptr": b.get("ptr", ""),
-            "latency": None if lat is None else round(lat, 1),
-        })
-    items.sort(key=lambda x: (x["latency"] is None, x["latency"] or 1e9))
-    return {"domain": domain, "count": len(items), "items": items}
+            "state": st,
+            "ok": st == "ok",
+            "latency": None if ttfb is None else round(ttfb, 1),
+        }
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            items = list(ex.map(one, ips[:20]))
+    except Exception:
+        items = [one(ip) for ip in ips[:20]]
+
+    ok = [x for x in items if x["ok"]]
+    items.sort(key=lambda x: (not x["ok"], x["latency"] is None, x["latency"] or 1e9))
+    if ok:
+        verdict = "usable"
+        note = "%d 个 IP 里 %d 个能真实打开，最快 %sms" % (len(items), len(ok), int(ok[0]["latency"] or 0))
+    else:
+        verdict = "unusable"
+        note = ("解析出来的 %d 个 IP 没有一个能打开（%s）——要么被污染成假 IP，要么这张网络到它不通"
+                % (len(items), items[0]["state"] if items else "无"))
+    return {"domain": domain, "count": len(items), "items": items,
+            "ok_count": len(ok), "verdict": verdict, "verdict_note": note}
 
 
 def main():

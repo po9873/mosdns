@@ -709,6 +709,88 @@ def doh_scan_brief():
     }
 
 
+def _dns_udp(port, qname, timeout=5):
+    """问一次 mosdns 的测速入口（127.0.0.1:port），量一次真实转发耗时。"""
+    try:
+        body, _qid = doh_pb._wire_query(qname)
+    except Exception as e:
+        return {"ok": False, "ms": 0, "answers": 0, "rcode": None, "err": "构造查询失败：%s" % e}
+    t0 = time.time()
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(body, ("127.0.0.1", int(port)))
+        raw, _ = sock.recvfrom(4096)
+    except socket.timeout:
+        return {"ok": False, "ms": int((time.time() - t0) * 1000), "answers": 0, "rcode": None,
+                "err": "%d 秒内没响应" % timeout}
+    except ConnectionRefusedError:
+        return {"ok": False, "ms": 0, "answers": 0, "rcode": None,
+                "err": "入口没在监听（mosdns 可能还没重载完）"}
+    except Exception as e:
+        return {"ok": False, "ms": 0, "answers": 0, "rcode": None,
+                "err": str(getattr(e, "strerror", None) or e)}
+    finally:
+        if sock:
+            sock.close()
+    ms = int((time.time() - t0) * 1000)
+    if len(raw) < 12:
+        return {"ok": False, "ms": ms, "answers": 0, "rcode": None, "err": "响应太短（%d 字节）" % len(raw)}
+    rcode = raw[3] & 0x0F
+    an = int.from_bytes(raw[6:8], "big")
+    if rcode != 0:
+        return {"ok": False, "ms": ms, "answers": an, "rcode": rcode, "err": "DNS 返回 rcode=%d" % rcode}
+    if an < 1:
+        return {"ok": False, "ms": ms, "answers": 0, "rcode": rcode, "err": "能转发但查不到记录"}
+    return {"ok": True, "ms": ms, "answers": an, "rcode": rcode, "err": ""}
+
+
+def ensure_diag_ports():
+    """确保 config 里有「每条上游一个测速入口」；老配置没有就补一次并重载。"""
+    if not doh_cfg or not doh_pb:
+        return []
+    text = doh_cfg.read_cfg()
+    items = doh_cfg.diag_ports(text)
+    if items:
+        return items
+    new = doh_cfg.render_diag(text)
+    if not new or new == text:
+        return []
+    try:
+        doh_cfg.write_cfg(new)
+        doh_cfg.reload_engine(25)
+        time.sleep(2)
+    except Exception:
+        return []
+    return doh_cfg.diag_ports(doh_cfg.read_cfg())
+
+
+def diag_speed():
+    """逐条问 mosdns 自己：这一条上游此刻转发一次要多久。
+
+    不是从外部直连 DoH——那样测的是「我这条连接有多快」，
+    跟 mosdns 实际解析用的连接池、并发策略、缓存都不是一回事。
+    """
+    items = ensure_diag_ports()
+    if not items:
+        return {"at": int(time.time()), "items": [],
+                "note": "测速入口还没有，可能是旧配置；保存一次上游或重启容器后自动生成"}
+    qname = {"local": "www.baidu.com", "remote": "www.google.com"}
+
+    def one(it):
+        r = _dns_udp(it["port"], qname.get(it["side"], "www.baidu.com"))
+        return dict(it, **r)
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            out = list(ex.map(one, items))
+    except Exception:
+        out = [one(it) for it in items]
+    return {"at": int(time.time()), "items": out, "note": ""}
+
+
 def probe_upstreams():
     """恢复自动探测：现场跑一遍候选清单探测（与容器启动同一套逻辑）。"""
     changed = False
@@ -991,6 +1073,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, read_qlog(n))
             if path == "/api/upstreams":
                 return self._send(200, upstreams_payload())
+            if path == "/api/diag/speed":
+                return self._send(200, diag_speed())
             if path == "/api/cache/info":
                 return self._send(200, cache_info())
             if path == "/api/sources":
@@ -1149,7 +1233,9 @@ class Handler(BaseHTTPRequestHandler):
             domain = str(data.get("domain", "")).strip()
             if not re.match(r"^[A-Za-z0-9_.-]{1,253}$", domain):
                 return self._send(400, {"error": "非法域名"})
-            return self._send(200, diag_run(["domain", domain], 60))
+            # 解析只问 127.0.0.1（mosdns 自己），随后逐个 IP 发真实 HTTPS 请求，
+            # 「能不能打开」是实测出来的，不是拿两边答案比对推出来的。
+            return self._send(200, diag_run(["domain", domain], 90))
 
         if path == "/api/cache/flush":
             try:

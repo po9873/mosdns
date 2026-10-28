@@ -251,6 +251,30 @@
   .plrow .padd:hover{color:var(--text)}
   .upfoot{margin-top:8px;font-size:13px;color:var(--muted);line-height:1.7}
   .upfoot b{color:var(--text);font-weight:600}
+  /* 监测页：DNS 上游当前速度（全部由 mosdns 自己转发一次得出） */
+  .spstat{margin-top:10px;font-size:13.5px;color:var(--muted);display:flex;gap:12px;
+    flex-wrap:wrap;align-items:baseline}
+  .spstat b{color:var(--text);font-weight:600}
+  .spstat .sep{opacity:.5}
+  .spr{display:grid;grid-template-columns:8px minmax(0,1fr) 64px 58px;gap:10px;
+    align-items:center;padding:5px 0;font-size:13.5px;line-height:1.6}
+  .spdot{width:7px;height:7px;border-radius:50%;background:var(--muted);opacity:.5}
+  .spr.ok .spdot{background:var(--green);opacity:1}
+  .spr.warn .spdot{background:var(--amber);opacity:1}
+  .spr.bad .spdot{background:var(--red);opacity:1}
+  .spname{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .spname .spip{color:var(--muted);margin-left:6px;font-size:12.5px}
+  .spbar{height:4px;border-radius:2px;background:var(--border);overflow:hidden;position:relative}
+  .spbar i{position:absolute;left:0;top:0;bottom:0;background:var(--green);border-radius:2px}
+  .spr.warn .spbar i{background:var(--amber)}
+  .spr.bad .spbar i{display:none}
+  .spms{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);font-size:12.5px;
+    white-space:nowrap}
+  .spr.ok .spms{color:var(--text)}
+  .spr.bad .spms{color:var(--red);font-size:11.5px;white-space:normal;line-height:1.5}
+  .spchk{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer}
+  .spchk input{width:15px;height:15px;accent-color:var(--blue);cursor:pointer}
 
   .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
   .route-card:hover{border-color:var(--blue)}
@@ -454,6 +478,9 @@
   .diag-out .line{display:flex;gap:10px;padding:5px 0;border-bottom:1px dashed var(--border);align-items:center;flex-wrap:wrap}
   .diag-out .line:last-child{border-bottom:none}
   .diag-out .k{color:var(--muted);min-width:76px;font-size:13px}
+  .diag-out .v.pol.ok{color:var(--green)}
+  .diag-out .v.pol.warn{color:var(--amber)}
+  .diag-out .v.pol.bad{color:var(--red)}
   .diag-out .v{flex:1;word-break:break-all}
   .diag-out .foot{display:flex;align-items:center;gap:10px;margin-top:10px;color:var(--muted);font-size:12.5px}
   .hint{margin:12px 0 0;color:var(--muted);font-size:13px;line-height:1.7}
@@ -850,7 +877,7 @@
     <div class="side-brand"><div class="dot-logo">M</div><b>MosDNS <span>优选</span></b></div>
     <nav id="nav">
       <a data-view="overview" class="active"><i></i>概况</a>
-      <a data-view="diag"><i></i>诊断</a>
+      <a data-view="diag"><i></i>监测</a>
       <a data-view="logs"><i></i>日志</a>
       <a data-view="config"><i></i>配置</a>
       <a data-view="source"><i></i>源</a>
@@ -1195,8 +1222,30 @@
         </div>
       </section>
 
-      <!-- 诊断 -->
+      <!-- 监测：上游实测 + 三个现查工具 -->
       <section class="view" id="view-diag">
+        <div class="card">
+          <div class="flexhead">
+            <h3>DNS 上游 <span class="muted" style="font-weight:400;font-size:13px">（每条都由 mosdns 自己转发一次来测，不是外部探测）</span></h3>
+            <div class="btns" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <label class="spchk"><input type="checkbox" id="diagUpAuto" checked> 每 30 秒自动测</label>
+              <button class="btn primary" id="btnDiagUp">立即测速</button>
+            </div>
+          </div>
+          <div class="spstat" id="diagUpStat">—</div>
+          <div class="upcols" style="margin-top:10px">
+            <div class="upcol">
+              <h4>国内 <small id="diagUpL">—</small></h4>
+              <div id="diagUpListL"></div>
+            </div>
+            <div class="upcol">
+              <h4>国外 <small id="diagUpR">—</small></h4>
+              <div id="diagUpListR"></div>
+            </div>
+          </div>
+          <div class="upfoot" id="diagUpFoot"></div>
+        </div>
+
         <div class="card">
           <h3>IP 查询</h3>
           <p class="sub">查任意 IP：境内 / 境外、是否 CDN 节点、PTR 反查（判定依据是本地清单，可在线更新）</p>
@@ -1220,7 +1269,7 @@
 
         <div class="card" style="margin-top:16px">
           <h3>域名查询</h3>
-          <p class="sub">解析域名的 A / AAAA 记录，逐个 IP 标注归属、CDN 厂商、实测延迟</p>
+          <p class="sub">解析只问 mosdns 自己（不给外部解析器）；拿到 IP 后逐个真发一次 HTTPS 请求，看这个域名此刻到底能不能打开</p>
           <div class="inline-form">
             <input id="diagDomain" placeholder="例如 www.cloudflare.com">
             <button class="btn primary" id="btnDiagDomain">查询</button>
@@ -1514,13 +1563,18 @@
     $$(".view").forEach(function(s){ s.classList.remove("active"); });
     var el = document.getElementById("view-" + v);
     if (el) el.classList.add("active");
-    var titles = {overview:"概况",diag:"诊断",logs:"日志",config:"配置",source:"源"};
+    var titles = {overview:"概况",diag:"监测",logs:"日志",config:"配置",source:"源"};
     $("#viewTitle").textContent = titles[v] || v;
     clearTimers();
     if (v === "logs") { fitLogBox(); loadLogs(); state.timers.push(setInterval(loadLogs, 3000)); }
     if (v === "source") { loadSources(); loadLists(); }
     if (v === "config") { loadStatus(); loadSchedule(); }
     if (v === "overview") { loadStatus(); state.timers.push(setInterval(loadStatus, 5000)); }
+    if (v === "diag") {
+      diagUpRun();
+      var au = $("#diagUpAuto");
+      if (au && au.checked) state.timers.push(setInterval(function(){ if (state.view === "diag") diagUpRun(); }, 30000));
+    }
   }
   $("#nav").addEventListener("click", function(e){
     var a = e.target.closest("a[data-view]");
@@ -3247,7 +3301,104 @@
   $("#btnRunAll").addEventListener("click", function(){ trigger("all"); });
   $("#btnRunAll2").addEventListener("click", function(){ trigger("all"); });
 
-  /* ---------- 诊断（每次现查，不做任何缓存） ---------- */
+  /* ---------- 监测：DNS 上游当前速度 ----------
+     每条都由 mosdns 自己的一个专入口转发一次得出。 */
+  var upSpeedBusy = false;
+  function spHost(line){
+    return String(line || "").split(/\s+/)[0].replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  }
+  function spIp(line){
+    var p = String(line || "").split(/\s+/);
+    return p.length > 1 ? p[1] : "";
+  }
+  function spLevel(ms){
+    if (ms <= 300) return "ok";
+    if (ms <= 1000) return "warn";
+    return "bad";
+  }
+  function spRow(it){
+    var row = document.createElement("div");
+    row.className = "spr " + (it.ok ? spLevel(it.ms) : "bad");
+    var d = document.createElement("span"); d.className = "spdot";
+    var n = document.createElement("span"); n.className = "spname";
+    n.appendChild(document.createTextNode(spHost(it.line)));
+    var pip = spIp(it.line);
+    if (pip && pip !== spHost(it.line)) {
+      var ip = document.createElement("span"); ip.className = "spip"; ip.textContent = pip;
+      n.appendChild(ip);
+    }
+    n.title = it.line + "（mosdns 入口 127.0.0.1:" + it.port + "）";
+    var bar = document.createElement("span"); bar.className = "spbar";
+    var fill = document.createElement("i");
+    fill.style.width = it.ok ? Math.min(100, Math.max(8, Math.round(it.ms / 15))) + "%" : "0";
+    bar.appendChild(fill);
+    var ms = document.createElement("span"); ms.className = "spms";
+    ms.textContent = it.ok ? it.ms + "ms" : (it.err || "不通");
+    if (!it.ok) ms.title = it.err || "";
+    row.appendChild(d); row.appendChild(n); row.appendChild(bar); row.appendChild(ms);
+    return row;
+  }
+  function spStat(list){
+    if (!list.length) return "没有可测的上游";
+    var ok = list.filter(function(x){ return x.ok; });
+    if (!ok.length) return "共 " + list.length + " 条 · <b>全部不通</b>";
+    var msv = ok.map(function(x){ return x.ms; }).sort(function(a, b){ return a - b; });
+    var txt = "共 " + list.length + " 条 · 最快 <b>" + msv[0] + "ms</b>";
+    if (msv.length > 1) txt += " · 中位 <b>" + msv[Math.floor(msv.length / 2)] + "ms</b>";
+    return txt;
+  }
+  function diagUpRender(d){
+    var items = (d && d.items) || [];
+    var g = {local: [], remote: []};
+    items.forEach(function(it){ (g[it.side] = g[it.side] || []).push(it); });
+    [["local", "#diagUpListL", "#diagUpL"], ["remote", "#diagUpListR", "#diagUpR"]].forEach(function(p){
+      var box = $(p[1]), st = $(p[2]);
+      if (!box) return;
+      box.innerHTML = "";
+      var list = g[p[0]] || [];
+      if (st) st.innerHTML = spStat(list);
+      list.forEach(function(it){ box.appendChild(spRow(it)); });
+      if (!list.length) {
+        var e = document.createElement("div"); e.className = "upfoot";
+        e.textContent = "没有这一侧的上游";
+        box.appendChild(e);
+      }
+    });
+    var ts = d && d.at ? new Date(d.at * 1000).toLocaleTimeString("zh-CN", {hour12: false}) : "—";
+    var st = $("#diagUpStat");
+    if (st) st.innerHTML = "测于 <b>" + ts + "</b>" +
+      '<span class="sep">·</span>每条都问了一次真实查询，下面是逐个 IP 的实测耗时';
+    var foot = $("#diagUpFoot");
+    if (foot) {
+      foot.innerHTML = d && d.note ? d.note :
+        "测法：给每条上游单独开一个 mosdns 入口，问它一次真实的 DNS 查询，量的是 mosdns 内部转发耗时" +
+        "（含 TLS 复用），不是从外部另开连接去探。绿 ≤300ms、黄 ≤1000ms、红 不通。";
+    }
+  }
+  function diagUpRun(){
+    if (upSpeedBusy) return;
+    upSpeedBusy = true;
+    var btn = $("#btnDiagUp");
+    if (btn) { btn.disabled = true; btn.textContent = "测速中…"; }
+    api("/api/diag/speed").then(function(d){
+      diagUpRender(d);
+    }).catch(function(e){
+      var st = $("#diagUpStat");
+      if (st) st.textContent = "测速失败：" + e.message;
+    }).then(function(){
+      upSpeedBusy = false;
+      if (btn) { btn.disabled = false; btn.textContent = "立即测速"; }
+    });
+  }
+  $("#btnDiagUp").addEventListener("click", diagUpRun);
+  $("#diagUpAuto").addEventListener("change", function(){
+    state.timers.forEach(clearInterval); state.timers = [];
+    if (this.checked && state.view === "diag") {
+      state.timers.push(setInterval(function(){ if (state.view === "diag") diagUpRun(); }, 30000));
+    }
+  });
+
+  /* ---------- 现查工具（IP / 端口 / 域名，每次都是现查） ---------- */
   function diagLine(box, k, v){
     var line = document.createElement("div"); line.className = "line";
     var kk = document.createElement("span"); kk.className = "k"; kk.textContent = k;
@@ -3318,13 +3469,27 @@
       box.innerHTML = "";
       if (d.error) { box.textContent = d.error; return; }
       diagLine(box, "域名", d.domain);
-      diagLine(box, "解析结果", (d.count || 0) + " 个 IP");
+      diagLine(box, "解析结果", (d.count || 0) + " 个 IP（来自 mosdns 自己的解析）");
+      var stTxt = {ok: "能打开", cf1034: "Cloudflare 1034", cf10xx: "Cloudflare 10xx",
+                   cert: "证书不匹配", http5xx: "服务端 5xx", timeout: "连不上（超时）",
+                   wrong: "内容对不上", fail: "连接失败"};
       (d.items || []).forEach(function(it, i){
         var desc = it.ip + (it.family === "v6" ? "  [v6]" : "");
         var who = it.cdn || it.scope || "-";
-        var lat = it.latency == null ? "超时" : (it.latency + " ms");
+        var st = stTxt[it.state] || it.state || "";
+        var lat = it.ok ? (Math.round(it.latency || 0) + " ms") : st;
         diagLine(box, "#" + (i + 1), desc + "  ·  " + who + "  ·  " + lat);
       });
+      if (d.verdict) {
+        var tag = {usable: ["ok", "能正常打开"], unusable: ["bad", "一个都打不开"],
+                   nxdomain: ["warn", "解析不到记录"]}[d.verdict] || ["", d.verdict];
+        var line = document.createElement("div"); line.className = "line";
+        var k = document.createElement("span"); k.className = "k"; k.textContent = "能否打开";
+        var v = document.createElement("span"); v.className = "v pol " + tag[0];
+        v.textContent = tag[1] + (d.verdict_note ? " · " + d.verdict_note : "");
+        line.appendChild(k); line.appendChild(v);
+        box.appendChild(line);
+      }
       diagFoot(box, doDiagDomain);
     }).catch(function(e){ box.textContent = "查询失败：" + e.message; });
   }
