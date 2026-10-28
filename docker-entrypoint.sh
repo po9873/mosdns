@@ -126,7 +126,7 @@ fi
 # ---------- 默认设置 ----------
 if [ ! -f "$DATA_DIR/settings.json" ]; then
   cat > "$DATA_DIR/settings.json" <<EOF
-{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"top_n":3,"ipv6":true,"verify_https":true,"bad_ttl_hours":${PREF_BAD_TTL_HOURS:-6},"watchdog_sec":${PREF_WATCHDOG_SEC:-180},"sub_ttl_days":${PREF_SUB_TTL_DAYS:-14},"pool_max":${PREF_POOL_MAX:-4000},"stable_hours":${PREF_STABLE_HOURS:-6},"stable_ttfb_ms":${PREF_STABLE_TTFB_MS:-1200},"stable_speed_kbps":${PREF_STABLE_SPEED_KBPS:-200},"pref_stable":true,"push":{"enabled":false,"url":"","events":"round,warn,login"},"keep_min":3,"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true,"tmdb":true,"imdb":true}}
+{"interval_min":60,"threads":$THREADS,"auto_reload":true,"list_auto_update":true,"list_update_hours":24,"top_n":3,"ipv6":true,"verify_https":true,"bad_ttl_hours":${PREF_BAD_TTL_HOURS:-6},"watchdog_sec":${PREF_WATCHDOG_SEC:-180},"sub_ttl_days":${PREF_SUB_TTL_DAYS:-14},"pool_max":${PREF_POOL_MAX:-4000},"stable_hours":${PREF_STABLE_HOURS:-6},"stable_ttfb_ms":${PREF_STABLE_TTFB_MS:-1200},"stable_speed_kbps":${PREF_STABLE_SPEED_KBPS:-200},"pref_stable":true,"doh_scan_enabled":true,"doh_scan_min":${PREF_DOH_SCAN_MIN:-60},"doh_keep":3,"push":{"enabled":false,"url":"","events":"round,warn,login"},"keep_min":3,"routes":{"cf":true,"google":true,"gt":true,"github":true,"ghcr":true,"tmdb":true,"imdb":true}}
 EOF
 else
   # 老部署升级：新版本加的设置项要补进去。
@@ -141,6 +141,7 @@ try:
 except Exception:
     raise SystemExit(0)
 add = {"keep_min": 3,
+       "doh_scan_enabled": True, "doh_scan_min": 60, "doh_keep": 3,
        "routes": {"cf": True, "google": True, "gt": True,
                   "github": True, "ghcr": True, "tmdb": True, "imdb": True}}
 chg = False
@@ -166,12 +167,25 @@ fi
 #   select_doh.py 在【容器内】逐个连候选 IP、发真实 DoH 请求，只收录当地真能通的。
 esc() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
 
-# 两份清单并行探测（各自内部已并发），避免串行叠加启动时间
-python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_remote_candidates.txt" www.google.com 3 6 >/tmp/remote_list.txt 2>/tmp/remote_doh.log &
-_p1=$!
-python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_local_candidates.txt"  www.baidu.com  3 6 >/tmp/local_list.txt  2>/tmp/local_doh.log &
-_p2=$!
-wait "$_p1" "$_p2" 2>/dev/null || true
+# 控制台里手动指定了上游（/data/doh_*_custom.txt）就直接用，不再探测：
+# 用户填什么就用什么，容器重启也照办；只有没填的才自动探测。
+_p1=""; _p2=""
+if [ -s "$DATA_DIR/doh_remote_custom.txt" ]; then
+  cp -f "$DATA_DIR/doh_remote_custom.txt" /tmp/remote_list.txt
+  elog "国外上游：沿用控制台手动配置"
+else
+  python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_remote_candidates.txt" www.google.com 3 6 >/tmp/remote_list.txt 2>/tmp/remote_doh.log &
+  _p1=$!
+fi
+if [ -s "$DATA_DIR/doh_local_custom.txt" ]; then
+  cp -f "$DATA_DIR/doh_local_custom.txt" /tmp/local_list.txt
+  elog "国内上游：沿用控制台手动配置"
+else
+  python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_local_candidates.txt"  www.baidu.com  3 6 >/tmp/local_list.txt  2>/tmp/local_doh.log &
+  _p2=$!
+fi
+[ -n "$_p1" ] && wait "$_p1" 2>/dev/null || true
+[ -n "$_p2" ] && wait "$_p2" 2>/dev/null || true
 
 # 本次探测结果落到 /data 存档；下次若是瞬时网络抖动探测不到，直接沿用上次能用的，
 # 不会因为一次探测失败就把线上解析能力清空。

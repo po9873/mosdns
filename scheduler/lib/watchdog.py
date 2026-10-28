@@ -18,6 +18,7 @@ import os
 import re
 import signal
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -351,6 +352,24 @@ def run_once():
     return swapped
 
 
+def _doh_scan_async():
+    """上游 DoH 定时扫描（自带限频：没到点会立刻返回）。
+
+    放在线程里跑，是因为一轮扫描要真连二十几条 DoH，几秒到十几秒，
+    不能把 IP 巡检的主循环堵住。
+    """
+    def _run():
+        try:
+            import doh_watch
+            r = doh_watch.scan()
+            if r.get("applied") or (r.get("new") and r.get("mode") == "manual"):
+                log("上游扫描：%s" % r.get("summary", ""))
+        except Exception as e:
+            log("上游扫描异常：%s" % e)
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+
 def main():
     once = "--once" in sys.argv
     sec, on = runtime_cfg()
@@ -367,6 +386,7 @@ def main():
                 run_once()
             except Exception as e:
                 log("异常：%s" % e)
+        _doh_scan_async()
         time.sleep(max(30, sec))
 
 

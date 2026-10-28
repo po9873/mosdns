@@ -181,6 +181,41 @@
   .uline .addr i{font-style:normal;color:var(--muted);font-size:15px;white-space:nowrap}
   .uline .none{color:var(--muted)}
   .rfoot{margin-top:8px;color:var(--muted);font-size:15px;line-height:1.6}
+  .runcard h4{display:flex;align-items:baseline;gap:6px}
+  .runcard h4 .rlink{margin-left:auto;font-size:14px;font-weight:400;color:var(--blue2);text-decoration:none}
+  .runcard h4 .rlink:hover{text-decoration:underline}
+  .rmode{font-size:14px;font-weight:400;color:var(--muted)}
+  /* 上游 DNS 编辑：两块并排，一条一行 */
+  .upgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .upbox{min-width:0}
+  .upbox label{display:block;font-size:15px;color:var(--text);margin-bottom:7px}
+  .upbox label small{display:block;color:var(--muted);font-size:14px;font-weight:400;margin-top:2px}
+  .upbox textarea{width:100%;box-sizing:border-box;background:var(--panel2);border:1px solid var(--border);
+    border-radius:9px;color:var(--text);padding:10px 12px;font-size:15px;line-height:1.65;outline:none;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+  .upbox textarea:focus{border-color:var(--blue)}
+  .uphint{margin-top:10px;color:var(--muted);font-size:15px;min-height:1.5em}
+  .uphint.bad{color:var(--red)}
+  .uphint.ok{color:var(--green)}
+  .upacts{margin-top:6px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  /* 逐条探测结果：绿点=这条现在真能解析，红点=连不上/解析不了 */
+  .upres{margin-top:4px;border-top:1px solid var(--border);padding-top:6px}
+  .upline{display:grid;grid-template-columns:9px minmax(0,1fr) auto;gap:10px;align-items:baseline;
+    padding:5px 0;font-size:14px;line-height:1.7;border-bottom:1px dashed var(--border)}
+  .upline:last-child{border-bottom:0}
+  .upline .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);align-self:center}
+  .upline.ok .dot{background:var(--green)}
+  .upline.bad .dot{background:var(--red)}
+  .upline .uaddr{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+  .upline .umeta{color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .upline.bad .umeta{color:var(--red);white-space:normal;text-align:right;max-width:26em}
+  /* 定时扫描摘要 */
+  .scanrow{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);
+    display:flex;gap:14px;flex-wrap:wrap;align-items:baseline;font-size:14px;color:var(--muted)}
+  .scanrow b{color:var(--text);font-weight:600}
+  .scanrow .sep{opacity:.55}
+  .rfoot .sep{opacity:.55}
 
   .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
   .route-card:hover{border-color:var(--blue)}
@@ -410,6 +445,11 @@
     nav a{flex-direction:column;gap:5px;font-size:13px;padding:7px 2px;flex:1 1 0;min-width:0;text-align:center}
     nav a i{width:17px;height:17px}
     .runcard{grid-template-columns:1fr}
+    .upgrid{grid-template-columns:1fr}
+    /* 探测结果在窄屏改成两行：地址一行，延迟/原因跟一行，避免右侧被截断 */
+    .upline{grid-template-columns:8px minmax(0,1fr);row-gap:1px}
+    .upline .umeta{grid-column:2;text-align:left;max-width:none}
+    .scanrow{gap:6px 10px}
     .runcard .rcol+.rcol{border-left:0;border-top:1px solid var(--border)}
     .main{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 
@@ -816,7 +856,7 @@
             <div id="runLists"></div>
           </div>
           <div class="rcol">
-            <h4>上游 DNS（引擎正在用）</h4>
+            <h4>上游 DNS（引擎正在用）<span id="upModeTag" class="rmode"></span><a href="#" id="upEdit" class="rlink">设置</a></h4>
             <div id="runUpstreams"></div>
           </div>
           <div class="rcol">
@@ -870,6 +910,30 @@
 
       <!-- 配置 -->
       <section class="view" id="view-config">
+        <div class="card" style="margin-bottom:16px">
+          <h3>上游 DNS <span class="muted" style="font-weight:400;font-size:13px">（真正在转发的 DoH；一行一条，要绑连接 IP 就写成「地址 空格 IP」）</span></h3>
+          <div class="upgrid">
+            <div class="upbox">
+              <label>国内 <small>国内域名与「先国内」的探测走这里</small></label>
+              <textarea id="upLocal" rows="4" spellcheck="false" placeholder="https://223.5.5.5/dns-query"></textarea>
+            </div>
+            <div class="upbox">
+              <label>国外 <small>GFW 名单与国内判失败的查询走这里</small></label>
+              <textarea id="upRemote" rows="4" spellcheck="false" placeholder="https://dns.google/dns-query 8.8.8.8"></textarea>
+            </div>
+          </div>
+          <div class="uphint" id="upHint"></div>
+          <div class="upacts">
+            <button class="btn primary" id="btnUpSave">测试并保存</button>
+            <button class="btn" id="btnUpTest">仅测试</button>
+            <button class="btn" id="btnUpScan">扫描候选池</button>
+            <button class="btn" id="btnUpAdopt" style="display:none">补入新可用</button>
+            <button class="btn" id="btnUpAuto">恢复自动探测</button>
+          </div>
+          <div class="upres" id="upResults" style="display:none"></div>
+          <div class="scanrow" id="upScanRow"></div>
+        </div>
+
         <div class="card" style="margin-bottom:16px">
           <h3>定时任务 <span class="muted" style="font-weight:400;font-size:13px">（所有定时都在这，改完点保存立即生效，不用重启容器）</span></h3>
           <div class="schedtable">
@@ -942,6 +1006,13 @@
                 <select id="scDiscHour" class="hour"></select>
               </div>
               <div class="snext" id="scDiscNext">—</div>
+            </div>
+
+            <div class="srow">
+              <div class="sname">上游 DoH 定时扫描<small>一直测候选池：新变得可用的收进来，在用的死了自动换；手动模式下只提示、不动你的配置</small></div>
+              <label class="switch"><input type="checkbox" id="scDohOn"><span class="slider"></span></label>
+              <div class="sfreq"><span class="u">每</span><input type="number" id="scDohMin" min="5" max="1440" step="5"><span class="u">分钟</span></div>
+              <div class="snext" id="scDohNext">—</div>
             </div>
 
             <div class="srow">
@@ -1290,7 +1361,12 @@
       if (r.status === 401) { showLogin(); throw new Error("unauthorized"); }
       return r.json().then(function(j){
         if (r.status === 403 && j && j.must_change) { showForce(); throw new Error("请先修改初始密码"); }
-        if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+        if (!r.ok) {
+          // 带上状态码和原始 body：上游保存失败时界面要拿到逐条探测结果
+          var err = new Error((j && j.error) || ("HTTP " + r.status));
+          err.status = r.status; err.body = j;
+          throw err;
+        }
         return j;
       });
     });
@@ -1615,6 +1691,11 @@
           ub.appendChild(uline(i === 0 ? pair[1] : "", host, extra));
         });
       });
+      // 卡片底部带一行扫描状态：这几条还活着吗、候选池里还有没有新可用的
+      var sf = document.createElement("div");
+      sf.className = "rfoot";
+      sf.innerHTML = upScanText(s.doh_scan);
+      ub.appendChild(sf);
     }
 
     var vb = $("#runVersions");
@@ -1634,6 +1715,182 @@
       vb.appendChild(foot);
     }
   }
+  /* ---------- 上游 DNS 编辑 ---------- */
+  function upLines(el){
+    return (el.value || "").split("\n").map(function(x){ return x.trim(); }).filter(Boolean);
+  }
+  function upText(list){
+    return (list || []).map(function(u){
+      var s = u.addr || "";
+      var host = u.host || "";
+      if (u.ip && u.ip !== host) s += " " + u.ip;
+      return s;
+    }).join("\n");
+  }
+  function upHint(msg, kind){
+    var el = $("#upHint"); if (!el) return;
+    el.className = "uphint" + (kind ? " " + kind : "");
+    el.textContent = msg || "";
+  }
+  function fillUpstreams(up){
+    if (!up) return;
+    var tag = $("#upModeTag");
+    if (tag) tag.textContent = up.mode === "manual" ? "手动指定" : "自动探测";
+    var a = $("#upLocal"), b = $("#upRemote");
+    if (a && !a.dataset.dirty) a.value = upText(up.local);
+    if (b && !b.dataset.dirty) b.value = upText(up.remote);
+  }
+  /* 逐条探测结果：连不上就直说为什么，别只丢一个「保存失败」 */
+  function upRenderResults(results){
+    var box = $("#upResults"); if (!box) return;
+    var rows = [];
+    ["local", "remote"].forEach(function(k){
+      ((results && results[k]) || []).forEach(function(r){
+        var row = document.createElement("div");
+        row.className = "upline " + (r.ok ? "ok" : "bad");
+        var d = document.createElement("span"); d.className = "dot";
+        var a = document.createElement("span"); a.className = "uaddr";
+        a.textContent = r.line; a.title = r.line + (r.ip ? "（连 " + r.ip + "）" : "");
+        var m = document.createElement("span"); m.className = "umeta";
+        m.textContent = r.ok ? (r.ms + "ms · " + (r.answers || 0) + " 条记录") : (r.err || "不通");
+        row.appendChild(d); row.appendChild(a); row.appendChild(m);
+        rows.push(row);
+      });
+    });
+    box.innerHTML = "";
+    if (!rows.length) { box.style.display = "none"; return; }
+    box.style.display = "block";
+    rows.forEach(function(r){ box.appendChild(r); });
+  }
+  function upScanText(s){
+    if (!s || !s.at) return "候选池还没扫过";
+    var parts = ["上次扫描 " + fmtAgo(s.at)];
+    if (s.pool_total) parts.push("候选 <b>" + s.pool_total + "</b> 条");
+    parts.push("可用 <b>" + (s.alive || 0) + "</b> 条");
+    if (s.new_count) parts.push("还有 <b>" + s.new_count + "</b> 条可用未启用");
+    if ((s.dead || []).length) parts.push("失效 <b>" + s.dead.length + "</b> 条");
+    return parts.join('<span class="sep">·</span>');
+  }
+  function upRenderScan(s){
+    var row = $("#upScanRow");
+    if (row){
+      row.innerHTML = "<span>" + upScanText(s) + "</span>" +
+        (s && s.at ? '<span class="sep">·</span><span>每 <b>' + (s.due_min || 60) + "</b> 分钟自动扫一遍</span>" : "");
+    }
+    // 手动模式 + 发现新可用，才给「补入」按钮
+    var ad = $("#btnUpAdopt");
+    if (ad){
+      var n = (s && s.new_count) || 0;
+      var manual = (state.upstreams && state.upstreams.mode === "manual");
+      ad.style.display = (n > 0 && manual) ? "" : "none";
+      ad.textContent = n > 0 ? "补入 " + n + " 条新可用" : "补入新可用";
+    }
+  }
+  function upBusy(btn, on, label){
+    if (!btn) return;
+    if (on) { btn.dataset.txt = btn.textContent; btn.disabled = true; btn.textContent = label || "处理中…"; }
+    else { btn.disabled = false; if (btn.dataset.txt) btn.textContent = btn.dataset.txt; }
+  }
+
+  function bindUpstreamEditor(){
+    var a = $("#upLocal"), b = $("#upRemote");
+    [a, b].forEach(function(el){
+      if (!el || el.dataset.bound) return;
+      el.dataset.bound = "1";
+      el.addEventListener("input", function(){ el.dataset.dirty = "1"; });
+    });
+    $("#btnUpSave").dataset.bound = "1";
+    function readBox(){ return {local: upLines(a), remote: upLines(b)}; }
+    // 保存：先真连一遍，有不通的就拦下（409）；用户确认过才强制写入
+    function save(force){
+      var v = readBox();
+      if (!v.local.length || !v.remote.length)
+        return upHint("国内、国外各至少要留一条；想全自动就点「恢复自动探测」", "bad");
+      upHint(force ? "按你的要求强制写入…" : "先逐条真连一遍，通了才写进配置…");
+      api("/api/upstreams", {method:"POST",
+          body:{mode:"manual", local:v.local, remote:v.remote, force:!!force}}).then(function(r){
+        a.dataset.dirty = ""; b.dataset.dirty = "";
+        upRenderResults(r.results);
+        fillUpstreams(r.upstreams || {});
+        upHint(r.changed ? "已写入并热重载；下面「运行信息」显示的是实际生效的条目"
+                         : "已保存（与原来一致，未重载）", "ok");
+        loadStatus();
+      }).catch(function(e){
+        if (e.status === 409 && e.body && e.body.results) {
+          upRenderResults(e.body.results);
+          var bad = [];
+          ["local", "remote"].forEach(function(k){
+            (e.body.results[k] || []).forEach(function(r){ if (!r.ok) bad.push(r.line); });
+          });
+          upHint(e.body.error + "。红点那些现在连不上，写进去只会让解析随机失败。", "bad");
+          if (confirm("下面 " + bad.length + " 条探测不通：\n\n" + bad.join("\n") +
+                      "\n\n仍然强制写入吗？（不建议）")) save(true);
+        } else {
+          upHint("保存失败：" + e.message, "bad");
+        }
+      });
+    }
+    $("#btnUpSave").addEventListener("click", function(){ save(false); });
+
+    $("#btnUpTest").addEventListener("click", function(){
+      var btn = this, v = readBox();
+      if (!v.local.length && !v.remote.length) return upHint("先在上面填几条地址再测", "bad");
+      upBusy(btn, true, "探测中…");
+      upHint("正在真连每一条（TLS 握手 + 实际查一次），最多十几秒…");
+      api("/api/upstreams/test", {method:"POST", body:v}).then(function(r){
+        upRenderResults(r.results);
+        var n = 0, ok = 0;
+        ["local", "remote"].forEach(function(k){
+          (r.results[k] || []).forEach(function(x){ n++; if (x.ok) ok++; });
+        });
+        upHint(ok === n ? "全部 " + n + " 条都通，可以保存" : (n - ok) + "/" + n + " 条不通，别保存",
+               ok === n ? "ok" : "bad");
+      }).catch(function(e){ upHint("探测失败：" + e.message, "bad"); })
+        .then(function(){ upBusy(btn, false); });
+    });
+
+    $("#btnUpScan").addEventListener("click", function(){
+      var btn = this;
+      upBusy(btn, true, "扫描中…");
+      upHint("正在把候选池全测一遍：看有没有新变得可用的、在用的有没有死的…");
+      api("/api/upstreams/scan", {method:"POST", body:{}}).then(function(r){
+        upRenderScan(r.scan);
+        if (r.skipped) { upHint(r.reason || "刚扫过，稍后再试", "ok"); return; }
+        fillUpstreams(r.upstreams || {});
+        upHint((r.scan && r.scan.summary) || "扫描完成", "ok");
+        loadStatus();
+      }).catch(function(e){ upHint("扫描失败：" + e.message, "bad"); })
+        .then(function(){ upBusy(btn, false); });
+    });
+
+    $("#btnUpAdopt").addEventListener("click", function(){
+      var btn = this;
+      upBusy(btn, true, "补入中…");
+      upHint("把扫描发现的新可用项加进现有清单，加完再复测一遍…");
+      api("/api/upstreams/adopt", {method:"POST", body:{}}).then(function(r){
+        a.dataset.dirty = ""; b.dataset.dirty = "";
+        upRenderResults(r.results);
+        fillUpstreams(r.upstreams || {});
+        upHint(r.added
+          ? ("已补入 " + r.added + " 条并热重载" + (r.skipped ? "（另有 " + r.skipped + " 条这次不通，没补）" : ""))
+          : "没有可补的（都在你清单里了）", "ok");
+        loadStatus();
+      }).catch(function(e){ upHint("补入失败：" + e.message, "bad"); })
+        .then(function(){ upBusy(btn, false); });
+    });
+
+    $("#btnUpAuto").addEventListener("click", function(){
+      upHint("正在按候选清单逐个探测，十几秒…");
+      api("/api/upstreams", {method:"POST", body:{mode:"auto"}}).then(function(r){
+        a.dataset.dirty = ""; b.dataset.dirty = "";
+        fillUpstreams(r.upstreams || {});
+        upRenderScan(r.scan);
+        upHint("已恢复自动探测，并已按当前网络重新选路", "ok");
+        loadStatus();
+      }).catch(function(e){ upHint("重新探测失败：" + e.message, "bad"); });
+    });
+  }
+
   function loadStatus(){
     return api("/api/status").then(function(s){
       $("#ledMosdns").className = "led " + (s.mosdns ? "ok" : "bad");
@@ -1645,6 +1902,9 @@
       fillConfigForm(state.settings);
       fillAuth(s.auth);
       renderRunInfo(s);
+      state.upstreams = s.upstreams || {};
+      fillUpstreams(s.upstreams);
+      upRenderScan(s.doh_scan);
       loadQLive();
       loadCache();
     }).catch(function(){});
@@ -1986,6 +2246,13 @@
       .catch(function(err){ toast("重载失败：" + err.message); });
   });
   $("#pillList").addEventListener("click", function(){ switchView("source"); });
+  $("#upEdit").addEventListener("click", function(e){
+    e.preventDefault();
+    switchView("config");
+    var t = $("#upLocal");
+    if (t) { t.scrollIntoView({block:"center"}); t.focus(); }
+  });
+  bindUpstreamEditor();
 
   /* ---------- 源管理 ---------- */
   var SRC = { data:null };
@@ -2703,6 +2970,16 @@
       $("#scWdNext").innerHTML = wdOn
         ? "运行中 · 每 <b>" + (st.watchdog_sec || 180) + "</b> 秒巡检一次正在用的 IP"
         : "已关闭：1034 / 证书 / 5xx 不会自动撤下换 IP，只在下轮优选时处理";
+
+      var dohOn = st.doh_scan_enabled !== false;
+      var dohMin = st.doh_scan_min || 60;
+      var ds = (r[0] && r[0].doh_scan) || {};
+      $("#scDohOn").checked = dohOn;
+      if (document.activeElement !== $("#scDohMin")) $("#scDohMin").value = dohMin;
+      $("#scDohNext").innerHTML = dohOn
+        ? "运行中 · 每 <b>" + dohMin + "</b> 分钟扫一遍候选池" +
+          (ds.at ? "，上次 " + fmtAgo(ds.at) + "（可用 <b>" + (ds.alive || 0) + "</b> 条）" : "")
+        : "已关闭：上游死了不会被发现，只能手动「扫描候选池」";
     }).catch(function(){});
   }
   function schedSubs(){
@@ -2723,7 +3000,9 @@
       list_upd_cycle: $("#scListCycle").value,
       list_upd_hour: parseInt($("#scListHour").value, 10) || 4,
       watchdog_enabled: $("#scWdOn").checked,
-      watchdog_sec: parseInt($("#scWdSec").value, 10) || 180
+      watchdog_sec: parseInt($("#scWdSec").value, 10) || 180,
+      doh_scan_enabled: $("#scDohOn").checked,
+      doh_scan_min: parseInt($("#scDohMin").value, 10) || 60
     }}).then(function(){
       return api("/api/sources", {method:"POST", body: schedSubs()});
     }).then(function(){

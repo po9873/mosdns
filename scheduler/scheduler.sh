@@ -10,6 +10,7 @@ source /app/scheduler/common.sh
 ROUTES="cf google gt github ghcr tmdb imdb"
 LISTS_PY="/app/scheduler/lib/lists.py"
 SUB_PY="/app/scheduler/lib/subs.py"
+DOH_WATCH="/app/scheduler/lib/doh_watch.py"
 
 # 四份清单（国内 IP 段 / 国内域名 / 国外域名 / CDN 网段）按「周期 + 时刻」自动拉一遍。
 # 计划存在 settings.json（list_upd_enabled / list_upd_cycle / list_upd_hour），
@@ -88,6 +89,14 @@ maybe_pull_sources() {
   log "源扫描完成：检查 ${cn} 个，可用 ${gn:-0} 个"
 }
 
+# 上游 DoH 定时扫描：候选池里有没有新变得可用的、在用的有没有已经死的。
+# 限频在 python 里（settings.doh_scan_min，默认 60 分钟），这里每次循环都调一下，
+# 没到点会立刻返回；真正的重活由 watchdog 的常驻线程承担。
+maybe_scan_doh() {
+  # stdout 是给界面看的 JSON，这里丢掉；python 自己的日志走 stderr 进 pref.log
+  python3 "$DOH_WATCH" scan >/dev/null 2>>"${PREF_LOG:-$DATA_DIR/pref.log}" || true
+}
+
 # 七路串行跑一遍，全部跑完只判断一次是否需要重载引擎
 run_all() {
   local r en fp ok=0 bad=0 names="" rc
@@ -161,12 +170,14 @@ daemon_mode() {
     # 清单更新跟优选开关无关：优选暂停了，四份清单也照常自动更新
     maybe_update_lists
     if [ "$(setting pref_enabled)" = "false" ]; then
+      maybe_scan_doh
       log "定时优选已关闭，本轮跳过（每分钟检查一次开关）"
       sleep 60
       continue
     fi
     run_all
     maybe_pull_sources
+    maybe_scan_doh
     log "本轮完成，${interval} 分钟后再次执行"
     sleep $(( interval * 60 ))
   done
@@ -188,8 +199,15 @@ case "${1:-daemon}" in
     esac
     ;;
   reload) reload_mosdns ;;
+  doh)
+    case "${2:-scan}" in
+      scan) python3 "$DOH_WATCH" scan ${3:+--force} ;;
+      status) python3 "$DOH_WATCH" status ;;
+      *) echo "用法: $0 doh {scan [--force]|status}" ;;
+    esac
+    ;;
   *)
-    echo "用法: $0 {daemon|once [route|all]|lists [name|all]|sources {pull|sync|discover|prune|test KEY}|reload}"
+    echo "用法: $0 {daemon|once [route|all]|lists [name|all]|sources {pull|sync|discover|prune|test KEY}|doh {scan|status}|reload}"
     exit 1
     ;;
 esac

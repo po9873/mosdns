@@ -19,6 +19,20 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+# 上游探测 / 配置读写的实现在 scheduler/lib 下，UI 与定时扫描共用同一份，
+# 免得两处各写一套正则，改了一边忘了另一边。
+_LIB = "/app/scheduler/lib"
+if not os.path.isdir(_LIB):
+    _LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scheduler", "lib")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+try:
+    import doh_config as doh_cfg
+    import doh_probe as doh_pb
+except Exception as _doh_imp_err:  # 老镜像里没有这两个文件时降级，不影响其它页面
+    doh_cfg = doh_pb = None
+    print("[ui] 上游探测模块缺失：%s" % _doh_imp_err, flush=True)
+
 DATA_DIR = os.environ.get("PREF_DATA_DIR", "/data")
 UI_PORT = int(os.environ.get("PREF_UI_PORT", "80"))
 DNS_PORT = int(os.environ.get("PREF_DNS_PORT", "53"))
@@ -551,6 +565,144 @@ def lists_brief():
     return out
 
 
+DOH_LOCAL_CUSTOM = os.path.join(DATA_DIR, "doh_local_custom.txt")
+DOH_REMOTE_CUSTOM = os.path.join(DATA_DIR, "doh_remote_custom.txt")
+DOH_SELECT = "/app/scheduler/lib/select_doh.py"
+
+
+def _doh_line_ok(u):
+    """一条上游只做最基本的合法性判断：必须 https/http，主机名或 IP 都能过。"""
+    if not re.match(r"^https?://[A-Za-z0-9_.:\[\]-]{1,253}(/\S*)?$", u):
+        return False
+    return True
+
+
+def _yaml_doh_block(entries):
+    """生成与 entrypoint 探测输出同格式的 YAML 片段（8 空格缩进）。"""
+    return doh_cfg.yaml_block(entries) if doh_cfg else ""
+
+
+def _replace_doh_block(text, tag, block):
+    """把某个 forward 插件的 upstreams 段整段换掉（实现见 scheduler/lib/doh_config.py）。"""
+    return doh_cfg.replace_block(text, tag, block) if doh_cfg else text
+
+
+def apply_upstreams(local, remote):
+    """写自定义上游 -> 重写 /data/config.yaml -> 热重载引擎。
+
+    手动填了就用手动（同时落 custom 文件，容器重启后 entrypoint 直接沿用）；
+    传空列表表示恢复自动探测。
+    """
+    local = [x for x in (local or []) if _doh_line_ok(str(x).split()[0])]
+    remote = [x for x in (remote or []) if _doh_line_ok(str(x).split()[0])]
+    changed = doh_cfg.apply_entries(local, remote)
+    # 落盘给下次容器启动用：存在 custom 文件 = 手动模式
+    doh_cfg.write_custom(local, remote)
+    if changed:
+        doh_cfg.reload_engine(25)
+    return changed
+
+
+def test_upstreams(local, remote):
+    """逐条真探测。写进配置之前必须过这一关：连不上 / 解析不了的不能固化。"""
+    out = {"local": [], "remote": []}
+    if not doh_pb:
+        return out
+    for key, entries, qname in (("local", local, "www.baidu.com"), ("remote", remote, "www.google.com")):
+        entries = [str(x).strip() for x in (entries or []) if str(x).strip()]
+        if entries:
+            out[key] = doh_pb.probe_many(entries, qname=qname, timeout=5, workers=6)
+    return out
+
+
+def test_failures(results):
+    bad = []
+    for key in ("local", "remote"):
+        for r in results.get(key) or []:
+            if not r.get("ok"):
+                bad.append(r)
+    return bad
+
+
+def doh_scan_brief():
+    """上次扫描的结果摘要（定时扫描写 /data/doh_scan.json）。"""
+    try:
+        with open(os.path.join(DATA_DIR, "doh_scan.json"), encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return {"at": 0, "age": 0, "summary": "", "new": [], "dead": [], "mode": "auto"}
+    at = int(d.get("at") or 0)
+    alive = 0
+    for k in ("local", "remote"):
+        alive += len((d.get("alive") or {}).get(k) or [])
+    new = d.get("new") or []
+    return {
+        "at": at,
+        "age": max(0, int(time.time()) - at) if at else 0,
+        "summary": d.get("summary") or "",
+        "applied": bool(d.get("applied")),
+        "mode": d.get("mode") or "auto",
+        "pool": d.get("pool") or {},
+        "pool_total": d.get("pool_total") or 0,
+        "alive": alive,
+        "new": new[:8],
+        "new_count": len(new),
+        "dead": (d.get("dead") or [])[:8],
+        "due_min": d.get("due_min") or 60,
+        "took_ms": d.get("took_ms") or 0,
+    }
+
+
+def probe_upstreams():
+    """恢复自动探测：现场跑一遍候选清单探测（与容器启动同一套逻辑）。"""
+    changed = False
+    for cand, out, tag in (
+        (os.path.join(DATA_DIR, "doh_local_candidates.txt"), "/tmp/lp.txt", "国内"),
+        (os.path.join(DATA_DIR, "doh_remote_candidates.txt"), "/tmp/rp.txt", "国外"),
+    ):
+        if not os.path.exists(cand):
+            continue
+        try:
+            with open(out, "w") as f:
+                subprocess.run(["python3", DOH_SELECT, cand, "www.baidu.com" if tag == "国内" else "www.google.com", "3", "6"],
+                               stdout=f, stderr=subprocess.DEVNULL, timeout=60)
+            block = open(out, encoding="utf-8").read()
+        except Exception:
+            continue
+        if "addr:" not in block:
+            continue
+        cfg_path = os.path.join(DATA_DIR, "config.yaml")
+        with open(cfg_path, encoding="utf-8", errors="replace") as f:
+            text = f.read().replace("\r\n", "\n")
+        new = _replace_doh_block(text, "forward_local" if tag == "国内" else "forward_remote", block)
+        if new != text:
+            tmp = cfg_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(new)
+            os.replace(tmp, cfg_path)
+            changed = True
+    if changed:
+        try:
+            subprocess.run([SCHEDULER, "reload"], capture_output=True, timeout=25)
+        except Exception:
+            pass
+    return changed
+
+
+def upstreams_payload():
+    """概况/配置页共用：当前生效 + 是否手动指定 + 候选池数量。"""
+    up = read_upstreams()
+    up["mode"] = "manual" if (os.path.exists(DOH_LOCAL_CUSTOM) or os.path.exists(DOH_REMOTE_CUSTOM)) else "auto"
+    try:
+        for key, name in (("local", "doh_local_candidates.txt"), ("remote", "doh_remote_candidates.txt")):
+            with open(os.path.join(DATA_DIR, name), encoding="utf-8") as f:
+                up["cand_" + key] = sum(1 for ln in f if ln.strip() and not ln.lstrip().startswith("#"))
+    except Exception:
+        up["cand_local"] = up.get("cand_local", 0)
+        up["cand_remote"] = up.get("cand_remote", 0)
+    return up
+
+
 def read_upstreams():
     """从引擎实际加载的 config.yaml 里读出 DoH 上游。
 
@@ -738,7 +890,8 @@ class Handler(BaseHTTPRequestHandler):
                     "results": read_results(),
                     "settings": read_json(SETTINGS_FILE, {}),
                     "lists_brief": lists_brief(),
-                    "upstreams": read_upstreams(),
+                    "upstreams": upstreams_payload(),
+                    "doh_scan": doh_scan_brief(),
                     "versions": read_versions(),
                     "auth": {"user": au, "default_pass": is_default},
                     "now": int(time.time()),
@@ -780,6 +933,8 @@ class Handler(BaseHTTPRequestHandler):
                     n = 30
                 rotate_qlog_if_big()
                 return self._send(200, read_qlog(n))
+            if path == "/api/upstreams":
+                return self._send(200, upstreams_payload())
             if path == "/api/cache/info":
                 return self._send(200, cache_info())
             if path == "/api/sources":
@@ -1029,6 +1184,107 @@ class Handler(BaseHTTPRequestHandler):
             r = run_subs(["restore"] + [str(k) for k in keys], timeout=60)
             return self._send(200, r)
 
+        if path == "/api/upstreams":
+            data = self._body()
+            mode = str(data.get("mode") or "manual")
+            if mode == "auto":
+                # 清掉自定义，现场重新探测（与容器启动同一套逻辑）
+                apply_upstreams([], [])
+                try:
+                    probe_upstreams()
+                except Exception as e:
+                    return self._send(500, {"error": "重新探测失败：%s" % e})
+                return self._send(200, {"ok": True, "upstreams": upstreams_payload(),
+                                        "scan": doh_scan_brief()})
+            local = [str(x).strip() for x in (data.get("local") or []) if str(x).strip()]
+            remote = [str(x).strip() for x in (data.get("remote") or []) if str(x).strip()]
+            bad = [x for x in local + remote if not _doh_line_ok(x.split()[0])]
+            if bad:
+                return self._send(400, {"error": "地址不合法：%s" % bad[0]})
+            if not local or not remote:
+                return self._send(400, {"error": "国内、国外各至少要有一条（想自动就点「恢复自动探测」）"})
+            # 写进配置之前先真连一遍：一条死掉的 DNS 写进去，表现是「控制台一切正常、
+            # 但全网解析随机失败」，比直接报错难查得多。
+            results = test_upstreams(local, remote) if doh_pb else None
+            if results and not data.get("force"):
+                fails = test_failures(results)
+                if fails:
+                    return self._send(409, {"error": "%d 条上游探测不通，未写入" % len(fails),
+                                            "results": results})
+            changed = apply_upstreams(local, remote)
+            return self._send(200, {"ok": True, "changed": changed,
+                                    "upstreams": upstreams_payload(), "results": results})
+
+        if path == "/api/upstreams/test":
+            data = self._body()
+            local = [str(x).strip() for x in (data.get("local") or []) if str(x).strip()]
+            remote = [str(x).strip() for x in (data.get("remote") or []) if str(x).strip()]
+            bad = [x for x in local + remote if not _doh_line_ok(x.split()[0])]
+            if bad:
+                return self._send(400, {"error": "地址不合法：%s" % bad[0]})
+            results = test_upstreams(local, remote)
+            return self._send(200, {"ok": not test_failures(results), "results": results})
+
+        if path == "/api/upstreams/scan":
+            # 立即扫一遍候选池（不等定时）：看有没有新可用的、在用的有没有死的
+            try:
+                r = subprocess.run(["python3", os.path.join(_LIB, "doh_watch.py"), "scan", "--force"],
+                                   capture_output=True, timeout=180)
+                out = json.loads((r.stdout or b"{}").decode("utf-8", "replace") or "{}")
+            except Exception as e:
+                return self._send(500, {"error": "扫描失败：%s" % e})
+            if out.get("skipped"):
+                return self._send(200, {"ok": True, "skipped": True, "reason": out.get("reason"),
+                                        "scan": doh_scan_brief(), "upstreams": upstreams_payload()})
+            return self._send(200, {"ok": True, "scan": doh_scan_brief(), "raw": out,
+                                    "upstreams": upstreams_payload()})
+
+        if path == "/api/upstreams/adopt":
+            # 手动模式专用：把扫描发现的「新可用」补进现有清单。
+            # 逐条再测一次，只补这次仍然通的——扫描是几分钟前的结果，
+            # 拿旧结果直接写配置等于绕过「先测再存」。
+            brief = doh_scan_brief()
+            up = read_upstreams()
+            cur = {"local": [" ".join([u["addr"]] + ([u["ip"]] if u.get("dial") else [])) for u in up["local"]],
+                   "remote": [" ".join([u["addr"]] + ([u["ip"]] if u.get("dial") else [])) for u in up["remote"]]}
+            have = {x.split()[0] for x in cur["local"] + cur["remote"]}
+            cand = [n for n in (brief.get("new") or []) if n.get("line") and n["line"].split()[0] not in have]
+            if not cand:
+                return self._send(200, {"ok": True, "added": 0, "upstreams": upstreams_payload()})
+            checked = test_upstreams([n["line"] for n in cand if (n.get("side") or "remote") == "local"],
+                                     [n["line"] for n in cand if (n.get("side") or "remote") == "remote"])
+            ok_lines = {r["line"] for k in ("local", "remote") for r in checked.get(k) or [] if r.get("ok")}
+            # 同一个 IP 只是换了域名写法（dns.pub / doh.pub、223.5.5.5 / dns.alidns.com）
+            # 算同一条，不重复补
+            seen_ips = {u.get("ip") for u in up["local"] + up["remote"] if u.get("ip")}
+            added, skipped = 0, []
+            for n in cand:
+                ip = n.get("ip") or ""
+                if n["line"] in ok_lines and not (ip and ip in seen_ips):
+                    cur[n.get("side") or "remote"].append(n["line"])
+                    if ip:
+                        seen_ips.add(ip)
+                    added += 1
+                else:
+                    skipped.append(n["line"])
+            if not added:
+                return self._send(409, {"error": "这几条现在都探测不通，先不补", "results": checked})
+            apply_upstreams(cur["local"], cur["remote"])
+            # 补完把已补的从「新可用」里去掉，避免界面一直显示同一个数字
+            rest = [n for n in (brief.get("new") or []) if n["line"] not in ok_lines]
+            try:
+                import doh_config as _dc
+                with open(_dc.SCAN_FILE, encoding="utf-8") as f:
+                    sc = json.load(f)
+                sc["new"] = rest
+                with open(_dc.SCAN_FILE, "w", encoding="utf-8") as f:
+                    json.dump(sc, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return self._send(200, {"ok": True, "added": added, "skipped": len(skipped),
+                                    "skipped_lines": skipped[:6],
+                                    "upstreams": upstreams_payload(), "results": checked})
+
         if path == "/api/reload":
             try:
                 subprocess.run([SCHEDULER, "reload"], capture_output=True, timeout=20)
@@ -1083,6 +1339,13 @@ class Handler(BaseHTTPRequestHandler):
                 cur["stable_speed_kbps"] = min(102400, max(0, int(data["stable_speed_kbps"])))
             if "pref_stable" in data:
                 cur["pref_stable"] = bool(data["pref_stable"])
+            # 上游 DoH 定时扫描（默认 60 分钟一轮，扫描器自己读这三项，改完立即生效）
+            if "doh_scan_enabled" in data:
+                cur["doh_scan_enabled"] = bool(data["doh_scan_enabled"])
+            if isinstance(data.get("doh_scan_min"), (int, float)):
+                cur["doh_scan_min"] = min(1440, max(5, int(data["doh_scan_min"])))
+            if isinstance(data.get("doh_keep"), (int, float)):
+                cur["doh_keep"] = min(6, max(1, int(data["doh_keep"])))
             if isinstance(data.get("push"), dict):
                 p = cur.get("push") or {}
                 src = data["push"]
