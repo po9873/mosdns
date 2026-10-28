@@ -595,19 +595,6 @@ def read_upstreams():
 _VERSIONS_CACHE = {"at": 0, "data": None}
 
 
-def _probe_version(path, flag, pattern=r"v?(\d+\.\d+(?:\.\d+)?)"):
-    """跑一下工具自带的版本参数，问到就返回；问不到返回空串。"""
-    if not (path and os.path.isfile(path) and os.access(path, os.X_OK)):
-        return ""
-    try:
-        r = subprocess.run([path, flag], capture_output=True, timeout=4)
-        txt = (r.stdout or b"").decode("utf-8", "replace") + (r.stderr or b"").decode("utf-8", "replace")
-        m = re.search(pattern, txt)
-        return m.group(1) if m else ""
-    except Exception:
-        return ""
-
-
 def read_versions():
     """工具与版本：引擎/测速器都按「镜像里实际装了什么」来报，不照抄 versions.env。
 
@@ -628,7 +615,10 @@ def read_versions():
         pass
 
     cft_path = "/app/bin/cft/cfst"
-    cft_v = _probe_version(cft_path, "-v") or (build.get("cft", "") if os.path.isfile(cft_path) else "")
+    # 版本以构建参数为准（镜像就是按这个 tag 下载的）；文件不在才报缺工具。
+    # 不去解析 cfst -v 的输出：它第一行是「检查版本更新中…」，混着日期，
+    # 正则抓数字很容易抓错。
+    cft_v = build.get("cft", "") if os.path.isfile(cft_path) else ""
 
     items = [{"label": "mosdns 核心", "ver": build.get("mosdns") or "未知",
               "note": "官方源码编译，DNS 引擎与分流"}]
