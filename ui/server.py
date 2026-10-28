@@ -764,23 +764,38 @@ def _dns_udp(port, qname, timeout=5):
 
 
 def ensure_diag_ports():
-    """确保 config 里有「每条上游一个测速入口」；老配置没有就补一次并重载。"""
+    """确保 config 里有「每条上游一个测速入口」；候选池变了（加/删）也要重渲染。
+
+    老逻辑只要发现有入口就直接返回，结果就是：手动加一条上游、或后台把死掉的删了，
+    只要之前已经有入口，就不会重新生成——新加的那条永远没端口、永远测不到，
+    被删的那条端口还空挂着。改成比对「想要的全集」和「已经渲染的」，不一致就重渲染 + 重载。
+    """
     if not doh_cfg or not doh_pb:
         return []
     text = doh_cfg.read_cfg()
     items = doh_cfg.diag_ports(text)
-    if items:
+    want = set(doh_cfg.full_set(text, "local")) | set(doh_cfg.full_set(text, "remote"))
+    have = set(it["line"] for it in items)
+    if items and want == have:
         return items
-    new = doh_cfg.render_diag(text)
-    if not new or new == text:
-        return []
-    try:
-        doh_cfg.write_cfg(new)
-        doh_cfg.reload_engine(25)
-        time.sleep(2)
-    except Exception:
-        return []
-    return doh_cfg.diag_ports(doh_cfg.read_cfg())
+    with _DIAG_LOCK:
+        # 拿锁后再核一次，避免并发重复重载
+        text = doh_cfg.read_cfg()
+        items = doh_cfg.diag_ports(text)
+        want = set(doh_cfg.full_set(text, "local")) | set(doh_cfg.full_set(text, "remote"))
+        have = set(it["line"] for it in items)
+        if items and want == have:
+            return items
+        new = doh_cfg.render_diag(text)
+        if not new or new == text:
+            return items if items else []
+        try:
+            doh_cfg.write_cfg(new)
+            doh_cfg.reload_engine(25)
+            time.sleep(2)
+        except Exception:
+            return items if items else []
+        return doh_cfg.diag_ports(doh_cfg.read_cfg())
 
 
 # 上游是「哪家的」：按主机名和 IP 认。认不出来就如实显示主机名，
@@ -831,6 +846,7 @@ def provider_of(line):
 # 看着就像页面坏了；偏偏「每 60 秒自动测」比一轮还短，于是永远等不到头。
 # 改成后台线程跑，接口立刻回一张进度快照，前端每 1.5 秒来问一次。
 _SPEED_LOCK = threading.Lock()
+_DIAG_LOCK = threading.Lock()  # 串行化「重渲染测速入口」这种带 reload 的操作，避免并发重复重载
 _SPEED = {
     "running": False, "at": 0, "started": 0, "phase": "",
     "items": [], "counts": {}, "note": "", "done": 0, "total": 0, "retry_left": 0,
