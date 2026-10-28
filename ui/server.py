@@ -631,8 +631,10 @@ def read_versions():
     else:
         items.append({"label": "CloudflareSpeedTest", "ver": "缺工具", "note": "镜像内缺失，cf 路回退脚本探测"})
     # GT 只跟踪版本：上游 1.9 起不发 linux 包，gt 路用的是它的社区 IP 清单
-    items.append({"label": "GoogleTranslateIpCheck",
-                  "ver": build.get("gt") or "未知",
+    gt_v = build.get("gt") or ""
+    if gt_v in ("", "latest"):
+        gt_v = "跟随上游"
+    items.append({"label": "GoogleTranslateIpCheck", "ver": gt_v,
                   "note": "仅用社区 IP 清单，跟随上游 master"})
     data = {
         "items": items,
