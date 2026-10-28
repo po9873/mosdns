@@ -33,11 +33,14 @@ RUN apk add --no-cache curl tar ca-certificates
 # 之前按项目名拼 URL 一直 404，于是镜像里从来没有这个工具。
 # GoogleTranslateIpCheck 自 1.9 起只发 Windows 包，1.8 之后没有 linux 构建，
 # 不再固化；gt 路本来就用它的社区 IP 清单，不依赖二进制。
+# 包里带一层目录（cfst_linux_amd64/），--strip-components=1 才能把
+# 可执行文件直接落到 /opt/cft/cfst；少了这层，解压后 chmod 找不到文件，
+# 整条命令失败、又只留下一句 warn。
 RUN mkdir -p /opt/cft && \
     ( curl -fsSL --show-error --retry 3 "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${CFT_VERSION}/cfst_linux_amd64.tar.gz" -o /tmp/cft.tgz \
-      && tar -xzf /tmp/cft.tgz -C /opt/cft \
-      && (chmod +x /opt/cft/cfst 2>/dev/null || chmod +x /opt/cft/CloudflareSpeedTest 2>/dev/null) \
-      && (test -x /opt/cft/cfst || ln -sf CloudflareSpeedTest /opt/cft/cfst) ) \
+      && tar -xzf /tmp/cft.tgz -C /opt/cft --strip-components=1 \
+      && chmod +x /opt/cft/cfst \
+      && test -x /opt/cft/cfst ) \
     || echo "warn: CloudflareSpeedTest 未固化，将使用纯脚本探测"
 RUN touch /opt/cft/.keep
 # 中国 IP 段完整列表（构建时下载并固化；多源兜底 + 条目数校验，失败则用仓库内置精简种子）
