@@ -3,76 +3,154 @@
 原版 [mosdns](https://github.com/IrineSistiana/mosdns) 源码构建 + 优选 + 单登录控制台。
 零第三方黑盒；运行时不下载任何东西；所有版本可由 `versions.env` 锁定。
 
-## 特性
+## 快速部署
 
-- **原版核心**：从官方 v5 源码 `go build`，零第三方打包。
-- **优选**：Cloudflare / Google 搜索 / Google 翻译 / GitHub / ghcr.io / TMDB / IMDb，串行执行（全局锁，CPU 弱也不怕）。
-- **只留最快的一批 + 备胎**：每路先取「延迟不超过最快 1.5 倍」的那一批（最多 N 个），不足保底个数就从池里补历史验证过的备胎——不让任何一路只剩一个 IP，一坏就没得换。
-- **多 IP + IPv6**：IPv4 / IPv6 各自排序，一次写入 hosts，某个 IP 失效可自动切换。
-- **HTTPS 校验（排除 1034）**：TCP 通不等于可用。对候选逐个发起真实 TLS 握手 + `Host` 请求，**Cloudflare 1034 / 1010 / 1020、证书不符、5xx 一律剔除**，避免优选到一个打开就报错的 IP。
-- **自包含**：候选 IP 靠运行时向本机 mosdns 实时解析，延迟靠 TCP 直连探测；工具与种子固化在镜像内，**不存在"拉不下来"**。
-- **默认国内优先**：未知域名先走国内 DoH，超时/失败才走国外；GFW 清单强制走国外。
-- **IP 归属校验**：国内返回的 IP 必须落在国内网段才采用，被污染则丢弃转国外。
-- **诊断页**：IP 查询（境内/境外、CDN 厂商、PTR）、端口连通检测（ICMP + TCP + UDP）、域名查询（A/AAAA + 逐 IP 归属与延迟），**每次都是现查，点「重新查询」即刷新**。
-- **消息推送**：企业微信 / 钉钉 / 飞书 机器人 Webhook，可按事件（每轮完成 / 失败或降级 / 登录提醒）推送，只推事件不推明细。
-- **清单自更新**：国内 IP 段、CDN 网段库（Cloudflare / Google / Fastly 官方源）都可每日自动更新 / 手动更新，UI 里能看到条目数、更新时间、来源，并支持预览。
-- **单登录 UI**：概况 / 监测 / 日志 / 配置 / 源；实时解析域名；亮/暗/系统三态（桌面端在侧边栏「外观设置」里切，手机端在顶栏）；侧边栏底部带退出登录；移动端底栏。
-- **数据隔离**：个人运行数据只写 `/data` 卷，镜像与仓库不含任何个人数据。
+**前置**
 
-## 构建（GitHub Actions）
+| 项 | 要求 |
+|---|---|
+| 系统 | Linux x86_64 / arm64（群晖、Unraid、PVE、OpenWrt-x86 都行）；Windows / macOS 用 Docker Desktop |
+| Docker | 20.10+ 且带 Compose v2（`docker compose version` 有输出即可） |
+| 端口 | `53/udp`、`53/tcp`（DNS）和 `80/tcp`（控制台）必须空闲 |
+| 目录 | 一个持久化目录给 `/data`，容器只写这里 |
 
-推送到 `main` 即触发；也可在 Actions 页手动 Run workflow：
+> 装不上十次有九次是 **53 端口被占**。先用 `sudo ss -lunpt | grep :53` 确认；Ubuntu/Debian 默认被 `systemd-resolved` 占着，处理见「常见问题」。
+
+### 方式一：docker run（最快）
+
+```bash
+docker run -d --name mosdns --restart unless-stopped \
+  -p 53:53/udp -p 53:53/tcp -p 80:80 \
+  -v /opt/mosdns:/data \
+  -e TZ=Asia/Shanghai \
+  po9873/mosdns:latest
+```
+
+### 方式二：docker compose（推荐）
+
+```bash
+mkdir -p /opt/mosdns && cd /opt/mosdns
+cat > docker-compose.yml <<'YAML'
+services:
+  mosdns:
+    image: po9873/mosdns:latest
+    container_name: mosdns
+    restart: unless-stopped
+    ports:
+      - "53:53/udp"      # DNS
+      - "53:53/tcp"      # DNS
+      - "80:80"          # 控制台
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: Asia/Shanghai
+      # PREF_UI_PORT: "80"     # 控制台端口，默认 80
+      # PREF_DNS_PORT: "53"    # DNS 端口，默认 53
+YAML
+docker compose up -d
+docker compose logs -f
+```
+
+### 端口
+
+| 端口 | 协议 | 用途 | 必需 |
+|---|---|---|---|
+| 53 | UDP + TCP | DNS 服务 | 是 |
+| 80 | TCP | 控制台（`PREF_UI_PORT` 可改） | 是 |
+| 9099 | TCP | 内部 API，**只监听 127.0.0.1**，不要映射 | 否 |
+
+容器默认权限已含 `NET_RAW`（诊断页的 ICMP 探测用）。若你的环境加了 `cap_drop: ALL` 或 NAS 限制了能力，
+再补 `cap_add: [NET_ADMIN, NET_RAW]`。
+
+### 数据目录
+
+首次启动自动生成全部文件，**不需要事先准备任何东西**：
+
+```
+/data
+├── config.yaml                # 渲染后的 mosdns 配置（自动生成，别手改）
+├── prefs/                     # 控制台里改的配置，重渲染以这里为准
+├── doh_local_candidates.txt   # 国内 DoH 候选池（定时扫描、自动剔除）
+├── doh_remote_candidates.txt  # 国外 DoH 候选池
+├── china_ip.txt               # 国内 IP 段（可自动更新）
+├── auth.json                  # 控制台账号
+├── mosdns.log / pref.log      # 日志（自动轮转）
+└── …                          # 其余为候选池 / 缓存 / 黑名单等运行时状态
+```
+
+- **备份 / 迁移** = 打包这个目录；**重置** = 停容器 → 清空目录 → 起容器（回到 `admin/admin`）。
+
+### 验证
+
+```bash
+curl -I http://127.0.0.1/                  # 期望 200，页面能开
+nslookup www.qq.com 127.0.0.1              # 期望返回国内 IP
+nslookup github.com 127.0.0.1              # 期望返回 GitHub IP
+docker logs mosdns | tail -20              # 应看到 UI listening on 0.0.0.0:80
+```
+
+> 本机若开着系统代理，`curl 127.0.0.1` 可能被代理劫持成 502，用 `curl --noproxy '*'` 再试。
+
+### 首次登录
+
+浏览器打开 `http://<服务器IP>/`，初始 **`admin` / `admin`**，登录后**强制改账号密码**。
+
+未改密之前，后端除了登录 / 改密 / 状态以外的接口一律返回 **403**——绕过页面直接调接口也进不去。
+
+忘记密码：停容器 → 删 `/data/auth.json` → 起容器，回到 `admin` / `admin`（并再次强制改密）。
+
+### 升级 / 回退
+
+```bash
+docker compose pull && docker compose up -d    # 跟到最新
+```
+
+生产环境建议**钉死不可变 tag**，不受 `latest` 变动影响（每次构建都会打这样一个 tag）：
+
+```yaml
+    image: po9873/mosdns:v5.3.4-20260101-abc1234
+```
+
+### 常见问题
+
+| 现象 | 处理 |
+|---|---|
+| 启动即退出，日志 `address already in use` | 53 被占。`sudo ss -lunpt \| grep :53` 找进程；`systemd-resolved` 可 `sudo systemctl disable --now systemd-resolved`，再把 `/etc/resolv.conf` 指向真实 DNS |
+| 容器在跑，局域网设备却解析不了 | 设备 DNS 是否指向本机；宿主机防火墙是否放行 53/udp |
+| 控制台打不开 / 502 | 确认 `80` 已映射；本机走代理时用 `curl --noproxy '*'` 验证；反代记得透传 WebSocket |
+| 用 macvlan 时宿主机打不开控制台 | 二层隔离的正常现象，局域网其他设备不受影响；宿主机要访问需加 macvlan 子接口或静态路由 |
+| 国外上游全红、延迟很高 | 境外 443 被限速，属网络环境，不是镜像问题；可只用国内上游 |
+| 控制台页面空白 | Ctrl+F5 强刷；镜像太旧就 `docker compose pull` |
+
+## 能做什么
+
+- **原版核心、零黑盒**：官方 v5 源码 `go build`，运行时不下载任何东西，版本由 `versions.env` 锁定。
+- **七路优选**：Cloudflare / Google 搜索 / Google 翻译 / GitHub / ghcr.io / TMDB / IMDb，串行执行，弱 CPU 也不打架。
+- **只留最快的一批 + 备胎**：每路取「延迟 ≤ 最快 1.5 倍」的一批，不足保底个数就从历史验证过的池里补，任何一路不会只剩一个 IP。
+- **真实可用性校验**：不只看 TCP 通，逐个做 TLS 握手 + `Host` 请求，Cloudflare 1034/1010/1020、证书不符、5xx 一律剔除。
+- **IPv4 / IPv6 双栈**：各自排序后一起写 hosts，单个 IP 失效自动切换。
+- **分流可信**：默认国内 DoH 优先、失败转国外；国内返回的 IP 必须落在国内网段，被污染就丢弃；GFW 清单强制走国外。
+- **上游是活的**：国内/国外 DoH 候选池定时扫描，连续不通自动剔除；控制台可手动添加，加完立即测速。
+- **控制台**：概况 / 监测（实时解析域名、上游测速）/ 日志 / 配置 / 源；亮/暗/系统三态，手机可用，单账号登录。
+- **清单自更新**：国内 IP 段、Cloudflare / Google / Fastly 官方网段每日自动更新，UI 可看条目数与来源。
+- **可观测**：诊断页现查 IP 归属、端口连通（ICMP + TCP + UDP）、域名解析；支持企业微信 / 钉钉 / 飞书机器人推送。
+- **数据隔离**：运行数据只写 `/data`，镜像与仓库不含任何个人信息。
+
+## 构建镜像（维护者）
+
+推送 `main` 即触发；也可在 Actions 页手动 Run workflow：
 
 | 输入 | 作用 |
 |---|---|
-| `auto_update` | 自动探测所有上游最新版（含 golang/alpine 大版本） |
+| `auto_update` | 自动探测所有上游最新版（含 golang / alpine 大版本） |
 | `mosdns_version` | 指定 mosdns 版本 |
 | `push_latest` | 是否更新 `latest` 标签 |
 
-构建流程：解析版本 → 构建 → **自检门禁**（UI 健康检查 / mosdns 可执行 / 配置生成）→ 通过才推 → 失败自动回退 `known-good.env` 并报警。
+流程：解析版本 → 构建 → **自检门禁**（UI 健康检查 / mosdns 可执行 / 配置生成）→ 通过才推 → 失败回退 `known-good.env` 并报警。
+另有 **每周一 03:00 UTC** 定时任务，自动探测上游版本。
 
-产物：
-- `ghcr.io/<你的用户名>/mosdns`
-- `docker.io/<你的 Docker Hub 用户名>/mosdns`（需配置 Secrets：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`）
-
-## 部署
-
-`docker-compose.yml` 就是最小可用配置，**复制即用，不用改任何东西**：
-
-```bash
-docker compose up -d
-docker logs -f mosdns
-```
-
-然后：
-
-1. 浏览器打开 `http://<服务器IP>/` 。
-2. 初始账号 **`admin` / `admin`**，登录后**强制要求改掉**（账号名也能一起改），改完才进得去。
-3. 忘记密码：删掉 `/data/auth.json` 再重启容器，回到 `admin` / `admin`。
-
-镜像两个来源内容一致，选一个：
-
-```bash
-docker pull po9873/mosdns:latest           # Docker Hub
-docker pull ghcr.io/po9873/mosdns:latest   # GitHub Container Registry
-```
-
-想让容器独占一个局域网 IP（设备上 DNS 直接填它），把 `ports` 去掉，改用 macvlan：
-
-```yaml
-    mac_address: <自定义 MAC>          # 可选，方便路由器做静态绑定
-    networks:
-      <你的 macvlan 网络名>:
-        ipv4_address: <你的局域网 IP>
-
-networks:
-  <你的 macvlan 网络名>:
-    external: true
-    name: <你的 macvlan 网络名>
-```
-
-> 调优参数（缓存、看门狗间隔、上游 DoH…）**默认都不用写**，
-> 见下面「配置项」，或直接进控制台「配置」页改，保存即生效，不用重启容器。
+产物：`ghcr.io/<用户名>/mosdns`、`docker.io/<用户名>/mosdns`（需 Secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`）。
+每次构建同时打不可变 tag `<mosdns版本>-<日期>-<commit>`，回退时用它。
 
 ## IP 源（官方 / 第三方 / 镜像，可勾选、可定时扫描）
 
@@ -221,21 +299,6 @@ mosdns 没有热重载接口，改 hosts / 清单只能重启进程。为了不�
 - 清单更新与优选结果合并到同一次重载，不会连着重启两次；
 - 重启由 supervisor 接管，中断约 1 秒；
 - 不想自动重启可在「配置」页关掉「结果变化后自动重载引擎」，改为手动点「重载引擎」。
-
-## 更新
-
-- 上游自动探测：每周一（可在 workflow 改 cron）。
-- 服务器升级：`docker compose pull && docker compose up -d`。
-- 回退：`docker pull ghcr.io/<user>/mosdns:<旧tag>` 后改 compose 的 image 即可。
-
-## 登录账号
-
-固定初始 **admin / admin**，不再支持用环境变量指定（避免密码写在 compose 里）。
-
-首次登录会被**强制改密**：前端不给进控制台，后端除了登录/改密/状态以外的接口一律返回 403，
-所以绕过页面直接调接口也进不去。改完密码后才会放行。
-
-忘记密码：删掉 `/data/auth.json` 再重启容器，会回到 admin / admin 并再次强制改密。
 
 ## 定时任务（全部在「配置 → 定时任务」里改，保存即生效，不用重启）
 
