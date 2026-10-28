@@ -747,8 +747,14 @@ def _dns_udp(port, qname, timeout=5):
     rcode = raw[3] & 0x0F
     an = int.from_bytes(raw[6:8], "big")
     if rcode != 0:
-        # 2/SERVFAIL 最常见：连上了、请求也发出去了，但对面上游自己解析失败
-        # （路径不对、要 client id、或者这条根本不是 DoH 端点）
+        # 2/SERVFAIL 有两种，含义完全不同：
+        #   ① 很快返回（几十~几百毫秒）：真连上了，上游自己解析失败
+        #      —— 路径不对、要 client id、或者这条地址根本不提供 DoH；
+        #   ② 耗时贴着超时线：mosdns 等满了才兜底回一个 SERVFAIL，
+        #      本质还是「没回应」（多半被墙/丢包），不能说成「连得上」。
+        if rcode == 2 and ms >= int(timeout * 1000) - 300:
+            return {"ok": False, "ms": ms, "answers": an, "rcode": rcode,
+                    "err": "%d 秒内没响应（等满了只等来一个 SERVFAIL）" % timeout}
         why = {2: "上游回了 SERVFAIL（连得上，但它自己解析失败）",
                5: "上游拒绝这次查询（REFUSED）"}.get(rcode, "上游返回 rcode=%d" % rcode)
         return {"ok": False, "ms": ms, "answers": an, "rcode": rcode, "err": why}
