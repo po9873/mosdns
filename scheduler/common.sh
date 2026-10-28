@@ -598,8 +598,8 @@ run_route() {
   case "$stable_hours" in ''|*[!0-9]*) stable_hours=6 ;; esac
   st_ttfb=$(setting stable_ttfb_ms); case "$st_ttfb" in ''|*[!0-9]*) st_ttfb=1200 ;; esac
   st_speed=$(setting stable_speed_kbps); case "$st_speed" in ''|*[!0-9]*) st_speed=200 ;; esac
-  # 手动点「立即测试」= 你说了算：PREF_FORCE=1 时不做稳定模式判断，直接真跑
-  # （否则点了按钮只看到「跳过全量重探」，会以为按钮坏了）
+  # 「立即测试」对应 PREF_FORCE=1：跳过稳定模式判断直接全量探测；
+  # 否则点击后只会显示「跳过全量重探」，看起来像未生效。
   if [ "${stable_hours:-0}" -gt 0 ] && [ -s "$rhf" ] && [ "$(setting pref_stable)" != "false" ] \
      && [ "${PREF_FORCE:-0}" != "1" ]; then
     mnow=$(date +%s)

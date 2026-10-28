@@ -1199,7 +1199,7 @@
             </div>
 
             <div class="srow">
-              <div class="sname">上游 DoH 定时扫描<small>一直测候选池：新变得可用的收进来，在用的死了自动换；手动模式下只提示、不动你的配置</small></div>
+              <div class="sname">上游 DoH 定时扫描<small>一直测候选池：新变得可用的收进来，在用的死了自动换；手动模式下只提示，不修改现有配置</small></div>
               <label class="switch"><input type="checkbox" id="scDohOn"><span class="slider"></span></label>
               <div class="sfreq"><span class="u">每</span><input type="number" id="scDohMin" min="5" max="1440" step="5"><span class="u">分钟</span></div>
               <div class="snext" id="scDohNext">—</div>
@@ -1482,7 +1482,7 @@
 
           <div id="srcAddForm" hidden style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)">
             <div class="rowline" style="border:0;padding-top:0">
-              <label class="grow">名称 <input id="addName" placeholder="我的 CF 源"></label>
+              <label class="grow">名称 <input id="addName" placeholder="自建 CF 源"></label>
               <label style="margin-left:10px">喂给 <select id="addRoute"></select></label>
             </div>
             <div class="rowline">
@@ -1501,7 +1501,7 @@
               <div class="rowline" style="align-items:flex-start">
                 <label class="grow">IP 清单
                   <textarea id="addIps" rows="5" placeholder="一行一个 IP，也可以直接贴 hosts（1.2.3.4 github.com）或网段（1.2.3.0/24）"></textarea>
-                  <span class="muted" style="font-size:12.5px">贴进来就进候选池，不走网络；这是「源拉不到但我知道几个能用的 IP」时的兜底。</span>
+                  <span class="muted" style="font-size:12.5px">贴进来就进候选池，不走网络；用于源无法访问但已有若干可用 IP 的场景。</span>
                 </label>
               </div>
             </div>
@@ -2146,7 +2146,7 @@
       var v = readBox();
       if (!v.local.length || !v.remote.length)
         return upHint("国内、国外各至少要留一条；想全自动就点「恢复自动探测」", "bad");
-      upHint(force ? "按你的要求强制写入…" : "先逐条真连一遍，通了才写进配置…");
+      upHint(force ? "已确认，强制写入…" : "先逐条真连一遍，通了才写进配置…");
       api("/api/upstreams", {method:"POST",
           body:{mode:"manual", local:v.local, remote:v.remote, force:!!force}}).then(function(r){
         a.dataset.dirty = ""; b.dataset.dirty = "";
@@ -2213,7 +2213,7 @@
         fillUpstreams(r.upstreams || {});
         upHint(r.added
           ? ("已补入 " + r.added + " 条并热重载" + (r.skipped ? "（另有 " + r.skipped + " 条这次不通，没补）" : ""))
-          : "没有可补的（都在你清单里了）", "ok");
+          : "没有可补的（清单中均已存在）", "ok");
         loadStatus();
       }).catch(function(e){ upHint("补入失败：" + e.message, "bad"); })
         .then(function(){ upBusy(btn, false); });
@@ -2319,7 +2319,7 @@
       '<div class="s"><span>平均耗时</span><b>' + (d.avg === null ? "—" : d.avg + "<small> ms</small>") + '</b></div>' +
       '<div class="s"><span>失败</span><b>' + d.failed + '</b></div>';
 
-    /* 数据没变就不重建表：否则每 5 秒重排一次，你正往下滚看第 40 个域名，刷新一到就跳回顶上。 */
+    /* 数据未变化时不重建表格，避免每 5 秒刷新一次导致浏览位置跳回顶部。 */
     var sig = items.length + "|" + items.map(function(x){
       return x.time + x.qname + x.ms + x.cached + x.rcode + (x.ip || "") + (x.owner || "");
     }).join(",");
@@ -2327,7 +2327,7 @@
     qSig = sig;
 
     /* 重建前记住「现在滚到哪个域名」，重建后把它放回原位——
-       否则列表里有新域名插到最上面，你正看的那行会被顶走。 */
+       否则新增域名插入顶部时会移动当前浏览位置。 */
     var keepTop = box.scrollTop, keepLeft = box.scrollLeft, anchor = null;
     if (keepTop > 0) {
       var oldRows = box.querySelectorAll("tbody tr");
@@ -2356,7 +2356,7 @@
       } else {
         td2.innerHTML = '<span class="muted">—</span>';
       }
-      /* 线路：IP 是谁家的（Cloudflare / 国内 / 海外…），以及是不是我们自己挑的优选 IP */
+      /* 线路：IP 是谁家的（Cloudflare / 国内 / 海外…），以及是否为优选写入的 IP */
       var td3 = document.createElement("td"); td3.className = "col-net";
       if (it.pref) {
         var pd = document.createElement("span"); pd.className = "tag-net pref"; pd.textContent = "优选";

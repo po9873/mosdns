@@ -10,7 +10,7 @@
 #   那能不能拿页面里的「TMDb」字样判？也不行：批量探测时对端会连续返回挑战页，
 #   字样的出现与否全看它心情，同一批 IP 单测能过、连测就判 wrong，误杀一大片。
 #   真正可靠的是证书：CloudFront 对「不认识这个域名」的请求在 TLS 阶段就用默认证书
-#   （*.cloudfront.net）应答，我们校验证书就失败了；证书能过 = 这个地址确实承载
+#   （*.cloudfront.net）应答，证书校验即失败；证书通过则说明该地址确实承载
 #   TMDB 这个 distribution。所以 expect 留空，只要求「证书对 + 有 HTTP 响应」。
 set -u
 source /app/scheduler/common.sh

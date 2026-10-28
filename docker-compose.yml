@@ -15,7 +15,7 @@ services:
       # PREF_DNS_PORT: "53"      # DNS 端口，默认 53
       # PREF_API_PORT: "9099"    # 内部 API，只监听环回，不用映射
     # 诊断页的 ICMP 探测需要原始套接字；Docker 默认权限已含 NET_RAW。
-    # 若你的环境用了 cap_drop: ALL 或 NAS 限制了能力，解开下面两行。
+    # 启用 cap_drop: ALL 或容器能力受限时，取消下面两行的注释。
     # cap_add:
     #   - NET_ADMIN
     #   - NET_RAW

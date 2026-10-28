@@ -50,7 +50,7 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None):
     ctx.verify_mode = ssl.CERT_REQUIRED
     # 必须声明 ALPN，和浏览器一致。实测（google 翻译节点 8.138.x / 47.95.x）：
     # 握手不带 ALPN 时，对端会按「默认虚拟主机」应答，给出的是不相干域名
-    # （CN=yaoqianmeiyong.site）的证书 → 被我们判成 cert，而浏览器实际好得很。
+    # （CN=yaoqianmeiyong.site）的证书 → 被判定为 cert，浏览器访问实际正常。
     # 带上 http/1.1 之后证书就是正常 Google 证书，请求也能拿到真实结果。
     try:
         ctx.set_alpn_protocols(["http/1.1"])
