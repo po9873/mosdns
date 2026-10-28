@@ -25,13 +25,16 @@ RUN git clone --depth 1 --branch ${MOSDNS_VERSION} https://github.com/IrineSisti
 # ---------- 阶段 2：可选测速工具（失败不阻断，脚本会自动回退纯脚本探测）----------
 FROM ${ALPINE_IMAGE} AS tools
 ARG CFT_VERSION
-RUN apk add --no-cache curl tar
+# ca-certificates 必须装：之前只有 curl+tar，curl 访问 GitHub 的 HTTPS
+# 直接报证书错误、半秒就退出，又被 || echo 吞掉，于是「工具一直没装进去」
+# 这件事两年都没人发现。
+RUN apk add --no-cache curl tar ca-certificates
 # 资产名是 cfst_linux_amd64.tar.gz（不是 CloudflareSpeedTest_linux_amd64.tar.gz），
 # 之前按项目名拼 URL 一直 404，于是镜像里从来没有这个工具。
 # GoogleTranslateIpCheck 自 1.9 起只发 Windows 包，1.8 之后没有 linux 构建，
 # 不再固化；gt 路本来就用它的社区 IP 清单，不依赖二进制。
 RUN mkdir -p /opt/cft && \
-    ( curl -fsSL "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${CFT_VERSION}/cfst_linux_amd64.tar.gz" -o /tmp/cft.tgz \
+    ( curl -fsSL --show-error --retry 3 "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${CFT_VERSION}/cfst_linux_amd64.tar.gz" -o /tmp/cft.tgz \
       && tar -xzf /tmp/cft.tgz -C /opt/cft \
       && (chmod +x /opt/cft/cfst 2>/dev/null || chmod +x /opt/cft/CloudflareSpeedTest 2>/dev/null) \
       && (test -x /opt/cft/cfst || ln -sf CloudflareSpeedTest /opt/cft/cfst) ) \
