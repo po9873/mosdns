@@ -137,23 +137,22 @@
      右边一半放 IP 和数值，位置固定，不用挤也不用拉伸。 */
   .route-card .rc-l{flex:0 0 50%;min-width:0;padding-right:22px;border-right:1px solid var(--border)}
   .route-card .rc-r{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;gap:6px}
-  /* 右列：整张卡共用一个两列网格——第一列放 IP、第二列放延迟/速率。
-     所有行共用同一列宽，所以不管 IP 是 9 个字还是 40 个字，
-     延时都从同一条竖线开始，一个 IP 一行、从上往下按顺序读。
-     以前是「每行各自一个网格 + 自动折行成多列」，IPv6 太长被迫独占整行，
-     IP 顺序就被拆成 左V4/右V4/整行V6/左V4/右V4，看着就是跳来跳去。 */
-  .route-card .rc-iplist{display:grid;grid-template-columns:minmax(15.5ch,34ch) max-content;
-    column-gap:18px;row-gap:8px;align-items:baseline;justify-content:start}
-  /* 行容器不参与布局，把 IP 和数值直接交给上面那个网格对齐 */
-  .rc-iprow{display:contents;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px}
-  .rc-iprow .ipcell{display:flex;align-items:baseline;gap:6px;white-space:nowrap;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:600;
+  /* 右列：一行一个 IP，延迟和吞吐就紧跟在这个 IP 后面。
+     以前是两列网格——IP 一列、数值一列，数值被推到很右边，
+     IP 又只能用到网格给的固定宽度，IPv6 于是被从中间折断成两行。
+     现在改成流式：IP 有多长就占多长，数值跟在后面，多出来的宽度直接省掉。 */
+  .route-card .rc-iplist{display:flex;flex-direction:column;gap:7px;min-width:0;align-items:flex-start}
+  .rc-iprow{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:14px;row-gap:2px;
+    max-width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:15px}
+  /* 域名和 IP 用同一套字体、同一个字重，只靠颜色区分主次（加粗会让等宽字看起来大一号） */
+  .rc-iprow .ipcell{display:flex;align-items:baseline;gap:6px;white-space:nowrap;min-width:15ch;
+    font-family:inherit;font-size:15px;font-weight:400;color:var(--text);
     font-variant-numeric:tabular-nums}
-  .rc-iprow .ms{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;font-weight:400;
+  .rc-iprow .ms{font-family:inherit;font-size:15px;font-weight:400;
     color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:.2px}
   .rc-iprow .tag{align-self:center}
   /* IPv6 只在冒号处换行（ipHtml 已经插了 <wbr>），不会把 737f 这种字段从中间劈开 */
-  .rc-iprow.v6ip .ipcell{font-size:14px;letter-spacing:-.3px;white-space:normal;word-break:normal;overflow-wrap:break-word}
+  .rc-iprow.v6ip .ipcell{font-size:14px;letter-spacing:-.3px;white-space:nowrap;min-width:0}
   .status-strip{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:16px}
   .pill{display:inline-flex;align-items:center;gap:7px;font-size:15px;color:var(--muted)}
   .led{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
@@ -302,9 +301,12 @@
      字号/字重全部一样——主域名只用略亮的颜色区分，
      加粗会让等宽字体看起来「大一号」，整列就不齐了 */
   .route-card .rc-doms{margin-top:8px;display:flex;flex-direction:column;gap:4px;min-width:0}
+  /* 字体、字号、字重、颜色和右边的 IP 完全一致。
+     以前域名带 opacity:.82——opacity 会单独开一层合成，文字抗锯齿从次像素变成灰度，
+     看着就比 IP「细一号」，像两种字体。改颜色又不加 opacity 才对得上。 */
   .route-card .rc-d{
-    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;line-height:1.6;font-weight:400;
-    color:var(--text);opacity:.82;word-break:break-all;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:15px;line-height:1.6;font-weight:400;
+    color:var(--text);word-break:break-all;
   }
   .route-card .rc-d.primary{color:var(--text)}
   /* 推送正文预览：原样展示会发出去的那段文本 */
@@ -561,12 +563,9 @@
     .route-card .rc-body{flex-direction:column;gap:12px}
     .route-card .rc-l{flex:none;width:100%;max-width:100%;padding:0 0 12px;border-right:0;border-bottom:1px solid var(--border)}
     .route-card .rc-r{flex:none;width:100%;align-items:stretch}
-    .rc-iprow{grid-template-columns:15.5ch minmax(0,1fr);column-gap:12px}
-    .route-card .rc-iplist{grid-template-columns:minmax(0,1fr) auto;column-gap:12px}
-    /* 手机宽度放不下 IPv6 + 数值，数值折到下一行（仍在这一行内部，不跑最右） */
-    .rc-iprow.v6ip{grid-template-columns:minmax(0,1fr)}
-    .rc-iprow.v6ip .ms{justify-self:start}
-    .rc-iprow.v6ip .ipcell{font-size:13px}
+    .rc-iprow{column-gap:10px}
+    /* 手机宽度放不下整条 IPv6，允许在冒号处折行，数值跟到下一行开头 */
+    .rc-iprow.v6ip .ipcell{font-size:13px;white-space:normal;word-break:normal;overflow-wrap:break-word}
     .route-card{padding:14px}
     .route-card .rc-d{font-size:14px;}
     .route-card .rc-time{font-size:14px}
