@@ -937,6 +937,8 @@ def read_upstreams():
             u["host"] = m.group(1) if m else u["addr"]
             u["ip"] = u["dial"].rsplit(":", 1)[0] if u.get("dial") else u["host"]
             u["ipv6"] = ":" in u["ip"] and not re.match(r"^\d+\.\d+\.\d+\.\d+$", u["ip"])
+            # 概况页每行右侧要写清「这是哪家的」：按主机名 + 落地 IP 认，认不出就留主机名
+            u["provider"] = provider_of(u["addr"] + " " + u["ip"])[0]
     return res
 
 
