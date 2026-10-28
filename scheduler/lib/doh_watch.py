@@ -90,16 +90,20 @@ def _url(line):
 
 
 def sync_pool(k):
-    """候选池 = /data 用户清单 + 镜像内置清单（按 URL 去重）。
+    """候选池 = /data 用户清单 + 镜像内置清单（按整行去重）。
 
     镜像升级时如果内置清单多了新候选，这里会把它们补进 /data 文件，
     让「重启后的启动探测」和「定时扫描」看到的是同一份池子，
     不会出现「扫描用了 A 组、重启后又回到 B 组」的来回跳。
+
+    去重键是整行而不是 URL：同一个服务常有多个 anycast 入口
+    （dns.controld.com 就有 76.76.2.0~2.5），
+    按 URL 去重会把备用入口全吃掉，只剩一条能试。
     """
     lines = read_pool(POOL[k])
     seed = read_pool(os.path.join(SEED_DIR, "doh_%s_candidates.txt" % k))
-    have = {_url(x) for x in lines}
-    added = [s for s in seed if _url(s) not in have]
+    have = {x for x in lines}
+    added = [s for s in seed if s not in have]
     if added and lines:
         try:
             with open(POOL[k], "a", encoding="utf-8") as f:
@@ -117,8 +121,9 @@ def plan_side(k, alive, current, keep):
     规则：
       1) 现在正用着、而且仍然通的，原样留着（连 dial_addr 一起）——避免每轮
          扫描都换一遍，换一次就是一次重载，DNS 会有极短抖动；
-      2) 同一地址只是 IP 变了，也仍算活着；
-      3) 不够 keep 条，用最快的补；
+      2) 第一轮每个服务只取最快的一个入口，先保证「多家」而不是「一家多 IP」；
+      3) 还不够 keep 条，再拿同一服务的其它 anycast 入口补（这些是真冗余：
+         某条路由被掐时另一条往往还通，对只有一家能用的网络很关键）；
       4) 一条都不通时返回 None，表示「这侧别动」（多半是整网断了，
          不该因为一次扫描失败就把 DNS 上游全清掉）。
     """
@@ -126,24 +131,37 @@ def plan_side(k, alive, current, keep):
         return None
     by_line = {r["line"]: r for r in alive}
     by_url = {_url(r["line"]): r for r in alive}
-    picked, seen = [], set()
+    picked, seen_url, seen_line = [], set(), set()
+
+    def take(line):
+        picked.append(line)
+        seen_line.add(line)
+        seen_url.add(_url(line))
+
+    # 1) 在用的、仍通的，留着
     for line in current:
         u = _url(line)
-        if not u or u in seen:
+        if not u or u in seen_url:
             continue
         if line in by_line:
-            picked.append(line)
-            seen.add(u)
+            take(line)
         elif u in by_url:
-            picked.append(by_url[u]["line"])
-            seen.add(u)
+            take(by_url[u]["line"])
+
+    # 2) 先按「一家一条」补齐
     for r in alive:
         if len(picked) >= keep:
             break
-        u = _url(r["line"])
-        if u not in seen:
-            picked.append(r["line"])
-            seen.add(u)
+        if _url(r["line"]) not in seen_url and r["line"] not in seen_line:
+            take(r["line"])
+
+    # 3) 还不够，再用同服务的其它入口补冗余
+    for r in alive:
+        if len(picked) >= keep:
+            break
+        if r["line"] not in seen_line:
+            take(r["line"])
+
     return picked[:keep]
 
 
@@ -279,7 +297,9 @@ def _scan_locked(force=False):
         "active": act_after,
         "dead": dead,
         "new": new_after if manual else new,
-        "failed": {k: [{"line": r["line"], "err": r["err"]} for r in results[k] if not r["ok"]][:8]
+        # 不截断：界面上要能把整池摊开，让人看清「12 条候选只有 1 条通」
+        # 到底是没探还是真探不到——只报前 8 条会被误读成「就试了这么几条」。
+        "failed": {k: [{"line": r["line"], "err": r["err"]} for r in results[k] if not r["ok"]]
                    for k in results},
         "qname": QNAME,
         "summary": summary,

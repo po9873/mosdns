@@ -624,18 +624,71 @@ def test_failures(results):
     return bad
 
 
+def scan_detail(d):
+    """把上一次扫描摊成一张表：每一条候选到底是「在用 / 可用未启用 / 不通」。
+
+    界面上那句「候选 12 条可用 1 条」太笼统，看着像没干活。
+    这里给出逐条状态，让人一眼看到是「12 条都试过、11 条被墙」，
+    而不是「只找到了 1 条」。
+    """
+    out = {}
+    act = d.get("active") or {}
+    alive = d.get("alive") or {}
+    failed = d.get("failed") or {}
+    for k in ("local", "remote"):
+        active_lines = [str(x).strip() for x in (act.get(k) or []) if str(x).strip()]
+        active_urls = {x.split()[0] for x in active_lines}
+        rows, seen = [], set()
+        for r in alive.get(k) or []:
+            line = str(r.get("line") or "").strip()
+            if not line or line in seen:
+                continue
+            seen.add(line)
+            is_act = line in active_lines or (line.split()[0] in active_urls)
+            rows.append({"line": line, "state": "active" if is_act else "alive",
+                         "ms": int(r.get("ms") or 0), "ip": r.get("ip") or "", "err": ""})
+        # 在用但没出现在探测结果里的（配置文件里手写的、扫描前刚改的）兜底
+        for line in active_lines:
+            if line not in seen:
+                seen.add(line)
+                rows.append({"line": line, "state": "active", "ms": 0, "ip": "", "err": ""})
+        for r in failed.get(k) or []:
+            line = str(r.get("line") or "").strip()
+            if not line or line in seen:
+                continue
+            seen.add(line)
+            rows.append({"line": line, "state": "dead", "ms": 0, "ip": "",
+                         "err": r.get("err") or "探测不通"})
+        rank = {"active": 0, "alive": 1, "dead": 2}
+        rows.sort(key=lambda x: rank.get(x["state"], 9))
+        out[k] = rows
+    return out
+
+
+def scan_counts(detail):
+    c = {}
+    for k, rows in (detail or {}).items():
+        c[k] = {"active": 0, "alive": 0, "dead": 0, "total": len(rows)}
+        for r in rows:
+            if r["state"] in c[k]:
+                c[k][r["state"]] += 1
+    return c
+
+
 def doh_scan_brief():
     """上次扫描的结果摘要（定时扫描写 /data/doh_scan.json）。"""
     try:
         with open(os.path.join(DATA_DIR, "doh_scan.json"), encoding="utf-8") as f:
             d = json.load(f)
     except Exception:
-        return {"at": 0, "age": 0, "summary": "", "new": [], "dead": [], "mode": "auto"}
+        return {"at": 0, "age": 0, "summary": "", "new": [], "dead": [], "mode": "auto",
+                "detail": {"local": [], "remote": []}, "counts": {}}
     at = int(d.get("at") or 0)
     alive = 0
     for k in ("local", "remote"):
         alive += len((d.get("alive") or {}).get(k) or [])
     new = d.get("new") or []
+    detail = scan_detail(d)
     return {
         "at": at,
         "age": max(0, int(time.time()) - at) if at else 0,
@@ -645,11 +698,14 @@ def doh_scan_brief():
         "pool": d.get("pool") or {},
         "pool_total": d.get("pool_total") or 0,
         "alive": alive,
-        "new": new[:8],
+        "new": new,
         "new_count": len(new),
         "dead": (d.get("dead") or [])[:8],
+        "detail": detail,
+        "counts": scan_counts(detail),
         "due_min": d.get("due_min") or 60,
         "took_ms": d.get("took_ms") or 0,
+        "qname": d.get("qname") or {},
     }
 
 

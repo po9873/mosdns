@@ -4,15 +4,33 @@
 #   - 探测在容器内执行，连得上/连不上都是当地网络的真实情况
 # 提示：本机若处在带 SNI 嗅探的网络，已知 DoH 主机名（cloudflare-dns.com 等）会被阻断，
 #       此时把能用的自建/代理 DoH 地址加进来即可（见 README「自定义上游」）。
+# 注意：同一条服务写多个 IP 是有意义的——不同 anycast 入口走的路由不同，
+#       一条超时另一条可能通；去重按整行，不会互相覆盖。
 https://cloudflare-dns.com/dns-query 1.1.1.1
+https://cloudflare-dns.com/dns-query 1.0.0.1
 https://dns.google/dns-query 8.8.8.8
+https://dns.google/dns-query 8.8.4.4
 https://dns.quad9.net/dns-query 9.9.9.9
+https://dns.quad9.net/dns-query 149.112.112.112
 https://doh.opendns.com/dns-query 208.67.222.222
 https://dns.adguard-dns.com/dns-query 94.140.14.14
 https://dns.nextdns.io/dns-query 45.90.28.1
 https://dns.nextdns.io/dns-query 45.90.30.1
-https://dns.controld.com/dns-query 76.76.2.2
 https://dns.quad101.net/dns-query 101.101.101.101
 https://dns.dns-over-https.com/dns-query 185.235.81.1
 https://fi.dns.snopyta.org/dns-query 95.216.24.100
 https://doh.li/dns-query 178.216.201.70
+# ControlD：换主机名就是换 SNI，被按域名阻断时这几个常常还剩一条能走
+https://dns.controld.com/dns-query 76.76.2.0
+https://dns.controld.com/dns-query 76.76.2.1
+https://dns.controld.com/dns-query 76.76.2.2
+https://dns.controld.com/dns-query 76.76.2.3
+https://freedns.controld.com/p0 76.76.2.2
+https://freedns.controld.com/p2 76.76.2.2
+# Mullvad / DNS.SB / 瑞士数字社会基金会：独立于上面几家，绕开针对性封锁
+https://dns.mullvad.net/dns-query 194.242.2.2
+https://base.dns.mullvad.net/dns-query 194.242.2.4
+https://doh.sb/dns-query 185.222.222.222
+https://dns.sb/dns-query 185.222.222.222
+https://doh.dns.sb/dns-query 185.222.222.222
+https://dns.digitale-gesellschaft.ch/dns-query 185.95.218.42
