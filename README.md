@@ -183,8 +183,13 @@ docker compose pull && docker compose up -d
 ### 实时解析域名
 
 读取 mosdns `query_summary` 日志，按域名去重后完整列出当前在解析的域名，每 5 秒刷新，框内滚动、表头吸顶。
-每行包含时间、域名、记录类型、应答 IP、线路归属、响应耗时、状态与客户端；线路归属按 `/data/cdn_ranges.txt`
-与镜像内置网段库合并判定（Cloudflare / Google / GitHub / 国内 / 海外）。面板自身发起的环回查询不计入统计。
+每行包含时间、域名、记录类型、应答 IP、线路、响应耗时、状态与客户端。面板自身发起的环回查询不计入统计。
+
+线路一栏以**域名归属**为主：按 `/data/prefs/*.hosts` 的文件名标出该域名由哪一路优选写入
+（Cloudflare / Google 搜索 / Google 翻译 / GitHub / ghcr / TMDB / IMDb），未命中任何一路时显示应答 IP 的归属
+（按 `/data/cdn_ranges.txt` 与镜像内置网段库合并判定，认不出为「海外」）。
+IP 归属以浅色小字附在后面，用于判断实际落地位置——Google 各路的优选地址多为国内中转节点，
+仅按 IP 判定会统一显示「国内」，无法区分走了哪条规则。
 
 ## 优选机制
 

@@ -513,6 +513,9 @@
     border-radius:4px;padding:0 4px;margin-right:4px;color:var(--muted)}
   .q-live .tag-net.cf{color:#f6821f;border-color:rgba(246,130,31,.45)}
   .q-live .tag-net.pref{color:var(--blue2);border-color:rgba(90,150,255,.45)}
+  .q-live .tag-net.rt{color:var(--blue2);border-color:rgba(90,150,255,.45)}
+  .q-live .tag-net.rt.cf{color:#f6821f;border-color:rgba(246,130,31,.45)}
+  .q-live .tag-net.own{font-size:10.5px;color:var(--muted);border-color:transparent;padding:0 2px}
 
   .logbox{
     background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px;
@@ -2341,7 +2344,7 @@
     }
     var t = document.createElement("table");
     var thead = document.createElement("thead");
-    thead.innerHTML = "<tr><th>时间</th><th>域名</th><th>应答 IP</th><th>线路</th><th>用时</th><th>状态</th><th class=\"col-client\">客户端</th></tr>";
+    thead.innerHTML = "<tr><th>时间</th><th>域名</th><th>应答 IP</th><th>线路 / 优选</th><th>用时</th><th>状态</th><th class=\"col-client\">客户端</th></tr>";
     var tbody = document.createElement("tbody");
     items.forEach(function(it){
       var tr = document.createElement("tr");
@@ -2356,18 +2359,28 @@
       } else {
         td2.innerHTML = '<span class="muted">—</span>';
       }
-      /* 线路：IP 是谁家的（Cloudflare / 国内 / 海外…），以及是否为优选写入的 IP */
+      /* 线路：先看域名属于哪一路优选（Google 搜索 / GitHub / Cloudflare…），
+         再看应答 IP 的归属。Google 各路的优选 IP 多为国内中转节点，
+         单看 IP 只会显示「国内」，看不出走的是哪条规则。 */
       var td3 = document.createElement("td"); td3.className = "col-net";
-      if (it.pref) {
-        var pd = document.createElement("span"); pd.className = "tag-net pref"; pd.textContent = "优选";
-        td3.appendChild(pd);
+      function netTag(cls, txt, tip){
+        var e = document.createElement("span");
+        e.className = "tag-net " + cls;
+        e.textContent = txt;
+        if (tip) e.title = tip;
+        return e;
       }
-      if (it.owner) {
-        var od = document.createElement("span");
-        od.className = "tag-net" + (it.owner === "Cloudflare" ? " cf" : "");
-        od.textContent = it.owner;
-        td3.appendChild(od);
-      } else if (!it.pref) {
+      if (it.route_name) {
+        td3.appendChild(netTag("rt" + (it.route === "cf" ? " cf" : ""), it.route_name, "该域名由这一路优选写入 hosts"));
+        if (it.owner && it.owner !== it.route_name) {
+          td3.appendChild(netTag("own", it.owner, "应答 IP 的归属"));
+        }
+      } else if (it.pref) {
+        td3.appendChild(netTag("pref", "优选", "域名在优选 hosts 中，但未匹配到具体路由文件"));
+        if (it.owner) td3.appendChild(netTag(it.owner === "Cloudflare" ? "cf" : "own", it.owner, "应答 IP 的归属"));
+      } else if (it.owner) {
+        td3.appendChild(netTag(it.owner === "Cloudflare" ? "cf" : "", it.owner, "应答 IP 的归属"));
+      } else {
         td3.innerHTML = '<span class="muted">—</span>';
       }
       var td4 = document.createElement("td");

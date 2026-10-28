@@ -349,6 +349,60 @@ def pref_domains():
     return _PREF_DOM_CACHE["domains"]
 
 
+_ROUTE_NAMES = {
+    "cf": "Cloudflare",
+    "google": "Google 搜索",
+    "gt": "Google 翻译",
+    "github": "GitHub",
+    "ghcr": "ghcr",
+    "tmdb": "TMDB",
+    "imdb": "IMDb",
+}
+_ROUTE_CACHE = {"sig": None, "map": {}}
+
+
+def route_map():
+    """域名 -> 所属优选路（cf / google / gt / github / ghcr / tmdb / imdb）。
+
+    按路读各自的 hosts 文件，不读 all.hosts：合并后的文件看不出域名属于哪一路。
+    Google 两路的优选 IP 多为国内中转节点，单看 IP 归属只会判成「国内」，
+    因此线路一栏以域名归属为准，IP 归属作为附加信息。
+    """
+    try:
+        names = sorted(os.listdir(PREF_DIR))
+    except Exception:
+        return {}
+    files = []
+    for n in names:
+        if not n.endswith(".hosts") or n.startswith("all.hosts"):
+            continue
+        p = os.path.join(PREF_DIR, n)
+        try:
+            files.append((p, os.path.getmtime(p)))
+        except Exception:
+            continue
+    sig = tuple((p, mt) for p, mt in files)
+    if sig == _ROUTE_CACHE["sig"]:
+        return _ROUTE_CACHE["map"]
+    m = {}
+    for p, _mt in files:
+        key = os.path.basename(p)[: -len(".hosts")]
+        try:
+            with open(p, encoding="utf-8", errors="ignore") as f:
+                for ln in f:
+                    parts = ln.split()
+                    if not parts or parts[0].startswith("#"):
+                        continue
+                    dom = parts[0].rstrip(".").lower()
+                    if dom and dom not in m:
+                        m[dom] = key
+        except Exception:
+            continue
+    _ROUTE_CACHE["sig"] = sig
+    _ROUTE_CACHE["map"] = m
+    return m
+
+
 def _elapsed_ms(v):
     """把 mosdns 的耗时字段统一换算成毫秒。
 
@@ -437,8 +491,12 @@ def read_qlog(limit=30, uniq=False, resolve=0):
     # 只看「几路成功」看不出效果，这里把命中/没命中分别计数。
     pref = pref_domains()
     if resolve and recent:
-        # 只给最上面那几条补应答（用户真正在看的那一屏），越往下越没必要。
+        # 只给最上面那几条补应答（当前可见的那一屏），越往下越没必要。
+        routes = route_map()
         for x in recent[:resolve]:
+            rk = routes.get(x["qname"], "")
+            x["route"] = rk
+            x["route_name"] = _ROUTE_NAMES.get(rk, rk)
             x["pref"] = x["qname"] in pref
             ip, own = answer_of(x["qname"])
             x["ip"], x["owner"] = ip or "", own or ""
