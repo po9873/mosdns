@@ -1118,7 +1118,12 @@ def cmd_health(force=False, only=None):
         alive = lt.get("v4", 0) + lt.get("v6", 0) > 0 and not str(it.get("status", "")).startswith("失败")
         r = fetch_item(it, d.get("proxy", ""), merge=False)
         checked += 1
-        h = it.setdefault("health", {"fails": 0, "ts": 0, "ok": True})
+        # health 可能是 null（手工编辑过源列表），setdefault 遇到"键在值为 None"不会替换，
+        # 后面 h["ts"] 就会 TypeError，整个健康检查崩掉。
+        h = it.get("health")
+        if not isinstance(h, dict):
+            h = {"fails": 0, "ts": 0, "ok": True}
+            it["health"] = h
         h["ts"] = now
         if r.get("ok"):
             good += 1

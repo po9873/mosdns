@@ -3372,7 +3372,8 @@
     if (foot) {
       foot.innerHTML = d && d.note ? d.note :
         "测法：给每条上游单独开一个 mosdns 入口，问它一次真实的 DNS 查询，量的是 mosdns 内部转发耗时" +
-        "（含 TLS 复用），不是从外部另开连接去探。绿 ≤300ms、黄 ≤1000ms、红 不通。";
+        "（含 TLS 复用），不是从外部另开连接去探。绿 ≤300ms、黄 ≤1000ms、红 更慢；" +
+        "没有速度条、写着错误原因的才是打不开。";
     }
   }
   function diagUpRun(){
@@ -3473,13 +3474,17 @@
       var stTxt = {ok: "能打开", cf1034: "Cloudflare 1034", cf10xx: "Cloudflare 10xx",
                    cert: "证书不匹配", http5xx: "服务端 5xx", timeout: "连不上（超时）",
                    wrong: "内容对不上", fail: "连接失败"};
-      (d.items || []).forEach(function(it, i){
+      var shown = (d.items || []).slice(0, 8);
+      shown.forEach(function(it, i){
         var desc = it.ip + (it.family === "v6" ? "  [v6]" : "");
         var who = it.cdn || it.scope || "-";
         var st = stTxt[it.state] || it.state || "";
         var lat = it.ok ? (Math.round(it.latency || 0) + " ms") : st;
         diagLine(box, "#" + (i + 1), desc + "  ·  " + who + "  ·  " + lat);
       });
+      if ((d.items || []).length > shown.length) {
+        diagLine(box, "…", "还有 " + ((d.items || []).length - shown.length) + " 个 IP 没列出（结果太多，只显示前 8 个）");
+      }
       if (d.verdict) {
         var tag = {usable: ["ok", "能正常打开"], unusable: ["bad", "一个都打不开"],
                    nxdomain: ["warn", "解析不到记录"]}[d.verdict] || ["", d.verdict];
