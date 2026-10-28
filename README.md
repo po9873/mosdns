@@ -474,19 +474,8 @@ docker-entrypoint.sh  渲染配置、初始化账号、启动进程
 流程：读取 `versions.env` → 构建 → 自检门禁（控制台健康检查、mosdns 可执行、配置生成）。
 自检未通过时不推送任何镜像，线上版本保持不变，避免出现标签为新版、内容为旧版的镜像。
 
-### 升级上游版本
-
-```bash
-# 1. 修改版本号，例如 mosdns v5.3.4 -> v5.4.0
-vi versions.env
-# 2. 提交并推送，等待 Actions 完成
-git commit -am "chore: bump mosdns" && git push
-# 3. 在部署端手动拉取（CI 不负责部署）
-docker compose pull && docker compose up -d
-```
-
-自检只验证容器可启动，不保证行为兼容（插件日志格式变更、配置项改名均属行为变化）。
-建议先固定到不可变标签运行一段时间，确认无异常后再切换到 `latest`；出现问题时将标签改回 `known-good.env` 中的版本。
+`versions.env` 固定内置版本，更换时改该文件并推送即可，部署端再执行 `docker compose pull`。
+自检只验证容器可启动，不保证跨版本的行为兼容，建议先跑不可变标签确认无异常。
 
 产物：`ghcr.io/<用户名>/mosdns` 与 `docker.io/<用户名>/mosdns`，需配置 Secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。
 每次构建同时生成不可变标签 `<mosdns版本>-<日期>-<commit>`。
