@@ -25,19 +25,18 @@ RUN git clone --depth 1 --branch ${MOSDNS_VERSION} https://github.com/IrineSisti
 # ---------- 阶段 2：可选测速工具（失败不阻断，脚本会自动回退纯脚本探测）----------
 FROM ${ALPINE_IMAGE} AS tools
 ARG CFT_VERSION
-ARG GT_VERSION
 RUN apk add --no-cache curl tar
+# 资产名是 cfst_linux_amd64.tar.gz（不是 CloudflareSpeedTest_linux_amd64.tar.gz），
+# 之前按项目名拼 URL 一直 404，于是镜像里从来没有这个工具。
+# GoogleTranslateIpCheck 自 1.9 起只发 Windows 包，1.8 之后没有 linux 构建，
+# 不再固化；gt 路本来就用它的社区 IP 清单，不依赖二进制。
 RUN mkdir -p /opt/cft && \
-    ( curl -fsSL "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${CFT_VERSION}/CloudflareSpeedTest_linux_amd64.tar.gz" -o /tmp/cft.tgz \
-      && tar -xzf /tmp/cft.tgz -C /opt/cft CloudflareSpeedTest \
-      && chmod +x /opt/cft/CloudflareSpeedTest ) \
+    ( curl -fsSL "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${CFT_VERSION}/cfst_linux_amd64.tar.gz" -o /tmp/cft.tgz \
+      && tar -xzf /tmp/cft.tgz -C /opt/cft \
+      && (chmod +x /opt/cft/cfst 2>/dev/null || chmod +x /opt/cft/CloudflareSpeedTest 2>/dev/null) \
+      && (test -x /opt/cft/cfst || ln -sf CloudflareSpeedTest /opt/cft/cfst) ) \
     || echo "warn: CloudflareSpeedTest 未固化，将使用纯脚本探测"
-RUN mkdir -p /opt/gt && \
-    ( curl -fsSL "https://github.com/Ponderfly/GoogleTranslateIpCheck/releases/download/${GT_VERSION}/GoogleTranslateIpCheck-linux-x64.tar.gz" -o /tmp/gt.tgz \
-      && tar -xzf /tmp/gt.tgz -C /opt/gt \
-      && chmod +x /opt/gt/* 2>/dev/null ) \
-    || echo "warn: GoogleTranslateIpCheck 未固化，将使用纯脚本探测"
-RUN touch /opt/cft/.keep /opt/gt/.keep
+RUN touch /opt/cft/.keep
 # 中国 IP 段完整列表（构建时下载并固化；多源兜底 + 条目数校验，失败则用仓库内置精简种子）
 RUN mkdir -p /opt/seed && \
     ok=0; \
@@ -78,7 +77,12 @@ RUN { : > /opt/seed/cdn_ranges.txt; \
 
 # ---------- 阶段 3：运行时镜像 ----------
 FROM ${ALPINE_IMAGE}
-LABEL org.opencontainers.image.description="MosDNS 优选镜像：原版核心 + 五路优选 + 单登录 UI"
+ARG MOSDNS_VERSION=v5.3.4
+ARG CFT_VERSION=v2.3.5
+ARG GT_VERSION=latest
+ARG BUILD_REV=dev
+ARG BUILD_DATE=""
+LABEL org.opencontainers.image.description="MosDNS 优选镜像：原版核心 + 七路优选 + 单登录 UI"
 LABEL org.opencontainers.image.title="mosdns-pref"
 
 RUN apk add --no-cache ca-certificates curl bash python3 tzdata \
@@ -86,7 +90,14 @@ RUN apk add --no-cache ca-certificates curl bash python3 tzdata \
 
 COPY --from=builder /go/bin/mosdns /usr/local/bin/mosdns
 COPY --from=tools /opt/cft /app/bin/cft
-COPY --from=tools /opt/gt /app/bin/gt
+
+# 构建信息落盘：控制台「工具与版本」读这个文件，
+# 显示的就是镜像里实际装进去的版本，不是 versions.env 里「想要」的版本。
+# gt 只记录版本号：上游 1.9 起不再发 linux 包，1.8 的 linux-x64 是 .NET
+# 自包含构建，Alpine（musl）跑不起来；gt 路用的是它的社区 IP 清单，
+# 清单跟随上游 master，所以这里照样记下 CI 探测到的最新 release 标签。
+RUN mkdir -p /app && printf 'mosdns=%s\ncft=%s\ngt=%s\nbuild_rev=%s\nbuild_date=%s\n' \
+      "$MOSDNS_VERSION" "$CFT_VERSION" "$GT_VERSION" "$BUILD_REV" "$BUILD_DATE" > /app/VERSIONS
 
 WORKDIR /app
 COPY config/      /app/config/

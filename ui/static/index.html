@@ -142,7 +142,7 @@
      延时都从同一条竖线开始，一个 IP 一行、从上往下按顺序读。
      以前是「每行各自一个网格 + 自动折行成多列」，IPv6 太长被迫独占整行，
      IP 顺序就被拆成 左V4/右V4/整行V6/左V4/右V4，看着就是跳来跳去。 */
-  .route-card .rc-iplist{display:grid;grid-template-columns:minmax(15.5ch,26ch) max-content;
+  .route-card .rc-iplist{display:grid;grid-template-columns:minmax(15.5ch,34ch) max-content;
     column-gap:18px;row-gap:8px;align-items:baseline;justify-content:start}
   /* 行容器不参与布局，把 IP 和数值直接交给上面那个网格对齐 */
   .rc-iprow{display:contents;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px}
@@ -155,11 +155,32 @@
   /* IPv6 只在冒号处换行（ipHtml 已经插了 <wbr>），不会把 737f 这种字段从中间劈开 */
   .rc-iprow.v6ip .ipcell{font-size:14px;letter-spacing:-.3px;white-space:normal;word-break:normal;overflow-wrap:break-word}
   .status-strip{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-bottom:16px}
-  .pill{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--muted)}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-size:15px;color:var(--muted)}
   .led{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block}
   .led.ok{background:var(--green);box-shadow:0 0 0 3px rgba(63,185,80,.15)}
   .led.bad{background:var(--red);box-shadow:0 0 0 3px rgba(248,81,73,.15)}
   .led.busy{background:var(--amber);box-shadow:0 0 0 3px rgba(210,153,34,.15)}
+
+  /* 运行信息三栏：清单 / 上游 / 版本，等宽表格对齐，字号统一 15px */
+  .runcard{display:grid;grid-template-columns:1fr 1.28fr 1fr;background:var(--panel);
+    border:1px solid var(--border);border-radius:var(--radius);margin-bottom:14px}
+  .runcard .rcol{padding:15px 18px;min-width:0}
+  .runcard .rcol+.rcol{border-left:1px solid var(--border)}
+  .runcard h4{margin:0 0 8px;font-size:15px;font-weight:600;color:var(--text);opacity:.72;letter-spacing:.2px}
+  .rline{display:flex;align-items:baseline;gap:10px;font-size:15px;line-height:1.95;min-width:0}
+  .rline .k{color:var(--muted);flex:0 0 auto;white-space:nowrap}
+  .rline .v{margin-left:auto;flex:0 0 auto;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  .rline .ago{flex:0 0 4.9em;text-align:right;color:var(--muted);white-space:nowrap;font-size:15px}
+  /* 上游那栏：左边「国内/国外」标签定宽，右边地址列表从同一条竖线开始 */
+  .uline{display:grid;grid-template-columns:3.4em minmax(0,1fr);gap:10px;font-size:15px;line-height:1.9;align-items:baseline}
+  .uline .uk{color:var(--muted)}
+  .uline .addr{min-width:0;display:flex;align-items:baseline;gap:8px}
+  .uline .addr b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:400;color:var(--text);
+    font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .uline .addr i{font-style:normal;color:var(--muted);font-size:15px;white-space:nowrap}
+  .uline .none{color:var(--muted)}
+  .rfoot{margin-top:8px;color:var(--muted);font-size:15px;line-height:1.6}
 
   .route-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px;transition:.15s}
   .route-card:hover{border-color:var(--blue)}
@@ -388,6 +409,8 @@
     nav{flex-direction:row;width:100%;justify-content:space-around;gap:0;min-width:0}
     nav a{flex-direction:column;gap:5px;font-size:13px;padding:7px 2px;flex:1 1 0;min-width:0;text-align:center}
     nav a i{width:17px;height:17px}
+    .runcard{grid-template-columns:1fr}
+    .runcard .rcol+.rcol{border-left:0;border-top:1px solid var(--border)}
     .main{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 
     .topbar{padding:12px 14px;gap:8px}
@@ -410,6 +433,7 @@
     .route-card .rc-l{flex:none;width:100%;max-width:100%;padding:0 0 12px;border-right:0;border-bottom:1px solid var(--border)}
     .route-card .rc-r{flex:none;width:100%;align-items:stretch}
     .rc-iprow{grid-template-columns:15.5ch minmax(0,1fr);column-gap:12px}
+    .route-card .rc-iplist{grid-template-columns:minmax(0,1fr) auto;column-gap:12px}
     /* 手机宽度放不下 IPv6 + 数值，数值折到下一行（仍在这一行内部，不跑最右） */
     .rc-iprow.v6ip{grid-template-columns:minmax(0,1fr)}
     .rc-iprow.v6ip .ms{justify-self:start}
@@ -755,7 +779,7 @@
     </nav>
     <div class="side-foot">
       <div class="row"><span>引擎</span><span id="footEngine">mosdns</span></div>
-      <div class="row"><span>版本</span><span>v5 自建</span></div>
+      <div class="row"><span>版本</span><span id="footVer">-</span></div>
     </div>
   </aside>
 
@@ -776,12 +800,29 @@
           <span class="pill"><span class="led" id="ledLock"></span><span id="txtLock">空闲</span></span>
           <span class="pill">刷新于 <b id="txtRefresh">-</b></span>
           <span class="pill" id="pillList" style="cursor:pointer" title="点击查看清单详情">
-            <span class="led" id="ledList"></span>国内 IP 段 <b id="txtListLines">-</b> 条
-            <span id="txtListTime" style="color:var(--muted)"></span>
+            <span class="led" id="ledList"></span>分流清单 <b id="txtListCount">-</b> 份已就绪
           </span>
           <span class="pill" style="margin-left:auto">
             <button class="btn primary" id="btnRunAll">立即执行七路优选</button>
           </span>
+        </div>
+
+        <!-- 运行信息：清单、上游、版本三块。
+             以前这里只有一句「国内 IP 段 N 条」：看不出国外那份清单有多少，
+             也看不出引擎此刻到底在用哪个 DoH、工具是哪个版本。 -->
+        <div class="runcard">
+          <div class="rcol">
+            <h4>分流清单</h4>
+            <div id="runLists"></div>
+          </div>
+          <div class="rcol">
+            <h4>上游 DNS（引擎正在用）</h4>
+            <div id="runUpstreams"></div>
+          </div>
+          <div class="rcol">
+            <h4>工具与版本</h4>
+            <div id="runVersions"></div>
+          </div>
         </div>
 
         <div class="grid route" id="routeCards"></div>
@@ -1522,6 +1563,77 @@
       host.appendChild(div);
     });
   }
+  /* 运行信息：清单条数 / 实际上游 / 工具版本，一次摊开 */
+  function rline(k, v, ago){
+    var row = document.createElement("div"); row.className = "rline";
+    var a = document.createElement("span"); a.className = "k"; a.textContent = k;
+    var b = document.createElement("span"); b.className = "v"; b.textContent = v;
+    row.appendChild(a); row.appendChild(b);
+    if (ago) {
+      var c = document.createElement("span"); c.className = "ago"; c.textContent = ago;
+      row.appendChild(c);
+    }
+    return row;
+  }
+  function uline(tag, addr, extra){
+    var row = document.createElement("div"); row.className = "uline";
+    var t = document.createElement("span"); t.className = "uk"; t.textContent = tag || "";
+    var box = document.createElement("span"); box.className = "addr";
+    var b = document.createElement("b"); b.textContent = addr; b.title = addr;
+    box.appendChild(b);
+    if (extra) { var i = document.createElement("i"); i.textContent = extra; box.appendChild(i); }
+    row.appendChild(t); row.appendChild(box);
+    return row;
+  }
+  function renderRunInfo(s){
+    var order = ["china_ip", "cn_domains", "gfw_domains", "cdn_ranges"];
+    var lb = s.lists_brief || {};
+    var box = $("#runLists");
+    if (box){
+      box.innerHTML = "";
+      var ok = 0;
+      order.forEach(function(k){
+        var it = lb[k]; if (!it) return;
+        if ((it.lines || 0) > 0) ok++;
+        box.appendChild(rline(it.label, (it.lines || 0).toLocaleString() + " 条",
+          it.updated_at ? fmtAgo(it.updated_at) : "未更新"));
+      });
+      $("#txtListCount").textContent = ok + "/" + order.length;
+      $("#ledList").className = "led " + (ok === order.length ? "ok" : (ok ? "busy" : "bad"));
+    }
+
+    var up = s.upstreams || {};
+    var ub = $("#runUpstreams");
+    if (ub){
+      ub.innerHTML = "";
+      [["local", "国内"], ["remote", "国外"]].forEach(function(pair){
+        var list = up[pair[0]] || [];
+        if (!list.length) { ub.appendChild(uline(pair[1], "未配置")); return; }
+        list.forEach(function(u, i){
+          var host = u.host || u.addr;
+          var extra = (u.ip && u.ip !== host) ? "→ " + u.ip : "";
+          ub.appendChild(uline(i === 0 ? pair[1] : "", host, extra));
+        });
+      });
+    }
+
+    var vb = $("#runVersions");
+    if (vb){
+      vb.innerHTML = "";
+      var vs = s.versions || {};
+      (vs.items || []).forEach(function(it){
+        var row = rline(it.label, it.ver);
+        row.title = it.note || "";
+        vb.appendChild(row);
+      });
+      if (vs.build_rev) vb.appendChild(rline("镜像构建", vs.build_rev + (vs.build_date ? " · " + vs.build_date : "")));
+      var fv = $("#footVer");
+      if (fv && (vs.items || [])[0]) fv.textContent = (vs.items[0].ver || "-");
+      var foot = document.createElement("div"); foot.className = "rfoot";
+      foot.textContent = "七路共用内置探测 · GT 仅取社区 IP 清单";
+      vb.appendChild(foot);
+    }
+  }
   function loadStatus(){
     return api("/api/status").then(function(s){
       $("#ledMosdns").className = "led " + (s.mosdns ? "ok" : "bad");
@@ -1532,10 +1644,7 @@
       renderRouteCards(state.results);
       fillConfigForm(state.settings);
       fillAuth(s.auth);
-      var lb = (s.lists_brief || {}).china_ip || {};
-      $("#txtListLines").textContent = (lb.lines || 0).toLocaleString();
-      $("#txtListTime").textContent = lb.updated_at ? "· " + fmtAgo(lb.updated_at) : "· 未更新";
-      $("#ledList").className = "led " + (lb.lines > 0 ? "ok" : "bad");
+      renderRunInfo(s);
       loadQLive();
       loadCache();
     }).catch(function(){});
@@ -1890,7 +1999,28 @@
   function ipHtml(ip, isV6){
     var s = escH(ip);
     if (!isV6) return s;
-    return s.replace(/:/g, ":<wbr>");
+    return compactV6(s).replace(/:/g, ":<wbr>");
+  }
+  /* IPv6 标准压缩：去掉每段前导零，最长的一段连续 0 合并成 ::
+     2600:9000:2199:8200:0010:fb02:4000:93a1 → 2600:9000:2199:8200:10:fb02:4000:93a1
+     2606:4700:0000:737f:0c3d:10c1:4545:4abe → 2606:4700:0:737f:c3d:10c1:4545:4abe
+     地址短了才放得进一列，不会每个 IP 都折成两行 */
+  function compactV6(ip){
+    if (!ip || ip.indexOf(":") < 0) return ip;
+    var p = ip.toLowerCase().split(":");
+    if (p.length !== 8) return ip;
+    for (var i = 0; i < 8; i++) p[i] = p[i].replace(/^0+(?=.)/, "");
+    var start = -1, best = 0, k = 0;
+    while (k < 8) {
+      if (p[k] === "0") {
+        var j = k;
+        while (j < 8 && p[j] === "0") j++;
+        if (j - k > best) { best = j - k; start = k; }
+        k = j;
+      } else k++;
+    }
+    if (best < 2) return p.join(":");
+    return p.slice(0, start).join(":") + "::" + p.slice(start + best).join(":");
   }
 
   /* ---------- 速度与错误码 ---------- */

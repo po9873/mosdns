@@ -120,6 +120,8 @@ jobs:
               --build-arg GT_VERSION="$g" \
               --build-arg GOLANG_IMAGE="$gl" \
               --build-arg ALPINE_IMAGE="$al" \
+              --build-arg BUILD_REV="${GITHUB_SHA::7}" \
+              --build-arg BUILD_DATE="$(date -u +%Y%m%d)" \
               -t "$TEST_IMAGE" . || { echo "构建失败"; return 1; }
 
             echo "== 自检门禁 =="
@@ -137,6 +139,13 @@ jobs:
               echo "UI 健康检查未通过"; docker logs mtest || true; docker rm -f mtest >/dev/null 2>&1 || true; return 1
             fi
             docker exec mtest mosdns version >/dev/null 2>&1 || { echo "mosdns 无法执行"; docker rm -f mtest >/dev/null 2>&1; return 1; }
+            # 测速工具是「下载失败也能出包」的可选项，所以失败不会让构建挂；
+            # 但不能悄悄退化——上游改了资产名就报出来，否则镜像里永远缺工具。
+            if docker exec mtest sh -c 'test -x /app/bin/cft/cfst' 2>/dev/null; then
+              echo "CloudflareSpeedTest 已固化: $(docker exec mtest /app/bin/cft/cfst -v 2>&1 | head -1)"
+            else
+              echo "::warning::CloudflareSpeedTest 未装进镜像（$c），cf 路会回退纯脚本探测"
+            fi
             docker exec mtest sh -c 'test -s /data/config.yaml && test -f /data/prefs/all.hosts' \
               || { echo "配置/hosts 未生成"; docker rm -f mtest >/dev/null 2>&1; return 1; }
             docker rm -f mtest >/dev/null 2>&1 || true

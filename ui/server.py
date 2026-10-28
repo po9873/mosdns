@@ -506,18 +506,150 @@ def count_lines(path):
     return n
 
 
+# 四份分流清单：国内侧靠 IP 段 + 域名，国外侧靠域名（GFW 清单），
+# CDN 网段给诊断用。概况页要把这四份都摊开，只报「国内 IP 段」会让人
+# 以为国外没有清单。
+LIST_SPECS = [
+    ("china_ip", "国内 IP 段"),
+    ("cn_domains", "国内域名"),
+    ("gfw_domains", "国外域名"),
+    ("cdn_ranges", "国外 CDN 网段"),
+]
+_LISTS_CACHE = {"at": 0, "data": None}
+
+
 def lists_brief():
-    """概况页用的轻量摘要：元数据优先，缺失则现数（8000 行约几毫秒）。"""
-    m = read_json(LISTS_META, {}).get("china_ip", {})
-    lines = m.get("lines") or count_lines(os.path.join(DATA_DIR, "china_ip.txt"))
-    return {
-        "china_ip": {
+    """概况页用的轻量摘要：条数 + 更新时间，四份清单都给。
+
+    110k 行的域名清单每次请求都数一遍太浪费（前端 5 秒轮询一次），
+    所以缓存 30 秒；清单有更新时 updated_at 会变，最多迟半分钟才反映。
+    """
+    now = int(time.time())
+    if _LISTS_CACHE["data"] and now - _LISTS_CACHE["at"] < 30:
+        return _LISTS_CACHE["data"]
+    meta = read_json(LISTS_META, {})
+    out = {}
+    for name, label in LIST_SPECS:
+        path = os.path.join(DATA_DIR, name + ".txt")
+        info = meta.get(name, {}) or {}
+        lines = count_lines(path)
+        updated = info.get("updated_at") or 0
+        if not updated:
+            try:
+                updated = int(os.stat(path).st_mtime)
+            except Exception:
+                updated = 0
+        src = info.get("source") or ""
+        out[name] = {
+            "label": label,
             "lines": lines,
-            "updated_at": m.get("updated_at", 0),
-            "status": m.get("status", ""),
-            "source_host": m.get("source", ""),
+            "updated_at": updated,
+            "status": info.get("status") or ("ok" if lines else "empty"),
+            "source_host": src.split("/")[2] if "//" in src else (src or "内置镜像"),
         }
+    _LISTS_CACHE.update({"at": now, "data": out})
+    return out
+
+
+def read_upstreams():
+    """从引擎实际加载的 config.yaml 里读出 DoH 上游。
+
+    读的是渲染后的配置，不是候选清单——候选里几十个地址都「理论上可用」，
+    只有这里这几条才是此刻真正在转发的东西。
+    """
+    try:
+        with open(os.path.join(DATA_DIR, "config.yaml"), encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except Exception:
+        return {"local": [], "remote": [], "ok": False}
+    res = {"local": [], "remote": [], "ok": True}
+    cur_key, cur = None, None
+    for ln in text.splitlines():
+        m = re.match(r"\s*-\s+tag:\s*(\S+)", ln)
+        if m:
+            tag = m.group(1)
+            cur_key = "local" if tag == "forward_local" else ("remote" if tag == "forward_remote" else None)
+            cur = None
+            continue
+        if not cur_key:
+            continue
+        m = re.search(r"-\s+addr:\s*\"?([^\"\s]+)\"?", ln)
+        if m:
+            cur = {"addr": m.group(1), "dial": ""}
+            res[cur_key].append(cur)
+            continue
+        m = re.search(r"dial_addr:\s*\"?([^\"\s]+)\"?", ln)
+        if m and cur:
+            cur["dial"] = m.group(1)
+    # 补上「主机名 / 直连 IP」两种展示形式：IP 形式的 addr 主机就是 IP，
+    # 域名形式要靠 dial_addr 才知道连的是哪个 IP。
+    for key in ("local", "remote"):
+        for u in res[key]:
+            m = re.match(r"https?://([^/]+)", u["addr"])
+            u["host"] = m.group(1) if m else u["addr"]
+            u["ip"] = u["dial"].rsplit(":", 1)[0] if u.get("dial") else u["host"]
+            u["ipv6"] = ":" in u["ip"] and not re.match(r"^\d+\.\d+\.\d+\.\d+$", u["ip"])
+    return res
+
+
+_VERSIONS_CACHE = {"at": 0, "data": None}
+
+
+def _probe_version(path, flag, pattern=r"v?(\d+\.\d+(?:\.\d+)?)"):
+    """跑一下工具自带的版本参数，问到就返回；问不到返回空串。"""
+    if not (path and os.path.isfile(path) and os.access(path, os.X_OK)):
+        return ""
+    try:
+        r = subprocess.run([path, flag], capture_output=True, timeout=4)
+        txt = (r.stdout or b"").decode("utf-8", "replace") + (r.stderr or b"").decode("utf-8", "replace")
+        m = re.search(pattern, txt)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def read_versions():
+    """工具与版本：引擎/测速器都按「镜像里实际装了什么」来报，不照抄 versions.env。
+
+    versions.env 是「想装的版本」，构建时下载失败就会退化成脚本探测；
+    这里先看文件在不在、能问到就报真实版本，问不到才回落到构建参数。
+    """
+    now = int(time.time())
+    if _VERSIONS_CACHE["data"] and now - _VERSIONS_CACHE["at"] < 300:
+        return _VERSIONS_CACHE["data"]
+    build = {}
+    try:
+        with open("/app/VERSIONS", encoding="utf-8") as f:
+            for ln in f:
+                if "=" in ln:
+                    k, v = ln.strip().split("=", 1)
+                    build[k.strip()] = v.strip()
+    except Exception:
+        pass
+
+    cft_path = "/app/bin/cft/cfst"
+    cft_v = _probe_version(cft_path, "-v") or (build.get("cft", "") if os.path.isfile(cft_path) else "")
+
+    items = [{"label": "mosdns 核心", "ver": build.get("mosdns") or "未知",
+              "note": "官方源码编译，DNS 引擎与分流"}]
+    # 七路优选实际都走 common.sh + probe.py 的内置探测，
+    # 先把这条写清楚，免得以为有七种外部工具在跑。
+    items.append({"label": "优选探测", "ver": "内置脚本", "note": "七路共用，TCP 延迟 + HTTPS 实测"})
+    if cft_v:
+        items.append({"label": "CloudflareSpeedTest", "ver": cft_v, "note": "已固化，备用测速器"})
+    else:
+        items.append({"label": "CloudflareSpeedTest", "ver": "缺工具", "note": "镜像内缺失，cf 路回退脚本探测"})
+    # GT 只跟踪版本：上游 1.9 起不发 linux 包，gt 路用的是它的社区 IP 清单
+    items.append({"label": "GoogleTranslateIpCheck",
+                  "ver": build.get("gt") or "未知",
+                  "note": "仅用社区 IP 清单，跟随上游 master"})
+    data = {
+        "items": items,
+        "build_rev": build.get("build_rev", ""),
+        "build_date": build.get("build_date", ""),
     }
+    _VERSIONS_CACHE.update({"at": now, "data": data})
+    return data
 
 
 def list_update_worker(name):
@@ -613,6 +745,8 @@ class Handler(BaseHTTPRequestHandler):
                     "results": read_results(),
                     "settings": read_json(SETTINGS_FILE, {}),
                     "lists_brief": lists_brief(),
+                    "upstreams": read_upstreams(),
+                    "versions": read_versions(),
                     "auth": {"user": au, "default_pass": is_default},
                     "now": int(time.time()),
                 })
