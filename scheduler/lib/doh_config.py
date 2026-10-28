@@ -280,10 +280,11 @@ def full_set(text, side):
     act = active(text)[side]
     out, seen = [], set()
     for line in list(act) + _pool_lines(side):
-        line = str(line).strip()
-        if line and line not in seen:
-            seen.add(line)
-            out.append(line)
+        line = POOL_FIX.get(str(line).strip(), str(line).strip())
+        if not line or line in POOL_DROP or line in seen:
+            continue
+        seen.add(line)
+        out.append(line)
     return out
 
 
