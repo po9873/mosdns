@@ -835,13 +835,150 @@ _SPEED = {
     "items": [], "counts": {}, "note": "", "done": 0, "total": 0, "retry_left": 0,
 }
 
+# 后台定时扫面的运行状态：监测页直接读它把「怎么跑的」写在页面上。
+# interval_min 是扫描周期；last_scan_at 是上一轮跑完的时刻；
+# last_pruned / last_pruned_lines 是上一轮清掉的不通条目——用户要的是「确认没用的直接删」，
+# 不是只标个「不通」，所以这里记下来好让页面/日志说清楚到底删了什么。
+_SCAN_INFO = {
+    "interval_min": 15,
+    "last_scan_at": 0,
+    "last_pruned": 0,
+    "last_pruned_lines": [],
+    "last_error": "",
+    "next_at": 0,
+}
+_DEAD_FILE = os.path.join(DATA_DIR, ".speed_dead.json")
+
 
 def _speed_snapshot():
     with _SPEED_LOCK:
         snap = dict(_SPEED)
         snap["items"] = list(_SPEED["items"])
         snap["counts"] = dict(_SPEED["counts"])
+    snap["scan"] = dict(_SCAN_INFO)
     return snap
+
+
+def _load_strikes():
+    try:
+        with open(_DEAD_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_strikes(d):
+    try:
+        with open(_DEAD_FILE, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _remove_from_pool(side, line):
+    """从某一侧的候选池文件里删掉同 URL 的所有行（IP 写法不同也算同一条）。"""
+    path = os.path.join(DATA_DIR, "doh_%s_candidates.txt" % side)
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except Exception:
+        return False
+    url = str(line).split()[0] if line else ""
+    if not url:
+        return False
+    kept, removed_any = [], False
+    for ln in lines:
+        raw = ln.split("#", 1)[0].strip()
+        if not raw:
+            kept.append(ln); continue
+        if raw.split()[0] == url:
+            removed_any = True
+            continue
+        kept.append(ln)
+    if not removed_any:
+        return False
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(kept).rstrip() + "\n")
+    os.replace(tmp, path)
+    return True
+
+
+def prune_dead():
+    """一轮扫完之后：把连续两次都测不通的「候选池」条目直接从清单里删掉。
+
+    只动候选池（公开的那些），不动正在用的上游——在用的由配置页/自动探测管。
+    连续两次才删，是给偶发性被墙/抖动留余量，避免把好 DNS 误杀；
+    但两次都死就基本可以确定是死了，这种就该从清单消失，别只留下一行「不通」碍眼。
+    """
+    items = _SPEED.get("items") or []
+    if not items:
+        return
+    strikes = _load_strikes()
+    side_of = {}
+    for it in items:
+        line = it.get("line")
+        if not line:
+            continue
+        side_of[line] = it.get("side")
+        if it.get("active"):
+            strikes.pop(line, None)
+            continue
+        if it.get("ok"):
+            strikes.pop(line, None)
+        else:
+            strikes[line] = strikes.get(line, 0) + 1
+    removed = []
+    for line, n in list(strikes.items()):
+        if n >= 2:
+            side = side_of.get(line)
+            if side and _remove_from_pool(side, line):
+                removed.append(line)
+                strikes.pop(line, None)
+    _save_strikes(strikes)
+    if removed:
+        # 顺手把 orphan 的测速入口从引擎配置里也清掉（不然端口空挂着）
+        try:
+            if doh_cfg:
+                t = doh_cfg.read_cfg()
+                nw = doh_cfg.render_diag(t)
+                if nw != t:
+                    doh_cfg.write_cfg(nw)
+                    doh_cfg.reload_engine(25)
+                    time.sleep(2)
+        except Exception:
+            pass
+        # 当前快照里也拿掉，前端下次轮询立刻少一行
+        with _SPEED_LOCK:
+            drop = set(removed)
+            _SPEED["items"] = [x for x in _SPEED["items"] if x.get("line") not in drop]
+            _SPEED["counts"] = _speed_counts(_SPEED["items"])
+        _SCAN_INFO["last_pruned"] = len(removed)
+        _SCAN_INFO["last_pruned_lines"] = removed
+    else:
+        _SCAN_INFO["last_pruned"] = 0
+        _SCAN_INFO["last_pruned_lines"] = []
+    _SCAN_INFO["last_scan_at"] = int(time.time())
+
+
+def _speed_scheduler():
+    """后台常驻：每隔 interval_min 分钟扫一遍候选池，死了的自动删。
+
+    不依赖页面开着——关了页面它也在跑，所以「原来这里的 DNS 已经死了」这种事
+    一定能被发现，而不是非得有人盯着看才测。"""
+    time.sleep(60)  # 启动后先让一让，别和启动期的探测抢资源
+    while True:
+        try:
+            if not _SPEED["running"]:
+                diag_speed(refresh=True)
+                deadline = time.time() + 300
+                while _SPEED["running"] and time.time() < deadline:
+                    time.sleep(5)
+                prune_dead()
+        except Exception as e:
+            _SCAN_INFO["last_error"] = str(e)
+        _SCAN_INFO["next_at"] = int(time.time()) + _SCAN_INFO["interval_min"] * 60
+        time.sleep(_SCAN_INFO["interval_min"] * 60)
 
 
 def _speed_counts(out):
@@ -1608,6 +1745,34 @@ class Handler(BaseHTTPRequestHandler):
                                     "skipped_lines": skipped[:6],
                                     "upstreams": upstreams_payload(), "results": checked})
 
+        if path == "/api/upstreams/add":
+            # 监测页「手动添加」：把一条 DoH 上游直接塞进候选池，下一轮扫描就会测它。
+            # 只校验格式，不立刻联网测——测速本身是异步的，加了就让它进池子等扫。
+            data = self._body()
+            side = str(data.get("side") or "remote")
+            if side not in ("local", "remote"):
+                return self._send(400, {"error": "side 只能是 local / remote"})
+            line = str(data.get("line") or "").strip()
+            if not line:
+                return self._send(400, {"error": "地址不能为空"})
+            toks = line.split()
+            if not _doh_line_ok(toks[0]):
+                return self._send(400, {"error": "地址不合法：%s（要是 https://域名/dns-query 这种）" % toks[0]})
+            path_c = os.path.join(DATA_DIR, "doh_%s_candidates.txt" % side)
+            try:
+                with open(path_c, encoding="utf-8") as f:
+                    have = {l.split("#", 1)[0].strip().split()[0] for l in f if l.strip()}
+            except Exception:
+                have = set()
+            if toks[0] in have:
+                return self._send(409, {"error": "这条已经在候选池里了", "already": True})
+            with open(path_c, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            # 立刻起一轮测速，把新加的也测了（页面上马上能看到它）
+            threading.Thread(target=lambda: diag_speed(refresh=True), daemon=True).start()
+            return self._send(200, {"ok": True, "side": side, "line": line,
+                                    "msg": "已加入候选池，正在测速（看上方列表）"})
+
         if path == "/api/reload":
             try:
                 subprocess.run([SCHEDULER, "reload"], capture_output=True, timeout=20)
@@ -1708,6 +1873,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if doh_cfg:
+        # 后台定时扫描候选池：死了的自动删，不依赖页面开着
+        threading.Thread(target=_speed_scheduler, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", UI_PORT), Handler)
     print("[ui] listening on 0.0.0.0:%d" % UI_PORT, flush=True)
     srv.serve_forever()

@@ -301,6 +301,11 @@
     flex-wrap:wrap;align-items:baseline}
   .spstat b{color:var(--text);font-weight:600}
   .spstat .sep{opacity:.5}
+  .scaninfo{margin-top:6px;font-size:12.5px;color:var(--muted);line-height:1.7;
+    background:color-mix(in srgb, var(--accent) 8%, transparent);
+    border-left:3px solid var(--accent);padding:7px 12px;border-radius:8px}
+  .scaninfo b{color:var(--text);font-weight:600}
+  .scaninfo .warn{color:var(--red)}
   .splist{margin-top:4px}
   /* 一行三块：左「哪家 + 域名 + IP」，中间速度条，右边毫秒。
      不通的那条不挤在右边——错误原因单独一行横着铺开，否则 72px 里折成三行很难看 */
@@ -1332,7 +1337,22 @@
             </div>
           </div>
           <div class="spstat" id="diagUpStat">—</div>
+          <div class="scaninfo" id="diagScanInfo"></div>
           <div class="upfoot" id="diagUpFoot"></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <h3>手动添加上游</h3>
+          <p class="sub">知道某个能用的公共 DoH？贴进来就进候选池，下一轮扫描会自动测它——能用的留在这里，连续两次都测不通的会被直接删掉（不是只标个「不通」）。</p>
+          <div class="inline-form">
+            <select id="upAddSide" style="max-width:120px">
+              <option value="local">国内</option>
+              <option value="remote" selected>国外</option>
+            </select>
+            <input id="upAddLine" placeholder="https://dns.example.com/dns-query 或 https://x/y 1.2.3.4">
+            <button class="btn primary" id="btnUpAdd">添加</button>
+          </div>
+          <div id="upAddMsg" class="upfoot"></div>
         </div>
 
         <!-- 国内、国外各自一个框：两边是两套独立的选路，不该挤在一个框里 -->
@@ -3577,6 +3597,25 @@
         "（含 TLS 复用），不是从外部另开连接去探。绿 ≤300ms、黄 ≤1000ms、红 更慢；" +
         "打不开的不画速度条，标「不通」并写出真实原因。";
     }
+    // 后台扫描到底怎么跑的：周期、上次扫的时间、最近一次清掉几条——直接写这儿，
+    // 不用去翻日志也能看明白。
+    var si = $("#diagScanInfo");
+    if (si && d.scan) {
+      var sc = d.scan, iv = sc.interval_min || 15, parts = [];
+      parts.push("后台每 <b>" + iv + "</b> 分钟自动扫描候选池（关了页面也在跑）");
+      if (sc.last_scan_at) {
+        var t = new Date(sc.last_scan_at * 1000).toLocaleTimeString("zh-CN", {hour12: false});
+        parts.push("上次扫描 <b>" + t + "</b>");
+      }
+      if (sc.last_pruned && sc.last_pruned > 0) {
+        var names = (sc.last_pruned_lines || []).slice(0, 4).map(function(x){ return x.split(" ")[0]; });
+        parts.push("本轮清理掉 <b class=\"warn\">" + sc.last_pruned + "</b> 条确认不通的（" +
+          names.join("、") + (sc.last_pruned > names.length ? " 等" : "") + "）");
+      } else if (sc.last_scan_at) {
+        parts.push("本轮没要删的，清单里都是能用的");
+      }
+      si.innerHTML = parts.join('<span class="sep">·</span>');
+    }
   }
   /* 上一轮跑完，隔 60 秒再起下一轮。
      以前是 setInterval(60s) 硬打——一轮要跑一分半，于是永远有一轮在路上，
@@ -3616,6 +3655,27 @@
   $("#diagUpAuto").addEventListener("change", function(){
     if (this.checked) { if (!speedPoll && !speedNextTimer) diagUpFetch(false); }
     else if (speedNextTimer) { clearTimeout(speedNextTimer); speedNextTimer = null; }
+  });
+
+  // 手动添加上游：贴一条 DoH 地址进候选池，下一轮扫描就会测它
+  $("#btnUpAdd").addEventListener("click", function(){
+    var line = ($("#upAddLine").value || "").trim();
+    var side = $("#upAddSide").value;
+    var msg = $("#upAddMsg");
+    if (!line) { msg.textContent = "先贴一条地址，例如 https://dns.example.com/dns-query"; return; }
+    msg.textContent = "添加中…";
+    api("/api/upstreams/add", {method: "POST", body: {side: side, line: line}}).then(function(r){
+      if (r && r.already) { msg.textContent = "这条已经在候选池里了，不用重复加。"; return; }
+      msg.textContent = (r && r.msg) || "已加入，正在测速（看上方列表）";
+      $("#upAddLine").value = "";
+      speedKey = "";
+      diagUpFetch(true);
+    }).catch(function(e){
+      msg.textContent = "添加失败：" + (e && e.message ? e.message : e);
+    });
+  });
+  $("#upAddLine").addEventListener("keydown", function(e){
+    if (e.key === "Enter") { e.preventDefault(); $("#btnUpAdd").click(); }
   });
 
   /* ---------- 现查工具（IP / 端口 / 域名，每次都是现查） ---------- */
