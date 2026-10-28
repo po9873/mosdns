@@ -15,7 +15,10 @@ export PREF_PROBE_EXPECT='<title>Google'
 # 仍会拿到上游的污染结果（实测上游返回的是 Facebook 段 69.171.x 这种脏答案）。
 # Gmail 同属 Google 前端：mail 是网页版，accounts 是登录，www.googleapis 是
 # 网页端调用的接口。不一起映射的话搜索能开、登录/收发信仍走污染解析。
-export PREF_EXTRA_DOMAINS="www.google.com.hk google.com gmail.com mail.google.com accounts.google.com www.googleapis.com myaccount.google.com drive.google.com docs.google.com calendar.google.com contacts.google.com photos.google.com keep.google.com maps.google.com play.google.com www.gstatic.com ssl.gstatic.com fonts.gstatic.com"
+# 除上面这些，网页版 Google / Gmail 还会拉这几个域名：clients6 是 Gmail 的接口，
+# ogs 是右上角账号栏，apis 是 JS 接口，lh3~lh6.googleusercontent 是头像/附件/缩略图。
+# 不映射的话：搜索页能出，登录后信箱一直转圈、附件和头像全是破图。
+export PREF_EXTRA_DOMAINS="www.google.com.hk google.com gmail.com mail.google.com accounts.google.com www.googleapis.com myaccount.google.com drive.google.com docs.google.com calendar.google.com contacts.google.com photos.google.com keep.google.com maps.google.com play.google.com www.gstatic.com ssl.gstatic.com fonts.gstatic.com clients6.google.com ogs.google.com apis.google.com notifications.google.com lh3.googleusercontent.com lh4.googleusercontent.com lh5.googleusercontent.com lh6.googleusercontent.com mail-attachment.googleusercontent.com"
 
 source /app/scheduler/common.sh
 acquire_lock || exit 1
