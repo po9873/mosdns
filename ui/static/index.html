@@ -312,6 +312,9 @@
   .spr.warn .spdot{background:var(--amber);opacity:1}
   .spr.slow .spdot{background:var(--red);opacity:1}
   .spr.bad .spdot{background:var(--red);opacity:1;margin-top:7px}
+  /* 还没轮到测的行：点灰、名字压暗，右边「测…」。别拿「不通」的红去吓人 */
+  .spr.idle .spname{color:var(--muted)}
+  .spr.idle .spms{color:var(--muted);opacity:.8}
   .spname{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
   .spname .spv{font-weight:600;margin-right:8px}
   .spname .sph{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -1674,15 +1677,12 @@
     var titles = {overview:"概况",diag:"监测",logs:"日志",config:"配置",source:"源"};
     $("#viewTitle").textContent = titles[v] || v;
     clearTimers();
+    speedIdle();
     if (v === "logs") { fitLogBox(); loadLogs(); state.timers.push(setInterval(loadLogs, 3000)); }
     if (v === "source") { loadSources(); loadLists(); }
     if (v === "config") { loadStatus(); loadSchedule(); }
     if (v === "overview") { loadStatus(); state.timers.push(setInterval(loadStatus, 5000)); }
-    if (v === "diag") {
-      diagUpRun();
-      var au = $("#diagUpAuto");
-      if (au && au.checked) state.timers.push(setInterval(function(){ if (state.view === "diag") diagUpRun(); }, 60000));
-    }
+    if (v === "diag") { diagUpFetch(false); }
   }
   $("#nav").addEventListener("click", function(e){
     var a = e.target.closest("a[data-view]");
@@ -3424,8 +3424,17 @@
   $("#btnRunAll2").addEventListener("click", function(){ trigger("all"); });
 
   /* ---------- 监测：DNS 上游当前速度 ----------
-     每条都由 mosdns 自己的一个专入口转发一次得出。 */
-  var upSpeedBusy = false;
+     每条都由 mosdns 自己的一个专入口转发一次得出。
+     一轮要跑一分多钟（大半时间花在等那些根本没回的上游超时），所以后端是
+     异步的：这里只负责「每 1.5 秒问一次进度」，而不是等一个两分钟的长请求。 */
+  var speedPoll = null, speedNextTimer = null;
+  function speedStop(){
+    if (speedPoll) { clearInterval(speedPoll); speedPoll = null; }
+  }
+  function speedIdle(){
+    speedStop();
+    if (speedNextTimer) { clearTimeout(speedNextTimer); speedNextTimer = null; }
+  }
   function spHost(line){
     return String(line || "").split(/\s+/)[0].replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   }
@@ -3440,7 +3449,9 @@
   }
   function spRow(it){
     var row = document.createElement("div");
-    row.className = "spr " + (it.ok ? spLevel(it.ms) : "bad");
+    // 还没测到的行：点灰、右边写「测…」。不写「不通」——那是把「没轮到」说成「连不上」。
+    var pend = !!it.pending;
+    row.className = "spr " + (pend ? "idle" : (it.ok ? spLevel(it.ms) : "bad"));
     var d = document.createElement("span"); d.className = "spdot";
     var n = document.createElement("span"); n.className = "spname";
     var host = it.host || spHost(it.line);
@@ -3463,6 +3474,12 @@
     }
     n.title = it.line + "（mosdns 入口 127.0.0.1:" + it.port + "）";
     row.appendChild(d); row.appendChild(n);
+    if (pend) {
+      var wt = document.createElement("span"); wt.className = "spms";
+      wt.textContent = "测…";
+      row.appendChild(wt);
+      return row;
+    }
     if (it.ok) {
       // 对数刻度：13ms 和 900ms 都挤在「很短」里就看不出差别，log 才有区分度
       var bar = document.createElement("span"); bar.className = "spbar";
@@ -3486,20 +3503,37 @@
   }
   function spStat(list){
     if (!list.length) return "没有可测的上游";
+    var pend = list.filter(function(x){ return x.pending; }).length;
+    if (pend === list.length) return "正在测 <b>" + list.length + "</b> 条…";
     var ok = list.filter(function(x){ return x.ok; });
     var act = ok.filter(function(x){ return x.active; });
     var txt = "共 <b>" + list.length + "</b> 条";
+    if (pend) txt += " · 已测 <b>" + (list.length - pend) + "</b>";
     txt += " · 可用 <b>" + ok.length + "</b>";
     if (act.length) txt += " · 在用 <b>" + act.length + "</b>";
-    if (list.length - ok.length) txt += " · 不通 <b>" + (list.length - ok.length) + "</b>";
+    var dead = list.length - ok.length - pend;
+    if (dead) txt += " · 不通 <b>" + dead + "</b>";
     if (ok.length) {
       var msv = ok.map(function(x){ return x.ms; }).sort(function(a, b){ return a - b; });
       txt += " · 最快 <b>" + msv[0] + "ms</b>";
     }
     return txt;
   }
+  var speedKey = "";
   function diagUpRender(d){
-    var items = (d && d.items) || [];
+    d = d || {};
+    var items = d.items || [];
+    var running = !!d.running;
+    var btn = $("#btnDiagUp");
+    if (btn) {
+      btn.disabled = running;
+      btn.textContent = running ? "测速中…" : "立即测速";
+    }
+    // 内容没变就别重画：轮询每 1.5 秒来一次，整块重建会让行一直在闪
+    var key = [running, d.done, d.retry_left, d.at, items.length].join("|");
+    if (key === speedKey) return;
+    speedKey = key;
+
     var g = {local: [], remote: []};
     items.forEach(function(it){ (g[it.side] = g[it.side] || []).push(it); });
     [["local", "#diagUpListL", "#diagUpL"], ["remote", "#diagUpListR", "#diagUpR"]].forEach(function(p){
@@ -3507,52 +3541,81 @@
       if (!box) return;
       box.innerHTML = "";
       var list = g[p[0]] || [];
-      if (st) st.innerHTML = spStat(list);
+      if (st) st.innerHTML = list.length ? spStat(list) : (running ? "正在准备…" : "—");
       list.forEach(function(it){ box.appendChild(spRow(it)); });
       if (!list.length) {
         var e = document.createElement("div"); e.className = "upfoot";
-        e.textContent = "没有这一侧的上游";
+        e.textContent = running ? "正在准备测速入口…" : "没有这一侧的上游";
         box.appendChild(e);
       }
     });
-    var ts = d && d.at ? new Date(d.at * 1000).toLocaleTimeString("zh-CN", {hour12: false}) : "—";
     var st = $("#diagUpStat");
     if (st) {
-      var okAll = items.filter(function(x){ return x.ok; }).length;
-      st.innerHTML = "测于 <b>" + ts + "</b>" +
-        '<span class="sep">·</span>整池 <b>' + items.length + "</b> 条（国内 " +
-        ((g.local || []).length) + " / 国外 " + ((g.remote || []).length) + "）" +
-        '<span class="sep">·</span>此刻可用 <b>' + okAll + "</b> 条";
+      if (running) {
+        // 进度写出来：不然点完按钮只看到「测速中…」和两张空卡片，像死机
+        var ph = d.phase === "retry"
+          ? "复测第一轮没回的那 <b>" + (d.retry_left || 0) + "</b> 条"
+          : "已测 <b>" + (d.done || 0) + "</b> / " + (d.total || 0) + " 条";
+        st.innerHTML = "正在逐条测 <b>" + (d.total || 0) + "</b> 条" +
+          '<span class="sep">·</span>' + ph +
+          '<span class="sep">·</span>整轮约一分钟，测完自己刷新，不用等它';
+      } else if (d.at) {
+        var ts = new Date(d.at * 1000).toLocaleTimeString("zh-CN", {hour12: false});
+        var okAll = items.filter(function(x){ return x.ok; }).length;
+        st.innerHTML = "测于 <b>" + ts + "</b>" +
+          '<span class="sep">·</span>整池 <b>' + items.length + "</b> 条（国内 " +
+          ((g.local || []).length) + " / 国外 " + ((g.remote || []).length) + "）" +
+          '<span class="sep">·</span>此刻可用 <b>' + okAll + "</b> 条";
+      } else {
+        st.textContent = "—";
+      }
     }
     var foot = $("#diagUpFoot");
     if (foot) {
-      foot.innerHTML = d && d.note ? d.note :
+      foot.innerHTML = d.note ? d.note :
         "测法：给每条上游单独开一个 mosdns 入口，问它一次真实的 DNS 查询，量的是 mosdns 内部转发耗时" +
         "（含 TLS 复用），不是从外部另开连接去探。绿 ≤300ms、黄 ≤1000ms、红 更慢；" +
         "打不开的不画速度条，标「不通」并写出真实原因。";
     }
   }
-  function diagUpRun(){
-    if (upSpeedBusy) return;
-    upSpeedBusy = true;
-    var btn = $("#btnDiagUp");
-    if (btn) { btn.disabled = true; btn.textContent = "测速中…"; }
-    api("/api/diag/speed").then(function(d){
+  /* 上一轮跑完，隔 60 秒再起下一轮。
+     以前是 setInterval(60s) 硬打——一轮要跑一分半，于是永远有一轮在路上，
+     按钮永远「测速中…」。现在按「跑完再数 60 秒」，不重叠。 */
+  function speedNext(){
+    if (speedNextTimer) { clearTimeout(speedNextTimer); speedNextTimer = null; }
+    var au = $("#diagUpAuto");
+    if (!au || !au.checked) return;
+    speedNextTimer = setTimeout(function(){
+      speedNextTimer = null;
+      if (state.view === "diag") diagUpFetch(true);
+      // 已经切走了就先不排：切回来时 switchView 会重新走一遍
+    }, 60000);
+  }
+  function diagUpFetch(force){
+    return api("/api/diag/speed" + (force ? "?refresh=1" : "")).then(function(d){
       diagUpRender(d);
+      if (d && d.running) {
+        if (!speedPoll) speedPoll = setInterval(function(){ diagUpFetch(false); }, 1500);
+      } else {
+        speedStop();
+        speedNext();
+      }
+      return d;
     }).catch(function(e){
+      speedStop();
       var st = $("#diagUpStat");
       if (st) st.textContent = "测速失败：" + e.message;
-    }).then(function(){
-      upSpeedBusy = false;
-      if (btn) { btn.disabled = false; btn.textContent = "立即测速"; }
+      speedNext();
     });
   }
-  $("#btnDiagUp").addEventListener("click", diagUpRun);
+  $("#btnDiagUp").addEventListener("click", function(){
+    if (speedPoll) return;  // 已经在测，别压第二轮
+    speedKey = "";
+    diagUpFetch(true);
+  });
   $("#diagUpAuto").addEventListener("change", function(){
-    state.timers.forEach(clearInterval); state.timers = [];
-    if (this.checked && state.view === "diag") {
-      state.timers.push(setInterval(function(){ if (state.view === "diag") diagUpRun(); }, 60000));
-    }
+    if (this.checked) { if (!speedPoll && !speedNextTimer) diagUpFetch(false); }
+    else if (speedNextTimer) { clearTimeout(speedNextTimer); speedNextTimer = null; }
   });
 
   /* ---------- 现查工具（IP / 端口 / 域名，每次都是现查） ---------- */

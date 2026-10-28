@@ -825,47 +825,26 @@ def provider_of(line):
     return host or url, host
 
 
-def diag_speed():
-    """逐条问 mosdns 自己：这一条上游此刻转发一次要多久。
+# 一轮测速比一屏的耐心长：整池 35 条里常有近 20 条要等满超时才判死，跑完要一分半。
+# 同步接口的后果是——点完按钮卡在「测速中…」、两张卡片全空、状态只有一根「—」，
+# 看着就像页面坏了；偏偏「每 60 秒自动测」比一轮还短，于是永远等不到头。
+# 改成后台线程跑，接口立刻回一张进度快照，前端每 1.5 秒来问一次。
+_SPEED_LOCK = threading.Lock()
+_SPEED = {
+    "running": False, "at": 0, "started": 0, "phase": "",
+    "items": [], "counts": {}, "note": "", "done": 0, "total": 0, "retry_left": 0,
+}
 
-    测的是整池（候选清单里的每一条），不只是正在用的那几条——
-    用户要看的是「都有哪些上游、各自多快」，只给 3 条等于把其余全藏了。
-    不是从外部直连 DoH：那样测的是「我这条连接有多快」，跟 mosdns 实际
-    解析用的连接池、并发策略、缓存都不是一回事。
-    """
-    items = ensure_diag_ports()
-    if not items:
-        return {"at": int(time.time()), "items": [], "counts": {},
-                "note": "测速入口还没有，可能是旧配置；保存一次上游或重启容器后自动生成"}
-    qname = {"local": "www.baidu.com", "remote": "www.google.com"}
-    act = doh_cfg.active() if doh_cfg else {"local": [], "remote": []}
 
-    def one(it, timeout=5):
-        r = _dns_udp(it["port"], qname.get(it["side"], "www.baidu.com"), timeout=timeout)
-        cur = {str(x).strip() for x in (act.get(it["side"]) or [])}
-        name, host = provider_of(it["line"])
-        return dict(it, **r, active=(it["line"] in cur), provider=name, host=host)
+def _speed_snapshot():
+    with _SPEED_LOCK:
+        snap = dict(_SPEED)
+        snap["items"] = list(_SPEED["items"])
+        snap["counts"] = dict(_SPEED["counts"])
+    return snap
 
-    try:
-        from concurrent.futures import ThreadPoolExecutor
-        # 并发压到 6：37 条一起抢的时候，每条都要新建 TLS，慢的那几条会被同批的快条目
-        # 挤掉——明明能通也报「没响应」，看着就是一屏「不通」，还都是知名公共 DNS。
-        with ThreadPoolExecutor(max_workers=6) as ex:
-            out = list(ex.map(one, items))
-    except Exception:
-        out = [one(it) for it in items]
 
-    # 没通的单独再问一次，这次一条一条来、超时放到 6 秒。
-    # 第一次的「不通」里有相当一部分只是并发抖动（同厂商 4 个入口通 2 个、挂 2 个，
-    # 或者上一轮 1690ms 这轮超时），不复测就把它写成「不通」是在骗人。
-    for i, it in enumerate(out):
-        if it["ok"]:
-            continue
-        again = one(it, timeout=6)
-        if again["ok"]:
-            again["retried"] = True
-            out[i] = again
-
+def _speed_counts(out):
     counts = {}
     for it in out:
         c = counts.setdefault(it["side"], {"total": 0, "active": 0, "alive": 0, "dead": 0})
@@ -876,7 +855,118 @@ def diag_speed():
             c["active"] += 1
         else:
             c["alive"] += 1
-    return {"at": int(time.time()), "items": out, "counts": counts, "note": ""}
+    return counts
+
+
+def _speed_worker(items, qname, act):
+    """整池逐条测。先把清单铺成占位行，测完一条填一条，前端能看见进度。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    out = []
+    for it in items:
+        name, host = provider_of(it["line"])
+        out.append(dict(it, ok=False, ms=None, answers=0, rcode=None, err="",
+                        active=False, provider=name, host=host, pending=True))
+    with _SPEED_LOCK:
+        _SPEED["items"] = list(out)
+
+    def one(it, timeout):
+        r = _dns_udp(it["port"], qname.get(it["side"], "www.baidu.com"), timeout=timeout)
+        cur = {str(x).strip() for x in (act.get(it["side"]) or [])}
+        name, host = provider_of(it["line"])
+        return dict(it, **r, active=(it["line"] in cur), provider=name, host=host, pending=False)
+
+    def flush():
+        with _SPEED_LOCK:
+            _SPEED["items"] = list(out)
+            _SPEED["done"] = sum(1 for x in out if not x.get("pending"))
+
+    try:
+        # 并发压到 6：35 条一起抢的时候，每条都要新建 TLS，慢的那几条会被同批的快条目
+        # 挤掉——明明能通也报「没响应」，看着就是一屏「不通」，还都是知名公共 DNS。
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            jobs = {ex.submit(one, it, 5): i for i, it in enumerate(items)}
+            for f in as_completed(jobs):
+                i = jobs[f]
+                try:
+                    out[i] = f.result()
+                except Exception as e:
+                    out[i] = dict(out[i], ok=False, err="测的时候出错了：%s" % e, pending=False)
+                flush()
+
+        # 没通的单独再问一次。第一次的「不通」里有相当一部分只是并发抖动
+        # （同厂商 4 个入口通 2 个、挂 2 个，或者上一轮 1690ms 这轮超时），
+        # 不复测就把它写成「不通」是在骗人。串行复测 19 条要将近两分钟，
+        # 改 3 并发；再往上调又开始互相挤，测出来的还是假「不通」。
+        retry = [i for i, x in enumerate(out) if not x.get("ok")]
+        if retry:
+            with _SPEED_LOCK:
+                _SPEED["phase"] = "retry"
+                _SPEED["retry_left"] = len(retry)
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                jobs = {ex.submit(one, items[i], 6): i for i in retry}
+                for f in as_completed(jobs):
+                    i = jobs[f]
+                    try:
+                        again = f.result()
+                    except Exception:
+                        again = None
+                    if again and again.get("ok"):
+                        again["retried"] = True
+                        out[i] = again
+                    else:
+                        out[i] = dict(out[i], pending=False)
+                    with _SPEED_LOCK:
+                        _SPEED["retry_left"] = max(0, int(_SPEED.get("retry_left") or 0) - 1)
+                    flush()
+    finally:
+        for x in out:
+            x["pending"] = False
+        with _SPEED_LOCK:
+            _SPEED["items"] = list(out)
+            _SPEED["counts"] = _speed_counts(out)
+            _SPEED["at"] = int(time.time())
+            _SPEED["running"] = False
+            _SPEED["phase"] = ""
+            _SPEED["retry_left"] = 0
+            _SPEED["done"] = len(out)
+
+
+def diag_speed(refresh=False):
+    """逐条问 mosdns 自己：这一条上游此刻转发一次要多久。
+
+    测的是整池（候选清单里的每一条），不只是正在用的那几条——
+    用户要看的是「都有哪些上游、各自多快」，只给 3 条等于把其余全藏了。
+    不是从外部直连 DoH：那样测的是「我这条连接有多快」，跟 mosdns 实际
+    解析用的连接池、并发策略、缓存都不是一回事。
+
+    接口本身不等结果：没在跑就起一轮后台测，立刻回快照（running=true + 占位清单）。
+    """
+    # 前端每 1.5 秒问一次进度，这两条快路径不能去碰 config 文件
+    snap = _speed_snapshot()
+    if snap["running"]:
+        return snap
+    # 没在跑：只有「手点了立即测速」或者「距上次测完已过 2 分钟」才重新起一轮，
+    # 不然页面每次刷新都重测一遍，谁也别想看到稳定的数。
+    if not refresh and snap["at"] and time.time() - snap["at"] < 120:
+        return snap
+
+    items = ensure_diag_ports()
+    if not items:
+        return {"running": False, "at": int(time.time()), "items": [], "counts": {},
+                "done": 0, "total": 0, "phase": "", "retry_left": 0,
+                "note": "测速入口还没有，可能是旧配置；保存一次上游或重启容器后自动生成"}
+    with _SPEED_LOCK:
+        if _SPEED["running"]:
+            return dict(_SPEED)
+        _SPEED.update({"running": True, "started": int(time.time()), "phase": "",
+                       "items": [], "counts": {}, "note": "", "done": 0,
+                       "total": len(items), "retry_left": 0})
+
+    qname = {"local": "www.baidu.com", "remote": "www.google.com"}
+    act = doh_cfg.active() if doh_cfg else {"local": [], "remote": []}
+    threading.Thread(target=_speed_worker, args=(items, qname, act), daemon=True).start()
+    return _speed_snapshot()
 
 
 def probe_upstreams():
@@ -1164,7 +1254,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/upstreams":
                 return self._send(200, upstreams_payload())
             if path == "/api/diag/speed":
-                return self._send(200, diag_speed())
+                ref = (parse_qs(u.query).get("refresh") or [""])[0] in ("1", "true", "yes")
+                return self._send(200, diag_speed(refresh=ref))
             if path == "/api/cache/info":
                 return self._send(200, cache_info())
             if path == "/api/sources":
