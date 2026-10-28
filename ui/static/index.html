@@ -1039,7 +1039,7 @@
         <div class="card" style="margin-top:16px">
           <div class="flexhead">
             <h3>实时解析域名</h3>
-            <span class="hint" style="margin:0">最近 30 条 · 每 5 秒自动刷新</span>
+            <span class="hint" style="margin:0">每个域名一行、全部列出，框内滚动 · 每 5 秒刷新</span>
           </div>
           <form class="resolve-row" id="resolveForm">
             <input id="resolveInput" placeholder="输入域名，例如 www.google.com" autocomplete="off">
@@ -2288,11 +2288,13 @@
     if (ms <= 250) return "lat-mid";
     return "lat-bad";
   }
+  var qSig = "";
   function renderQLive(d){
     var box = $("#qLive"), stat = $("#qStat");
     if (!box) return;
     var items = (d && d.items) || [];
     if (!d || !d.log_ok || !items.length) {
+      qSig = "";
       stat.innerHTML = "";
       box.innerHTML = '<div class="empty">还没有查询记录（引擎收到 DNS 请求后这里会自动出现）</div>';
       return;
@@ -2310,12 +2312,33 @@
       '<div class="s"><span>平均耗时</span><b>' + (d.avg === null ? "—" : d.avg + "<small> ms</small>") + '</b></div>' +
       '<div class="s"><span>失败</span><b>' + d.failed + '</b></div>';
 
+    /* 数据没变就不重建表：否则每 5 秒重排一次，你正往下滚看第 40 个域名，刷新一到就跳回顶上。 */
+    var sig = items.length + "|" + items.map(function(x){
+      return x.time + x.qname + x.ms + x.cached + x.rcode;
+    }).join(",");
+    if (sig === qSig) return;
+    qSig = sig;
+
+    /* 重建前记住「现在滚到哪个域名」，重建后把它放回原位——
+       否则列表里有新域名插到最上面，你正看的那行会被顶走。 */
+    var keepTop = box.scrollTop, keepLeft = box.scrollLeft, anchor = null;
+    if (keepTop > 0) {
+      var oldRows = box.querySelectorAll("tbody tr");
+      var boxTop = box.getBoundingClientRect().top;
+      for (var oi = 0; oi < oldRows.length; oi++) {
+        if (oldRows[oi].getBoundingClientRect().top >= boxTop + 30) {
+          anchor = oldRows[oi].getAttribute("data-q");
+          break;
+        }
+      }
+    }
     var t = document.createElement("table");
     var thead = document.createElement("thead");
     thead.innerHTML = "<tr><th>时间</th><th>域名</th><th class=\"col-cache\">缓存</th><th>用时</th><th>状态</th><th class=\"col-client\">客户端</th></tr>";
     var tbody = document.createElement("tbody");
     items.forEach(function(it){
       var tr = document.createElement("tr");
+      tr.setAttribute("data-q", it.qname);
       var td0 = document.createElement("td"); td0.className = "mono"; td0.textContent = it.time || "-";
       var td1 = document.createElement("td"); td1.className = "qname"; td1.textContent = it.qname;
       if (it.qtype) { var sp = document.createElement("span"); sp.className = "qtype"; sp.textContent = it.qtype; td1.appendChild(sp); }
@@ -2343,10 +2366,19 @@
     t.appendChild(thead); t.appendChild(tbody);
     box.innerHTML = "";
     box.appendChild(t);
+    if (anchor) {
+      var nr = box.querySelector('tbody tr[data-q="' + anchor + '"]');
+      if (nr) box.scrollTop = Math.max(0, nr.getBoundingClientRect().top - box.getBoundingClientRect().top - 30);
+      box.scrollLeft = keepLeft;
+    } else {
+      box.scrollTop = keepTop; box.scrollLeft = keepLeft;
+    }
   }
   function loadQLive(){
     if (!$("#qLive")) return Promise.resolve();
-    return api("/api/qlog?n=30").then(renderQLive).catch(function(){});
+    /* uniq=1：同一个域名只留最近一次，列的是"现在都在解析哪些域名"，
+       不再被同一批域名反复刷屏；条数给满，超出的部分由框内滚动看。 */
+    return api("/api/qlog?n=2000&uniq=1").then(renderQLive).catch(function(){});
   }
 
   /* ---------- 缓存与日志 ---------- */

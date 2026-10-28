@@ -217,8 +217,11 @@ def _elapsed_ms(v):
         return None
 
 
-def read_qlog(limit=30):
+def read_qlog(limit=30, uniq=False):
     """从 mosdns 日志尾部解析 query_summary，返回最近若干条 + 命中统计。
+
+    uniq=True 时按域名去重：同一个域名被查了 20 次也只留最近那一次，
+    这样面板列的是「现在有哪些域名在解析」而不是同一批域名反复刷屏。
 
     兼容两种日志格式：
       ① 老版 mosdns：INFO ... query summary {json}
@@ -259,6 +262,14 @@ def read_qlog(limit=30):
             "client": re.sub(r"^::ffff:", "", str(d.get("client", ""))),
         })
     recent = items[-limit:][::-1]
+    if uniq:
+        # 从最新往回扫，同一个域名只留第一次遇到的那条（即最近一次查询）。
+        # dict 保插入顺序，所以列表天然是"最近查过的域名在前"。
+        seen = {}
+        for x in reversed(items):
+            if x["qname"] not in seen:
+                seen[x["qname"]] = x
+        recent = list(seen.values())
     total = len(items)
     vals = [x["ms"] for x in items if x["ms"] is not None]
     cached_n = sum(1 for x in items if x["cached"])
@@ -1428,11 +1439,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/qlog":
                 q = parse_qs(u.query)
                 try:
-                    n = max(1, min(200, int((q.get("n") or ["30"])[0])))
+                    n = max(1, min(2000, int((q.get("n") or ["30"])[0])))
                 except Exception:
                     n = 30
+                uniq = (q.get("uniq") or [""])[0] in ("1", "true", "yes")
                 rotate_qlog_if_big()
-                return self._send(200, read_qlog(n))
+                return self._send(200, read_qlog(n, uniq))
             if path == "/api/upstreams":
                 return self._send(200, upstreams_payload())
             if path == "/api/diag/speed":
