@@ -86,10 +86,12 @@ FROM ${ALPINE_IMAGE}
 ARG MOSDNS_VERSION=v5.3.4
 ARG CFT_VERSION=v2.3.5
 ARG GT_VERSION=latest
+ARG APP_VERSION=1.0.0
 ARG BUILD_REV=dev
 ARG BUILD_DATE=""
 LABEL org.opencontainers.image.description="MosDNS 优选镜像：原版核心 + 七路优选 + 单登录 UI"
 LABEL org.opencontainers.image.title="mosdns-pref"
+LABEL org.opencontainers.image.version="${APP_VERSION}"
 
 RUN apk add --no-cache ca-certificates curl bash python3 tzdata \
     && rm -rf /var/cache/apk/*
@@ -102,8 +104,8 @@ COPY --from=tools /opt/cft /app/bin/cft
 # gt 只记录版本号：上游 1.9 起不再发 linux 包，1.8 的 linux-x64 是 .NET
 # 自包含构建，Alpine（musl）跑不起来；gt 路用的是它的社区 IP 清单，
 # 清单跟随上游 master，所以这里照样记下 CI 探测到的最新 release 标签。
-RUN mkdir -p /app && printf 'mosdns=%s\ncft=%s\ngt=%s\nbuild_rev=%s\nbuild_date=%s\n' \
-      "$MOSDNS_VERSION" "$CFT_VERSION" "$GT_VERSION" "$BUILD_REV" "$BUILD_DATE" > /app/VERSIONS
+RUN mkdir -p /app && printf 'app=%s\nmosdns=%s\ncft=%s\ngt=%s\nbuild_rev=%s\nbuild_date=%s\n' \
+      "$APP_VERSION" "$MOSDNS_VERSION" "$CFT_VERSION" "$GT_VERSION" "$BUILD_REV" "$BUILD_DATE" > /app/VERSIONS
 
 WORKDIR /app
 COPY config/      /app/config/

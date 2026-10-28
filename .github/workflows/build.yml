@@ -58,6 +58,7 @@ jobs:
           echo "mosdns=$MOSDNS"   >> "$GITHUB_OUTPUT"
           echo "cft=$CFT"         >> "$GITHUB_OUTPUT"
           echo "gt=$GT"           >> "$GITHUB_OUTPUT"
+          echo "app=${APP_VERSION:-1.0.0}" >> "$GITHUB_OUTPUT"
           echo "golang=$GOLANG"   >> "$GITHUB_OUTPUT"
           echo "alpine=$ALPINE"   >> "$GITHUB_OUTPUT"
           SAFE=$(echo "$MOSDNS" | tr '/ :' '---')
@@ -78,6 +79,7 @@ jobs:
           GOLANG: ${{ steps.ver.outputs.golang }}
           ALPINE: ${{ steps.ver.outputs.alpine }}
           TAG: ${{ steps.ver.outputs.tag }}
+          APP: ${{ steps.ver.outputs.app }}
         run: |
           set -uo pipefail
           GHCR="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mosdns"
@@ -104,6 +106,7 @@ jobs:
               --build-arg GT_VERSION="$g" \
               --build-arg GOLANG_IMAGE="$gl" \
               --build-arg ALPINE_IMAGE="$al" \
+              --build-arg APP_VERSION="${APP:-1.0.0}" \
               --build-arg BUILD_REV="${GITHUB_SHA::7}" \
               --build-arg BUILD_DATE="$(date -u +%Y%m%d)" \
               -t "$TEST_IMAGE" . || { echo "构建失败"; return 1; }

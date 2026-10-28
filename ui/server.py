@@ -361,6 +361,85 @@ _ROUTE_NAMES = {
 _ROUTE_CACHE = {"sig": None, "map": {}}
 
 
+_LIST_CACHE = {}
+
+
+def _dom_set(name):
+    """读 /data 下的域名清单为集合（按 mtime 缓存）。"""
+    p = os.path.join(DATA_DIR, name)
+    try:
+        mt = os.path.getmtime(p)
+    except Exception:
+        return set()
+    c = _LIST_CACHE.get(name)
+    if c and c[0] == mt:
+        return c[1]
+    ds = set()
+    try:
+        with open(p, encoding="utf-8", errors="ignore") as f:
+            for ln in f:
+                ln = ln.split("#", 1)[0].strip().lower().rstrip(".")
+                if ln:
+                    ds.add(ln)
+    except Exception:
+        pass
+    _LIST_CACHE[name] = (mt, ds)
+    return ds
+
+
+def _match_dom(ds, qname):
+    """后缀匹配：a.b.example.com 命中清单里的 example.com。"""
+    q = qname.lower().rstrip(".")
+    parts = q.split(".")
+    for i in range(len(parts)):
+        if ".".join(parts[i:]) in ds:
+            return True
+    return False
+
+
+_UP_INFO = {"mt": None, "local": "", "remote": ""}
+
+
+def up_in_use(side):
+    """当前这条链上实际配置的上游厂商，多个时给出首个与数量。"""
+    try:
+        mt = os.path.getmtime(doh_cfg.CFG)
+    except Exception:
+        mt = 0
+    if mt != _UP_INFO["mt"]:
+        try:
+            act = doh_cfg.active()
+        except Exception:
+            act = {"local": [], "remote": []}
+        for k in ("local", "remote"):
+            names = []
+            for ln in act.get(k) or []:
+                name, _host = provider_of(ln)
+                if name and name not in names:
+                    names.append(name)
+            _UP_INFO[k] = (names[0] + " 等 %d 家" % len(names)) if len(names) > 1 else (names[0] if names else "")
+        _UP_INFO["mt"] = mt
+    return _UP_INFO.get(side, "")
+
+
+def source_of(qname, route_name=""):
+    """这个域名的答案是从哪儿来的：优选 hosts / 国内链 / 国外链。
+
+    判定顺序与 config.yaml 的 main_sequence 一致：
+    优选 hosts → GFW 清单走国外 → 国内域名走国内 → 其余国内优先、失败转国外。
+    """
+    if route_name:
+        return "优选"
+    if _match_dom(_dom_set("gfw_domains.txt"), qname):
+        lab = up_in_use("remote")
+        return "国外 · " + lab if lab else "国外上游"
+    if _match_dom(_dom_set("cn_domains.txt"), qname):
+        lab = up_in_use("local")
+        return "国内 · " + lab if lab else "国内上游"
+    lab = up_in_use("local")
+    return "国内优先 · " + lab if lab else "国内优先"
+
+
 def route_map():
     """域名 -> 所属优选路（cf / google / gt / github / ghcr / tmdb / imdb）。
 
@@ -498,6 +577,7 @@ def read_qlog(limit=30, uniq=False, resolve=0):
             x["route"] = rk
             x["route_name"] = _ROUTE_NAMES.get(rk, rk)
             x["pref"] = x["qname"] in pref
+            x["src"] = source_of(x["qname"], x["route_name"])
             ip, own = answer_of(x["qname"])
             x["ip"], x["owner"] = ip or "", own or ""
     hit = miss = 0
@@ -1022,6 +1102,26 @@ def _dns_udp(port, qname, timeout=5):
     return {"ok": True, "ms": ms, "answers": an, "rcode": rcode, "err": ""}
 
 
+def _dedupe_items(items):
+    """同一主机 + 同一 IP 只保留一条。
+
+    候选池里同一个 DoH 服务的不同路径（/p0、/p2）会共用主机与 IP，
+    列表里看起来是完全一样的两行，还常常都判「不通」——保留一条即可。
+    """
+    seen, out = set(), []
+    for it in items:
+        line = it.get("line", "")
+        parts = line.split()
+        host = parts[0].split("//")[-1].split("/")[0] if parts else ""
+        ip = parts[1] if len(parts) > 1 else ""
+        key = (host, ip)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
 def ensure_diag_ports():
     """确保 config 里有「每条上游一个测速入口」；候选池变了（加/删）也要重渲染。
 
@@ -1036,7 +1136,7 @@ def ensure_diag_ports():
     want = set(doh_cfg.full_set(text, "local")) | set(doh_cfg.full_set(text, "remote"))
     have = set(it["line"] for it in items)
     if items and want == have:
-        return items
+        return _dedupe_items(items)
     with _DIAG_LOCK:
         # 拿锁后再核一次，避免并发重复重载
         text = doh_cfg.read_cfg()
@@ -1044,7 +1144,7 @@ def ensure_diag_ports():
         want = set(doh_cfg.full_set(text, "local")) | set(doh_cfg.full_set(text, "remote"))
         have = set(it["line"] for it in items)
         if items and want == have:
-            return items
+            return _dedupe_items(items)
         new = doh_cfg.render_diag(text)
         if not new or new == text:
             return items if items else []
@@ -1054,7 +1154,7 @@ def ensure_diag_ports():
             time.sleep(2)
         except Exception:
             return items if items else []
-        return doh_cfg.diag_ports(doh_cfg.read_cfg())
+        return _dedupe_items(doh_cfg.diag_ports(doh_cfg.read_cfg()))
 
 
 # 上游是「哪家的」：按主机名和 IP 认。认不出来就如实显示主机名，
@@ -1524,6 +1624,9 @@ def read_versions():
                   "note": "仅用社区 IP 清单，跟随上游 master"})
     data = {
         "items": items,
+        # 项目自身版本与引擎版本分开报：mosdns 是内置的 DNS 引擎，不是这个项目的版本号。
+        "app": build.get("app") or "1.0.0",
+        "engine": build.get("mosdns") or "",
         "build_rev": build.get("build_rev", ""),
         "build_date": build.get("build_date", ""),
     }

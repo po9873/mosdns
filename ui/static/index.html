@@ -515,6 +515,8 @@
   .q-live .tag-net.pref{color:var(--blue2);border-color:rgba(90,150,255,.45)}
   .q-live .tag-net.rt{color:var(--blue2);border-color:rgba(90,150,255,.45)}
   .q-live .tag-net.rt.cf{color:#f6821f;border-color:rgba(246,130,31,.45)}
+  .q-live .tag-net.up{color:var(--text);border-color:var(--border)}
+  .q-live .tag-net.up b{font-weight:600}
   .q-live .tag-net.own{font-size:10.5px;color:var(--muted);border-color:transparent;padding:0 2px}
 
   .logbox{
@@ -1049,7 +1051,7 @@
         <div class="card" style="margin-top:16px">
           <div class="flexhead">
             <h3>实时解析域名</h3>
-            <span class="hint" style="margin:0">每个域名一行、全部列出 · 最近 40 条带应答 IP 与线路 · 框内滚动</span>
+            <span class="hint" style="margin:0">每个域名一行、全部列出 · 最近 40 条带应答 IP 与来源 · 框内滚动</span>
           </div>
           <form class="resolve-row" id="resolveForm">
             <input id="resolveInput" placeholder="输入域名，例如 www.google.com" autocomplete="off">
@@ -1966,8 +1968,15 @@
         vb.appendChild(row);
       });
       if (vs.build_rev) vb.appendChild(rline("镜像构建", vs.build_rev + (vs.build_date ? " · " + vs.build_date : "")));
+      /* 侧栏版本 = 这个项目自己的版本；mosdns 是内置引擎，单独一行显示 */
+      var appVer = "v" + (vs.app || "1.0.0");
       var fv = $("#footVer");
-      if (fv && (vs.items || [])[0]) fv.textContent = (vs.items[0].ver || "-");
+      if (fv) {
+        fv.textContent = appVer + (vs.build_date ? " · " + vs.build_date : "");
+        fv.title = "项目版本" + (vs.build_rev ? " · 构建 " + vs.build_rev : "");
+      }
+      var fe = $("#footEngine");
+      if (fe) fe.textContent = vs.engine ? "mosdns " + vs.engine : "mosdns";
       var foot = document.createElement("div"); foot.className = "rfoot";
       foot.textContent = "各路共用内置探测 · GT 仅取社区 IP 清单";
       vb.appendChild(foot);
@@ -2344,7 +2353,7 @@
     }
     var t = document.createElement("table");
     var thead = document.createElement("thead");
-    thead.innerHTML = "<tr><th>时间</th><th>域名</th><th>应答 IP</th><th>线路 / 优选</th><th>用时</th><th>状态</th><th class=\"col-client\">客户端</th></tr>";
+    thead.innerHTML = "<tr><th>时间</th><th>域名</th><th>应答 IP</th><th>来源</th><th>用时</th><th>状态</th><th class=\"col-client\">客户端</th></tr>";
     var tbody = document.createElement("tbody");
     items.forEach(function(it){
       var tr = document.createElement("tr");
@@ -2359,9 +2368,9 @@
       } else {
         td2.innerHTML = '<span class="muted">—</span>';
       }
-      /* 线路：先看域名属于哪一路优选（Google 搜索 / GitHub / Cloudflare…），
-         再看应答 IP 的归属。Google 各路的优选 IP 多为国内中转节点，
-         单看 IP 只会显示「国内」，看不出走的是哪条规则。 */
+      /* 来源：这个答案是谁给的。
+         优选 → 标出是哪一路（Google 搜索 / GitHub / Cloudflare…），不经过上游 DNS；
+         其余 → 走的是国内链还是国外链，以及那条链上当前在用的 DNS 服务。 */
       var td3 = document.createElement("td"); td3.className = "col-net";
       function netTag(cls, txt, tip){
         var e = document.createElement("span");
@@ -2371,17 +2380,17 @@
         return e;
       }
       if (it.route_name) {
-        td3.appendChild(netTag("rt" + (it.route === "cf" ? " cf" : ""), it.route_name, "该域名由这一路优选写入 hosts"));
-        if (it.owner && it.owner !== it.route_name) {
-          td3.appendChild(netTag("own", it.owner, "应答 IP 的归属"));
-        }
-      } else if (it.pref) {
-        td3.appendChild(netTag("pref", "优选", "域名在优选 hosts 中，但未匹配到具体路由文件"));
-        if (it.owner) td3.appendChild(netTag(it.owner === "Cloudflare" ? "cf" : "own", it.owner, "应答 IP 的归属"));
+        td3.appendChild(netTag("rt" + (it.route === "cf" ? " cf" : ""), it.route_name,
+          "该域名由这一路优选写入 hosts，不经过上游 DNS"));
+      } else if (it.src) {
+        td3.appendChild(netTag("up", it.src, "该域名由这条上游链解析，名称是当前在用的 DNS 服务"));
       } else if (it.owner) {
         td3.appendChild(netTag(it.owner === "Cloudflare" ? "cf" : "", it.owner, "应答 IP 的归属"));
       } else {
         td3.innerHTML = '<span class="muted">—</span>';
+      }
+      if (it.owner && (it.route_name || it.src)) {
+        td3.appendChild(netTag("own", it.owner, "应答 IP 的归属"));
       }
       var td4 = document.createElement("td");
       var pill = document.createElement("span");

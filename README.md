@@ -185,11 +185,17 @@ docker compose pull && docker compose up -d
 读取 mosdns `query_summary` 日志，按域名去重后完整列出当前在解析的域名，每 5 秒刷新，框内滚动、表头吸顶。
 每行包含时间、域名、记录类型、应答 IP、线路、响应耗时、状态与客户端。面板自身发起的环回查询不计入统计。
 
-线路一栏以**域名归属**为主：按 `/data/prefs/*.hosts` 的文件名标出该域名由哪一路优选写入
-（Cloudflare / Google 搜索 / Google 翻译 / GitHub / ghcr / TMDB / IMDb），未命中任何一路时显示应答 IP 的归属
-（按 `/data/cdn_ranges.txt` 与镜像内置网段库合并判定，认不出为「海外」）。
-IP 归属以浅色小字附在后面，用于判断实际落地位置——Google 各路的优选地址多为国内中转节点，
-仅按 IP 判定会统一显示「国内」，无法区分走了哪条规则。
+「来源」一栏说明这个答案是谁给的：
+
+| 显示 | 含义 |
+|---|---|
+| `Cloudflare` / `Google 搜索` / `Google 翻译` / `GitHub` / `ghcr` / `TMDB` / `IMDb` | 由该路优选写入 hosts，不经过上游 DNS |
+| `国内 · 阿里 DNS` | 由国内上游链解析，名称为该链当前在用的服务 |
+| `国外 · ControlD` | 由国外上游链解析（GFW 清单命中的域名走这条） |
+| `国内优先 · 阿里 DNS` | 不在两份域名清单中，先走国内、失败转国外 |
+
+判断顺序与 `config.yaml` 中的 `main_sequence` 一致。后面的浅色小字为应答 IP 的归属
+（按 `/data/cdn_ranges.txt` 与镜像内置网段库合并判定），用于判断实际落地位置。
 
 ## 优选机制
 
@@ -448,7 +454,7 @@ mosdns 没有热重载接口，hosts 与清单变更需要通过重载进程生�
 config/               mosdns 配置模板、公开种子（cn/gfw 清单、优选候选种子）
 scheduler/            调度、优选、公共函数、DNS 与探测库（lib/lists.py）
 ui/                   控制台后端（server.py）与前端（static/index.html）
-versions.env          上游版本锁定
+versions.env          项目版本与上游版本锁定
 known-good.env        上一份通过自检的版本组合（回退参考）
 docker-entrypoint.sh  渲染配置、初始化账号、启动进程
 ```
@@ -484,6 +490,17 @@ docker compose pull && docker compose up -d
 
 产物：`ghcr.io/<用户名>/mosdns` 与 `docker.io/<用户名>/mosdns`，需配置 Secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。
 每次构建同时生成不可变标签 `<mosdns版本>-<日期>-<commit>`。
+
+## 版本
+
+- `APP_VERSION`（`versions.env`）为项目自身版本，控制台侧栏「版本」显示此值，附构建日期与 commit
+- 侧栏「引擎」单独显示内置 mosdns 版本，与项目版本区分
+- `known-good.env` 记录上一份通过自检的上游组合
+
+## 许可证
+
+GPL-3.0。DNS 引擎为 [mosdns](https://github.com/IrineSistiana/mosdns)（GPL-3.0），本项目在其基础上构建，
+完整条款见 `LICENSE`。
 
 ## 隐私
 
