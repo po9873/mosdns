@@ -218,6 +218,41 @@ filter_bad_ips() {
 }
 
 # ---------- 结果落盘 ----------
+# 自动发现的域名（dom_watch 从查询日志里捞的「该走优选但漏了」的）逐 IP 校验，
+# 合格的输出「域名 ip...」行。write_route（整文件重写）与稳定模式补映射共用。
+# 校验不过只是这轮不映射，下轮接着试；永久不通的域名探测开销很小
+# （1 域名 × 几个 IP），不值得为此加状态机。
+# 用法: auto_map_domains <route> <skip域名列表> <dedupe:0|1> <ip...>
+#   skip   —— 已会写入的域名（主域名 + 附加域名），跳过避免重复行
+#   dedupe —— 1 = 追加场景，跳过当前 hosts 里已有的域名；0 = 整文件重写场景
+auto_map_domains() {
+  local route="$1" skip="$2" dedupe="$3"; shift 3
+  local ips="$*" adf="$PREF_DIR/.autodom/$route.txt" d dok cur_have=""
+  [ -s "$adf" ] || return 0
+  if [ "$dedupe" = "1" ] && [ -f "$PREF_DIR/$route.hosts" ]; then
+    cur_have=$(awk 'NF{print $1}' "$PREF_DIR/$route.hosts")
+  fi
+  while IFS= read -r d; do
+    d=$(printf '%s' "$d" | tr -d '\r' | awk 'NF')
+    case "$d" in ''|\#*) continue ;; esac
+    case " $skip " in *" $d "*) continue ;; esac
+    if [ -n "$cur_have" ]; then
+      printf '%s\n' "$cur_have" | grep -qxF "$d" && continue
+    fi
+    dok=$(printf '%s\n' $ips \
+          | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 / "" "" 2>/dev/null \
+          | awk '$2=="ok"{print $1}')
+    if [ -z "$dok" ]; then
+      log "$route: 自动域名 $d 没有 IP 通过校验，暂不映射（日志里仍会跟踪）"
+      continue
+    fi
+    log "$route: 自动发现域名 $d 校验通过，已加入映射"
+    printf '%s' "$d"
+    printf ' %s' $dok
+    printf '\n'
+  done < "$adf"
+}
+
 # mosdns hosts 格式：每行「域名 ip1 ip2 ...」，域名必须在第一位，
 # 后面可跟任意多个 IP（v4/v6 可混在同一行，引擎会自动按查询类型分开应答）。
 write_route() {
@@ -256,29 +291,8 @@ write_route() {
       printf ' %s' $dok
       printf '\n'
     done
-    # 自动发现的域名（dom_watch 从查询日志里捞的「该走优选但漏了」的）：
-    # 与附加域名同一标准——逐 IP 真实 HTTPS 校验，通过了才映射。
-    # 校验不过只是这轮不映射，下轮接着试；永久不通的域名探测开销很小
-    # （1 域名 × 几个 IP），不值得为此加状态机。
-    local adf="$PREF_DIR/.autodom/$route.txt"
-    if [ -s "$adf" ]; then
-      while IFS= read -r d; do
-        d=$(printf '%s' "$d" | tr -d '\r' | awk 'NF')
-        case "$d" in ''|\#*) continue ;; esac
-        [ "$d" = "$domain" ] && continue
-        dok=$(printf '%s\n' $ips \
-              | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 / "" "" 2>/dev/null \
-              | awk '$2=="ok"{print $1}')
-        if [ -z "$dok" ]; then
-          log "$route: 自动域名 $d 没有 IP 通过校验，暂不映射（日志里仍会跟踪）"
-          continue
-        fi
-        log "$route: 自动发现域名 $d 校验通过，已加入映射"
-        printf '%s' "$d"
-        printf ' %s' $dok
-        printf '\n'
-      done < "$adf"
-    fi
+    # 自动发现的域名：与本路附加域名同一标准——逐 IP 真实 HTTPS 校验，通过才映射
+    auto_map_domains "$route" "$domain ${PREF_EXTRA_DOMAINS:-}" 0 $ips
   } > "$PREF_DIR/$route.hosts"
   # 额外域名组：写在文件里，每行「域名 ip1 ip2 ...」，每个域名配自己的那批 IP。
   # 为什么不能复用 PREF_EXTRA_DOMAINS：那是「同一批节点」的域名（翻译的网页端和
@@ -700,6 +714,18 @@ run_route() {
               if [ "${live_n:-0}" -gt "$orig_n" ]; then
                 write_route "$route" "$target" "$live_rows" || true
               fi
+            fi
+            # 自动发现的新域名不等工作模式：稳定模式下也照样校验补映射，
+            # 否则新域名要干等 6 小时稳定窗口到期才被处理
+            local adl ad_ips
+            ad_ips=$(printf '%s\n' "$live_rows" | awk 'NF{print $1}' | sort -u)
+            adl=$(auto_map_domains "$route" "" 1 $ad_ips)
+            if [ -n "$adl" ]; then
+              { awk 'NF' "$PREF_DIR/$route.hosts"; printf '%s\n' "$adl"; } \
+                > "$PREF_DIR/$route.hosts.tmp" \
+                && mv "$PREF_DIR/$route.hosts.tmp" "$PREF_DIR/$route.hosts"
+              merge_hosts
+              log "$route: 稳定模式下补映射 $(( $(printf '%s\n' "$adl" | awk 'NF' | wc -l | tr -d ' ') )) 个自动发现域名"
             fi
             # 把本轮实测结果写回，界面「已选 IP + 速度」不会因为跳过重探而变空
             write_state "$route" "$target" "stable" "$state_rows" "" "${live_n}" 0 0
