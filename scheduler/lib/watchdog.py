@@ -176,7 +176,35 @@ def read_hosts(path):
     return None, []
 
 
-def write_hosts(route, domain, ips):
+def read_lines(path):
+    """按行读 hosts 文件，返回 [(domain, [ips...])...]，保持原顺序。
+
+    一路 hosts 通常不止一行：主域名 + 同一批节点服务的附加域名
+    （tmdb 有 api/image/auth，github 有 raw/codeload/avatars…）。
+    只取第一行再去整体重写，会把其余域名整片删掉——之前就是这样
+    把 tmdb 从 6 行写成 1 行、github/cf 也各剩 1 行的。
+    """
+    out = []
+    try:
+        raw = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except Exception:
+        return out
+    for ln in raw:
+        p = ln.split()
+        if len(p) < 2 or not RE_DOM.match(p[0]):
+            continue
+        ips = []
+        for x in p[1:]:
+            try:
+                ips.append(str(ipaddress.ip_address(x)))
+            except ValueError:
+                continue
+        if ips:
+            out.append((p[0], ips))
+    return out
+
+
+def write_hosts(route, domain, ips, extra=None):
     # all.hosts 是各路合并出来的，绝不能把它当成一路来回写：
     # 之前巡检到它（route 名就叫 all）就把整份合并文件压成了一行，
     # mosdns 起不来、全屋 DNS 一起挂。
@@ -185,8 +213,15 @@ def write_hosts(route, domain, ips):
     if not RE_DOM.match(str(domain or "")):
         return
     ips = [i for i in ips if is_ip(i)]
+    extra = [(d, [i for i in l if is_ip(i)]) for d, l in (extra or [])]
+    extra = [(d, l) for d, l in extra if d != domain and l]
     path = os.path.join(PREF_DIR, "%s.hosts" % route)
-    if not ips:
+    lines = []
+    if ips:
+        lines.append(" ".join([domain] + ips))
+    for d, l in extra:
+        lines.append(" ".join([d] + l))
+    if not lines:
         try:
             os.remove(path)
         except Exception:
@@ -194,7 +229,7 @@ def write_hosts(route, domain, ips):
     else:
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            f.write(" ".join([domain] + ips) + "\n")
+            f.write("\n".join(lines) + "\n")
         os.replace(tmp, path)
     # 合并成 mosdns 实际读取的 all.hosts
     out = []
@@ -276,7 +311,13 @@ def run_once():
             # 把它当一路来巡检会反过来把合并文件写坏。
             continue
         route = name[:-6]
-        domain, ips = read_hosts(os.path.join(PREF_DIR, name))
+        rows = read_lines(os.path.join(PREF_DIR, name))
+        if not rows:
+            continue
+        # 第一行是主域名（优选脚本按「主域名 + 附加域名」顺序写），
+        # 其余行原样保留：巡检只对主域名这部分负责换 IP。
+        domain, ips = rows[0]
+        extra = rows[1:]
         if not domain or not ips:
             continue
 
@@ -325,7 +366,7 @@ def run_once():
                     subs.mark_bad(cand, st2, route)
 
         final = keep + added
-        write_hosts(route, domain, final)
+        write_hosts(route, domain, final, extra)
         changed = True
         swapped += len(dropped)
 
