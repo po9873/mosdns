@@ -18,13 +18,14 @@ export PREF_PROBE_EXPECT='translate'
 # 网页端和接口端是同一批边缘节点，两个域名都要写进 hosts：
 # 只映射 translate.google.com 的话，浏览器插件/接口走 translate.googleapis.com
 # 时仍会去上游拿解析结果，那多半是污染值，等于白优选。
-# 另外两个也在用：
+# 另外几个也在用：
 #   translate.googleusercontent.com  「翻译后的网页」代理，点开译文里的链接走它
 #   clients5.google.com              网页端/App 取语言包与部分接口
-# 没加的：translate.goog（每个站点一个子域 xxx.translate.goog，hosts 只能精确匹配，
-# 挂上去也覆盖不到）；translate.google.com.hk（不存在，解析出来是别人家的地址）；
-# translate.google.cn（已关停）；gstatic 系列（国内本来就有本地 CDN，映射到国外反而更慢）。
-export PREF_EXTRA_DOMAINS="translate.googleapis.com translate.googleusercontent.com clients5.google.com www.gstatic.com fonts.gstatic.com ssl.gstatic.com"
+#   translate-pa.googleapis.com      Chrome 内置「翻译此网页」真正调用的接口
+#                                    （v1/translateHtml）。漏了它的后果很具体：
+#                                    这个域名会解析到真实 Google IP（172.217.x），
+#                                    国内连不上，浏览器只报「无法翻译此网页」。
+export PREF_EXTRA_DOMAINS="translate.googleapis.com translate-pa.googleapis.com translate.googleusercontent.com clients5.google.com www.gstatic.com fonts.gstatic.com ssl.gstatic.com"
 
 source /app/scheduler/common.sh
 acquire_lock || exit 1
