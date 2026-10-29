@@ -11,6 +11,15 @@ ROUTES="cf google gt github ghcr tmdb imdb"
 LISTS_PY="/app/scheduler/lib/lists.py"
 SUB_PY="/app/scheduler/lib/subs.py"
 DOH_WATCH="/app/scheduler/lib/doh_watch.py"
+DOM_WATCH="/app/scheduler/lib/dom_watch.py"
+
+# 域名自动发现：从查询日志里找「该走优选但还没映射」的域名，登记给各路
+# 下一轮优选探测。每轮优选前跑一次；优选手动触发（once）也跑，保证点了
+# 「立即测试」新域名立刻有机会被收编。
+maybe_discover_domains() {
+  local LOGF="${PREF_LOG:-$DATA_DIR/pref.log}"
+  python3 "$DOM_WATCH" scan >/dev/null 2>>"$LOGF" || true
+}
 
 # 四份清单（国内 IP 段 / 国内域名 / 国外域名 / CDN 网段）按「周期 + 时刻」自动拉一遍。
 # 计划存在 settings.json（list_upd_enabled / list_upd_cycle / list_upd_hour），
@@ -100,6 +109,7 @@ maybe_scan_doh() {
 # 各路串行跑一遍，全部跑完只判断一次是否需要重载引擎
 run_all() {
   local r en fp ok=0 bad=0 names="" rc
+  maybe_discover_domains
   fp=$(file_sig "$PREF_DIR/all.hosts")
   for r in $ROUTES; do
     en=$(setting "routes.$r")
@@ -136,6 +146,7 @@ once_mode() {
   local which="${1:-all}" fp
   # 「立即测试」：忽略失败退避，立即执行
   export PREF_FORCE=1
+  maybe_discover_domains
   if [ "$which" = "all" ]; then
     run_all
   else

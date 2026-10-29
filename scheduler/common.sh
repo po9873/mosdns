@@ -256,6 +256,29 @@ write_route() {
       printf ' %s' $dok
       printf '\n'
     done
+    # 自动发现的域名（dom_watch 从查询日志里捞的「该走优选但漏了」的）：
+    # 与附加域名同一标准——逐 IP 真实 HTTPS 校验，通过了才映射。
+    # 校验不过只是这轮不映射，下轮接着试；永久不通的域名探测开销很小
+    # （1 域名 × 几个 IP），不值得为此加状态机。
+    local adf="$PREF_DIR/.autodom/$route.txt"
+    if [ -s "$adf" ]; then
+      while IFS= read -r d; do
+        d=$(printf '%s' "$d" | tr -d '\r' | awk 'NF')
+        case "$d" in ''|\#*) continue ;; esac
+        [ "$d" = "$domain" ] && continue
+        dok=$(printf '%s\n' $ips \
+              | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 / "" "" 2>/dev/null \
+              | awk '$2=="ok"{print $1}')
+        if [ -z "$dok" ]; then
+          log "$route: 自动域名 $d 没有 IP 通过校验，暂不映射（日志里仍会跟踪）"
+          continue
+        fi
+        log "$route: 自动发现域名 $d 校验通过，已加入映射"
+        printf '%s' "$d"
+        printf ' %s' $dok
+        printf '\n'
+      done < "$adf"
+    fi
   } > "$PREF_DIR/$route.hosts"
   # 额外域名组：写在文件里，每行「域名 ip1 ip2 ...」，每个域名配自己的那批 IP。
   # 为什么不能复用 PREF_EXTRA_DOMAINS：那是「同一批节点」的域名（翻译的网页端和

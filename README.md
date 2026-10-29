@@ -215,6 +215,24 @@ docker compose pull && docker compose up -d
 分属不同服务的不共用：`github.com` 与 `raw.githubusercontent.com` 分属两路，各用各自 IP。
 附加域名写入前逐 IP 校验，未通过者本次不映射。
 
+### 域名自动发现
+
+各路的域名清单是静态的，服务方新增域名（如 Gmail 的 `content-gmail.googleapis.com`）不会自己出现。
+调度器每轮优选前从查询日志里找「被真实查询过、后缀属于某路域名族、但尚未映射」的域名并登记：
+
+| 路 | 域名族后缀 |
+|---|---|
+| Google 搜索 | `google.com`、`googleapis.com`、`gstatic.com`、`googleusercontent.com`、`ggpht.com`、`withgoogle.com`、`gvt1.com` |
+| Google 翻译 | `translate.googleapis.com`、`translate.googleusercontent.com`、`clients5.google.com` |
+| GitHub | `github.com`、`githubassets.com`、`github.io`、`githubusercontent.com` |
+| ghcr | `ghcr.io` |
+| TMDB / IMDb | `themoviedb.org` / `imdb.com`、`media-imdb.com`、`media-amazon.com` |
+
+登记的域名在下一轮优选时与本路其它附加域名一样逐 IP 真实 HTTPS 校验，通过才写进 hosts；
+校验不过只是暂不映射，后续仍会跟踪。14 天内没再被查询的域名自动从登记中清除，
+`/data/prefs/.autodom.deny`（每行一个后缀）可永久排除指定域名。视频与广告域名
+（`youtube.com`、`googlevideo.com`、`googleadservices.com` 等）不在任何域名族内，不会被收录。
+
 ### 判定标准
 
 每个候选均发送真实 HTTPS 请求（SNI 与 Host 均为目标域名），记录两项指标：
@@ -351,8 +369,8 @@ https://dns.adguard-dns.com/dns-query 94.140.14.14
 不通过的条目不写入配置，并逐条列出原因（连不上 / 超时 / HTTP 非 200 / REFUSED / 查不到记录），
 强制写入需二次确认。「仅测试」只测不存；「扫描候选池」立即执行一轮扫描，手动模式下新增项以「补入 N 条」呈现，确认后写入。
 
-候选池明细列出每一条的状态：绿点为在用，橙点为探测通过但未启用（可一键加入，仍需「测试并保存」），
-红点为不可用并附实际错误。表头汇总「在用 N 条 · 可用未启用 N 条 · 不通 N 条」。
+候选池明细只列出可用条目：绿点为在用，橙点为探测通过但未启用（可一键加入，仍需「测试并保存」）。
+不可用的条目不显示；连续两轮测不通的候选会被自动从候选池移除。
 
 ### 扫描策略
 
