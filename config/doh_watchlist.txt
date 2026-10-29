@@ -1,0 +1,9 @@
+# DoH 观察名单：想试的新上游丢这里，每轮扫描顺带探测。
+# 连续 2 轮可用会自动收编进对应候选池，并从本名单移除；一直不通的留着不碍事。
+# 每行格式: <DoH地址> [bootstrap IP]
+#   可选前缀 @local / @remote 强制指定侧（国内/国外）；
+#   不写则按探测连接 IP 的归属自动分侧（国内段进国内池，其余进国外池）。
+#   bootstrap IP 可选：写上后直连该 IP，避免域名被污染时解析失败。
+# 示例（去掉行首 # 生效）：
+# @remote https://dns.example.com/dns-query
+# https://dns.adguard-dns.com/dns-query 94.140.14.14

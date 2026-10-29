@@ -98,6 +98,8 @@ python3 /app/scheduler/lib/subs.py init >/dev/null 2>&1 || true
 # 上游 DoH 候选清单：/data 缺文件时从镜像补齐，绝不覆盖用户已修改的版本
 [ -f "$DATA_DIR/doh_remote_candidates.txt" ] || cp /app/config/doh_remote_candidates.txt "$DATA_DIR/doh_remote_candidates.txt"
 [ -f "$DATA_DIR/doh_local_candidates.txt"  ] || cp /app/config/doh_local_candidates.txt  "$DATA_DIR/doh_local_candidates.txt"
+# 观察名单：用户往里丢想试的新上游，扫描探测可用后自动收编进候选池
+[ -f "$DATA_DIR/doh_watchlist.txt" ] || cp /app/config/doh_watchlist.txt "$DATA_DIR/doh_watchlist.txt"
 elog "DoH 候选清单: 国外 $(wc -l < "$DATA_DIR/doh_remote_candidates.txt" 2>/dev/null || echo 0) 行 / 国内 $(wc -l < "$DATA_DIR/doh_local_candidates.txt" 2>/dev/null || echo 0) 行（可改 /data 下文件增删）"
 # 老清单里可能留着写错的 DoH 地址（把普通 DNS 的 IP 当成 DoH 端点），
 # 这种条目每次探测都白跑、页面上还挂着「不通」。启动时统一修一次。

@@ -315,6 +315,7 @@ mosdns 不监听清单文件变化，更新后需重载进程（约 1 秒）。�
 |---|---|
 | `/data/doh_remote_candidates.txt` | 国外 DoH 候选（强制走国外解析时使用） |
 | `/data/doh_local_candidates.txt` | 国内 DoH 候选（国内域名解析） |
+| `/data/doh_watchlist.txt` | 观察名单：想试的新上游丢这里，探测可用后自动收编 |
 
 每行格式为 `<DoH地址> [连接 IP]`，`#` 开头为注释：
 
@@ -327,6 +328,22 @@ https://dns.nextdns.io/dns-query 45.90.28.1
 - 探测与运行时使用同一方式（POST + `application/dns-message`），要求返回 `rcode=0` 且有答案。
 - 新增自定义上游：将地址写入对应文件并重启容器，启动探测会自动纳入。
 - 网络环境存在 SNI 嗅探时，已知 DoH 主机名会被拦截，需改用不在黑名单中的地址。
+
+### 观察名单（自动收编新上游）
+
+候选清单是固定的，扫描只在这些条目里挑。想试一个清单外的新 DoH 服务，
+把地址写进 `/data/doh_watchlist.txt` 即可，无需重启：
+
+```
+@remote https://dns.example.com/dns-query
+https://dns.adguard-dns.com/dns-query 94.140.14.14
+```
+
+- 行首 `@local` / `@remote` 强制指定测试侧（国内/国外）；不写则按探测连接 IP 的归属自动分侧
+  （落在国内 IP 段库的进国内池，其余进国外池——DoH 会应答任何域名，靠「哪侧通」分不出来）。
+- 定时扫描每轮顺带探测名单，**连续 2 轮可用**的自动写入对应候选池、从名单移除，
+  并与其它候选一起参与自动选用；一直不通的留在名单里，不影响任何东西。
+- 收编动作记录在扫描日志（`/data/pref.log`）与扫描结果的 `watch` 字段中。
 
 ### 控制台配置上游
 

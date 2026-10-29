@@ -15,6 +15,7 @@
 #   doh_watch.py scan [--force]   扫描（默认按 settings.doh_scan_min 限频）
 #   doh_watch.py status           打印上次扫描结果
 # ============================================================
+import ipaddress
 import json
 import os
 import sys
@@ -31,6 +32,8 @@ POOL = {
     "local": os.path.join(DATA_DIR, "doh_local_candidates.txt"),
     "remote": os.path.join(DATA_DIR, "doh_remote_candidates.txt"),
 }
+WATCH = os.path.join(DATA_DIR, "doh_watchlist.txt")
+PROMOTE_AFTER = 2   # 连续可用几轮才收编进候选池
 QNAME = {"local": "www.baidu.com", "remote": "www.google.com"}
 LABEL = {"local": "国内", "remote": "国外"}
 _here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -115,6 +118,153 @@ def sync_pool(k):
         except Exception as e:
             _log("候选补充写不进 %s：%s" % (POOL[k], e))
     return lines + added, len(added)
+
+
+# ---- 观察名单：新上游的「转正」通道 ----
+# 用户把听说的新 DoH 地址丢进 /data/doh_watchlist.txt，每轮扫描顺带探测：
+# 连续 PROMOTE_AFTER 轮可用就自动写进对应候选池（并参与本轮选用），
+# 一直不通的留在名单里不碍事。池子边界由此变成「可生长」的：
+# 候选池里没有的服务，也有一条不用改配置、不用重启的进院子的路。
+
+def read_watchlist():
+    out = []
+    try:
+        with open(WATCH, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                ln = ln.split("#", 1)[0].strip()
+                if ln:
+                    out.append(ln)
+    except Exception:
+        pass
+    return dc.normalize_pool(out)
+
+
+def _watch_split(line):
+    """行首 @local / @remote 指定侧；不写就按探测连接 IP 的归属自动分侧。"""
+    parts = str(line).split(None, 1)
+    if parts and parts[0] in ("@local", "@remote"):
+        return parts[0][1:], (parts[1].strip() if len(parts) > 1 else "")
+    return "", str(line).strip()
+
+
+_CN_NETS = None
+
+
+def _is_cn_ip(ip):
+    """连接 IP 落在国内段库（china_ip.txt）里才算国内上游。
+
+    为什么不靠「哪侧探测通了」分侧：正常 DoH 会应答任何域名，
+    阿里查 google 也返回 200——按通不通分，国内服务全被收进国外池，
+    国外域名就拿到污染答案了。IP 归属才是唯一可靠信号。
+    """
+    global _CN_NETS
+    if _CN_NETS is None:
+        nets = []
+        try:
+            with open(os.path.join(DATA_DIR, "china_ip.txt"), encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    ln = ln.strip()
+                    if ln and not ln.startswith("#"):
+                        try:
+                            nets.append(ipaddress.ip_network(ln, strict=False))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        _CN_NETS = nets
+    try:
+        a = ipaddress.ip_address(str(ip or "").strip("[]"))
+    except Exception:
+        return False
+    return any(a in n for n in _CN_NETS)
+
+
+def process_watchlist(pools, alive, prev):
+    """探测观察名单，够格的收编进候选池。返回 (收编记录, 计数状态)。"""
+    wlines = read_watchlist()
+    if not wlines:
+        return [], {}
+    raw_state = prev.get("watch_ok") if isinstance(prev, dict) else None
+    wst = dict(raw_state) if isinstance(raw_state, dict) else {}
+    entries = []
+    for raw in wlines:
+        side, rest = _watch_split(raw)
+        if rest:
+            entries.append((raw, side, rest))
+    if not entries:
+        return []
+
+    # 探测：连通性跟 qname 无关（DoH 都会应答），按侧分组各探一次即可
+    by_q = {}
+    for _raw, side, rest in entries:
+        by_q.setdefault(QNAME[side] if side else dp.pick_qname([rest], "www.baidu.com"), []).append(rest)
+    wres = {}
+    for qn, lines_s in by_q.items():
+        for r in dp.probe_many(lines_s, qname=qn, timeout=5, workers=8):
+            wres[r["line"]] = r
+
+    promoted, kept = [], []
+    pool_urls = {k: {_url(x) for x in pools[k]} for k in pools}
+    changed = False
+    for raw, side, rest in entries:
+        r = wres.get(rest)
+        if not r or not r.get("ok"):
+            wst[raw] = 0
+            kept.append(raw)
+            continue
+        if not side:
+            # 未指定侧：按实际连接 IP 的归属分——国内段进国内池，其余进国外池
+            side = "local" if _is_cn_ip(r.get("ip")) else "remote"
+        cand = side
+        # 候选池里已有同 URL 的条目 → 无需收编，移出名单即可
+        if _url(rest) in pool_urls[cand]:
+            wst.pop(raw, None)
+            promoted.append({"side": cand, "line": rest, "ms": r["ms"], "ip": r.get("ip", ""),
+                             "note": "已在候选池，移出观察名单"})
+            changed = True
+            continue
+        n = wst.get(raw, 0) + 1
+        if n < PROMOTE_AFTER:
+            wst[raw] = n
+            kept.append(raw)
+            _log("观察名单 %s 可用 %d/%d（%d ms），再观察一轮" % (rest, n, PROMOTE_AFTER, r["ms"]))
+            continue
+        # 转正：写进候选池，并并入本轮可用集合参与选用
+        try:
+            with open(POOL[cand], "a", encoding="utf-8") as f:
+                f.write("\n# 以下由观察名单收编（%s）\n%s\n" % (time.strftime("%Y-%m-%d"), rest))
+            pool_urls[cand].add(_url(rest))
+            pools[cand].append(rest)
+            alive[cand].append({"line": rest, "ok": True, "ms": r["ms"],
+                                "ip": r.get("ip", ""), "err": ""})
+            alive[cand].sort(key=lambda x: x["ms"])
+            wst.pop(raw, None)
+            promoted.append({"side": cand, "line": rest, "ms": r["ms"], "ip": r.get("ip", ""),
+                             "note": "已收编进候选池"})
+            changed = True
+            _log("观察名单收编：%s -> %s 候选池（%d ms）" % (rest, LABEL[cand], r["ms"]))
+        except Exception as e:
+            _log("观察名单收编失败（%s）：%s" % (rest, e))
+            kept.append(raw)
+
+    if changed:
+        # 重写观察名单：注释原样保留，条目只留未收编的
+        try:
+            comments = []
+            with open(WATCH, encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    if ln.strip() and not ln.split("#", 1)[0].strip():
+                        comments.append(ln.rstrip("\n"))
+            tmp = WATCH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for c in comments:
+                    f.write(c + "\n")
+                if kept:
+                    f.write("\n".join(kept) + "\n")
+            os.replace(tmp, WATCH)
+        except Exception as e:
+            _log("观察名单重写失败：%s" % e)
+    return promoted, wst
 
 
 def plan_side(k, alive, current, keep):
@@ -237,6 +387,13 @@ def _scan_locked(force=False):
         results[k] = dp.probe_many(pools[k], qname=QNAME[k], timeout=5, workers=12)
     alive = {k: sorted([r for r in results[k] if r["ok"]], key=lambda r: r["ms"]) for k in ("local", "remote")}
 
+    # 观察名单：够格的新上游在这里转正（写候选池 + 并入本轮可用集合）
+    promoted, watch_ok = [], {}
+    try:
+        promoted, watch_ok = process_watchlist(pools, alive, prev)
+    except Exception as e:
+        _log("观察名单处理失败：%s" % e)
+
     cfg_text = dc.read_cfg()
     act = dc.active(cfg_text)
     manual = dc.is_manual()
@@ -283,6 +440,25 @@ def _scan_locked(force=False):
         summary += "，失效 %d 条" % len(dead)
     if manual and new_after:
         summary += "，发现 %d 条新可用" % len(new_after)
+    if promoted:
+        n = len([p for p in promoted if p["note"].startswith("已收编")])
+        m = len([p for p in promoted if p["note"].startswith("已在")])
+        if n:
+            summary += "，观察名单收编 %d 条" % n
+        if m:
+            summary += "，观察名单去重移除 %d 条" % m
+
+    # 收编写进了候选池，但本轮没有走 apply_entries（没换上游/手动模式），
+    # 测速入口就要在这里单独补渲染，否则新条目要到下次换上游才出现在配置里
+    if promoted and not applied and any(p["note"].startswith("已收编") for p in promoted):
+        try:
+            t = dc.read_cfg()
+            nt = dc.render_diag(t)
+            if nt and nt != t:
+                dc.write_cfg(nt)
+                dc.reload_engine()
+        except Exception as e:
+            _log("收编后重渲染失败：%s" % e)
 
     out = {
         "at": now,
@@ -298,6 +474,8 @@ def _scan_locked(force=False):
         "alive": {k: [{"line": r["line"], "ms": r["ms"], "ip": r["ip"]} for r in alive[k]] for k in alive},
         "active": act_after,
         "dead": dead,
+        "watch": promoted,
+        "watch_ok": watch_ok,
         "new": new_after if manual else new,
         # 不截断：界面上要能把整池摊开，让人看清「12 条候选只有 1 条通」
         # 到底是没探还是真探不到——只报前 8 条会被误读成「就试了这么几条」。
