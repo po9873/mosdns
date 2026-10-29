@@ -56,7 +56,9 @@ DIAG_PY = "/app/scheduler/lib/diag.py"
 PUSH_PY = "/app/scheduler/lib/push.py"
 LISTS_META = os.path.join(DATA_DIR, "lists_meta.json")
 
-ROUTES = ["cf", "google", "gt", "github", "ghcr", "tmdb", "imdb"]
+ROUTES = ["cf", "google", "gt", "github", "ghcr", "tmdb", "imdb", "auto"]
+# 每路卡片最多列几个域名（按实际访问量排序取前几个，其余折成「还有 N 个」）
+DOM_TOP = 8
 SESSIONS = {}
 SESSION_TTL = 7 * 24 * 3600
 LOCK = threading.Lock()
@@ -503,6 +505,41 @@ def _elapsed_ms(v):
         return None
 
 
+_HITS_CACHE = {"t": 0, "hits": {}}
+
+
+def domain_hits(max_lines=8000):
+    """各域名被查了多少次（给卡片按「访问量」排序用）。
+
+    自动发现会不断往 hosts 里加域名（google 那一路已经 50 多个），全列出来
+    卡片会长到没法看。用户真正关心的是「我实际在用的那几个」，所以按查询
+    次数取前几个。缓存 60 秒，别每刷一次面板就扫一遍日志。
+    """
+    now = time.time()
+    if now - _HITS_CACHE["t"] < 60 and _HITS_CACHE["hits"]:
+        return _HITS_CACHE["hits"]
+    hits = {}
+    try:
+        for ln in tail(MOSDNS_LOG, max_lines):
+            if '"qname"' not in ln and "query summary" not in ln:
+                continue
+            p = ln.find("{")
+            if p < 0:
+                continue
+            try:
+                obj = json.loads(ln[p:])
+            except Exception:
+                continue
+            q = obj.get("qname") or obj.get("QNAME") or ""
+            if q:
+                hits[q] = hits.get(q, 0) + 1
+    except Exception:
+        pass
+    _HITS_CACHE["t"] = now
+    _HITS_CACHE["hits"] = hits
+    return hits
+
+
 def read_qlog(limit=30, uniq=False, resolve=0):
     """从 mosdns 日志尾部解析 query_summary，返回最近若干条 + 命中统计。
 
@@ -553,6 +590,11 @@ def read_qlog(limit=30, uniq=False, resolve=0):
             # 之前用 rsplit(":") 会把这种地址截成 "::ffff"，这里只剥前缀。
             "client": cli,
         })
+    # 每个域名被查了多少次。去重后列表里每条只剩一次，不先算好，
+    # 点开「解析域名数」的明细就全是 ×1，等于没用。
+    cnt = {}
+    for x in items:
+        cnt[x["qname"]] = cnt.get(x["qname"], 0) + 1
     recent = items[-limit:][::-1]
     if uniq:
         # 从最新往回扫，同一个域名只留第一次遇到的那条（即最近一次查询）。
@@ -580,6 +622,12 @@ def read_qlog(limit=30, uniq=False, resolve=0):
             x["src"] = source_of(x["qname"], x["route_name"])
             ip, own = answer_of(x["qname"])
             x["ip"], x["owner"] = ip or "", own or ""
+    # 明细（点统计数字展开）要按「命中/没命中/缓存/失败」筛，这些标记得写在
+    # 每条记录上。以前只在 resolve 的前 N 条里补 pref，去重后列表里绝大多数
+    # 条目没有这个字段，点开就是空的——看着像点了没反应。
+    for x in recent:
+        x["cnt"] = cnt.get(x["qname"], 1)
+        x["pref"] = x["qname"] in pref
     hit = miss = 0
     hit_d, miss_d = set(), set()
     for x in items:
@@ -603,9 +651,192 @@ def read_qlog(limit=30, uniq=False, resolve=0):
         "pref_miss": miss,
         "pref_miss_domains": len(miss_d),
         "pref_total_domains": len(pref),
+        # 点「优选覆盖」那个数字时要列出到底写了哪些域名
+        "pref_list": sorted(pref)[:800],
         "cache_ms": CACHE_MS,
         "log_ok": bool(items),
     }
+
+
+def _rd_lines(p):
+    """读单列清单文件（每行一个域名），跳过空行和注释。"""
+    if not os.path.exists(p):
+        return []
+    out = []
+    try:
+        for ln in open(p, encoding="utf-8", errors="ignore"):
+            ln = ln.strip()
+            if ln and not ln.startswith("#"):
+                out.append(ln)
+    except Exception:
+        return []
+    return out
+
+
+def _rd_write(p, lines, header):
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(header + "\n")
+        for x in lines:
+            f.write(x + "\n")
+    os.replace(tmp, p)
+
+
+def route_domains_get(r):
+    """这一路 hosts 里现在写了哪些域名（连带各自的 IP），
+    外加面板上手动加的 / 手动删掉的清单。"""
+    if r not in ROUTES:
+        return {"error": "unknown route"}
+    doms = []
+    for ln in _rd_lines(os.path.join(PREF_DIR, "%s.hosts" % r)):
+        parts = ln.split()
+        if len(parts) >= 2:
+            doms.append({"d": parts[0], "ips": parts[1:]})
+    return {
+        "route": r,
+        "domains": doms,
+        "custom": _rd_lines(os.path.join(PREF_DIR, "%s.custom.txt" % r)),
+        "deny": _rd_deny(os.path.join(PREF_DIR, "%s.deny.txt" % r)),
+        "pin": _rd_pin(os.path.join(PREF_DIR, "%s.pin.txt" % r)),
+    }
+
+
+# 手动删掉一个域名，只是「这阵子别用它」，不是永久拉黑：
+# 冷却期一过，自动发现该收还得收（又在访问、又变慢，条件满足了就该管）。
+DENY_COOLDOWN = 12 * 3600
+
+
+def _rd_deny(p):
+    """已排除的域名 -> 到期时间。
+    ts > 0 且已过期 = 冷却结束，自动恢复（等于没删过）；
+    ts = 0 或没写 = 永久黑名单，只有手动移出才能回来。"""
+    now = int(time.time())
+    out = {}
+    for ln in _rd_lines(p):
+        parts = ln.split()
+        if not parts:
+            continue
+        d = parts[0]
+        try:
+            ts = int(parts[1]) if len(parts) > 1 else 0
+        except Exception:
+            ts = 0
+        if ts == 0 or ts > now:
+            out[d] = ts
+    return out
+
+
+def _rd_pin(p):
+    """用户固定下来的 IP：每行「域名 ip1 ip2 ...」。"""
+    out = {}
+    for ln in _rd_lines(p):
+        parts = ln.split()
+        if len(parts) >= 2:
+            out[parts[0]] = parts[1:]
+    return out
+
+
+def route_domains_post(body):
+    """增删改某一路的域名。
+    - 新加的写进 <route>.custom.txt
+    - 删掉的写进 <route>.deny.txt（否则下一轮会被自动发现又收回来）
+    - 改名 = 旧的进 deny、新的进 custom
+    - 手工指定的 IP 写进 <route>.pin.txt，之后不再跟着优选变
+    写完立刻后台重跑这一路，脚本会逐 IP 校验后重写 hosts。"""
+    r = str(body.get("route", "")).strip()
+    if r not in ROUTES:
+        return {"error": "unknown route"}
+    cust_p = os.path.join(PREF_DIR, "%s.custom.txt" % r)
+    deny_p = os.path.join(PREF_DIR, "%s.deny.txt" % r)
+    pin_p = os.path.join(PREF_DIR, "%s.pin.txt" % r)
+    custom = _rd_lines(cust_p)
+    deny = _rd_deny(deny_p)
+    pin = _rd_pin(pin_p)
+    now = int(time.time())
+    added, removed, renamed, pinned, banned = [], [], [], [], []
+
+    def norm(x):
+        return str(x).strip().lower().rstrip(".")
+
+    for raw in (body.get("add") or []):
+        d = norm(raw)
+        if not d or "." not in d or len(d) > 200 or "/" in d or " " in d:
+            continue
+        if d not in custom:
+            custom.append(d)
+            added.append(d)
+        deny.pop(d, None)
+    for raw in (body.get("undel") or []):
+        d = norm(raw)
+        if d:
+            deny.pop(d, None)
+    for raw in (body.get("del") or []):
+        d = norm(raw)
+        if not d:
+            continue
+        if d in custom:
+            custom.remove(d)
+        deny[d] = now + DENY_COOLDOWN
+        pin.pop(d, None)
+        removed.append(d)
+    for raw in (body.get("ban") or []):
+        # 永久拉黑：只有手动移出才回来，到期自动恢复不适用于这里。
+        d = norm(raw)
+        if not d:
+            continue
+        if d in custom:
+            custom.remove(d)
+        deny[d] = 0
+        pin.pop(d, None)
+        banned.append(d)
+    for old, new in (body.get("rename") or {}).items():
+        o, n = norm(old), norm(new)
+        if not o or not n or o == n or "." not in n or "/" in n or " " in n:
+            continue
+        if o in custom:
+            custom[custom.index(o)] = n
+        else:
+            # 自动发现 / 附加域名：旧的进冷却，新的以手动域名身份进来
+            deny[o] = now + DENY_COOLDOWN
+            if n not in custom:
+                custom.append(n)
+        deny.pop(n, None)
+        if o in pin:
+            pin[n] = pin.pop(o)
+        renamed.append([o, n])
+    for dom, val in (body.get("pin") or {}).items():
+        d = norm(dom)
+        if not d:
+            continue
+        ips = [x for x in str(val).replace(",", " ").split() if x]
+        if ips:
+            pin[d] = ips
+            pinned.append(d)
+        else:
+            pin.pop(d, None)
+    _rd_write(cust_p, custom,
+              "# 面板上手动加进这一路的域名（每行一个）。改完会自动重跑这一路，"
+              "逐个 IP 校验通过才写进 hosts。")
+    _rd_write(deny_p, ["%s %d" % (k, v) for k, v in deny.items()],
+              "# 面板上排除的域名（每行「域名 到期时间戳」）。\n"
+              "# 时间戳 > 0：冷却期，到期后条件满足会被重新发现；\n"
+              "# 时间戳 = 0：永久黑名单，只有手动移出才回来。")
+    _rd_write(pin_p, ["%s %s" % (k, " ".join(v)) for k, v in pin.items()],
+              "# 面板上固定下来的 IP（每行「域名 IP...」）。写了就以这里为准，不再跟着优选变。")
+    started = False
+    script = "/app/scheduler/%s_pref.sh" % r
+    if os.path.exists(script):
+        env = dict(os.environ)
+        env["PREF_FORCE"] = "1"
+        try:
+            subprocess.Popen(["/bin/sh", script], env=env,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            started = True
+        except Exception:
+            started = False
+    return {"ok": True, "route": r, "added": added, "removed": removed,
+            "renamed": renamed, "pinned": pinned, "banned": banned, "rerun": started,
+            "custom": custom, "deny": deny, "pin": pin}
 
 
 def mosdns_api(path, timeout=3):
@@ -689,7 +920,7 @@ def read_results():
     out = {}
     for r in ROUTES:
         p = os.path.join(PREF_DIR, "%s.hosts" % r)
-        entry = {"domain": "", "domains": [], "ip": "", "ips": [], "mtime": 0, "dropped": []}
+        entry = {"domain": "", "domains": [], "ip": "", "ips": [], "mtime": 0, "dropped": [], "dom_ips": {}}
         lat = {}
         try:
             with open(os.path.join(PREF_DIR, "%s.meta" % r)) as f:
@@ -725,6 +956,11 @@ def read_results():
                     # raw/objects…）。只在第一行取 IP 就 break 的话，界面永远只显示
                     # 一个域名，用户根本看不出这一路到底覆盖了什么。
                     entry["domains"].append(parts[0])
+                    # 每个域名各自写了哪些 IP 也要留一份。ghcr 这类「主域名 + 数据
+                    # 面域名」是两批完全不同的 IP（ghcr.io 走 Azure，拉镜像层走
+                    # Fastly），只显示第一行 IP 的话，界面上根本看不出数据面到底换
+                    # 到哪一段去了——用户会以为换段没生效。
+                    entry.setdefault("dom_ips", {})[parts[0]] = [x for x in parts[1:] if is_ip(x)]
                     if not first:
                         continue
                     first = False
@@ -760,6 +996,26 @@ def read_results():
             entry["mtime"] = int(os.path.getmtime(p))
         except Exception:
             pass
+        # 域名按「实际访问量」取前几个：自动发现会一路加域名（google 那路已经
+        # 50+ 个），全列出来卡片会长得没法看，而排在后面的多数是顺带映射的、
+        # 用户根本没访问过。主域名永远排第一，其余按被查次数从多到少。
+        doms = entry["domains"]
+        # auto（自动治理）不截断：那一路的域名就是「被改过的清单」，用户要能
+        # 一眼看全到底动了哪些；其余路按访问量取前几个，免得卡片越加越长。
+        if r == "auto":
+            try:
+                with open(os.path.join(PREF_DIR, "auto_changes.json"), encoding="utf-8") as f:
+                    ch = json.load(f)
+                entry["changes"] = list(reversed(ch))[:20]
+            except Exception:
+                entry["changes"] = []
+        if r != "auto" and len(doms) > DOM_TOP:
+            main = entry["domain"]
+            hits = domain_hits()
+            rest = [d for d in doms if d != main]
+            rest.sort(key=lambda d: (-hits.get(d, 0), d))
+            entry["domains"] = ([main] if main in doms else []) + rest[: DOM_TOP - 1]
+            entry["domains_hidden"] = len(doms) - len(entry["domains"])
         out[r] = entry
         # 最近一轮的判定结果（ok / degraded / no_valid…），界面据此标「降级使用」
         st = read_json(os.path.join(PREF_DIR, "%s.state.json" % r), None)
@@ -984,13 +1240,24 @@ def scan_detail(d):
     for k in ("local", "remote"):
         active_lines = [str(x).strip() for x in (act.get(k) or []) if str(x).strip()]
         active_urls = {x.split()[0] for x in active_lines}
+        # 同一条上游在配置里可能写成 IP 直连（https://223.5.5.5/dns-query），
+        # 候选清单里写的是它的域名（https://dns.alidns.com/dns-query 223.5.5.5）。
+        # 只比 URL 的话，「其实正在用的那条」会被判成没在用——看着就像扫描
+        # 明明测到更快的却没换过去，其实早就换了。所以 IP 也要比。
+        active_ips = set()
+        for x in active_lines:
+            parts = x.split()
+            if len(parts) > 1:
+                active_ips.add(parts[1])
         rows, seen = [], set()
         for r in alive.get(k) or []:
             line = str(r.get("line") or "").strip()
             if not line or line in seen:
                 continue
             seen.add(line)
-            is_act = line in active_lines or (line.split()[0] in active_urls)
+            lp = line.split()
+            ip = str(r.get("ip") or "").strip() or (lp[1] if len(lp) > 1 else "")
+            is_act = line in active_lines or (lp[0] in active_urls) or bool(ip and ip in active_ips)
             rows.append({"line": line, "state": "active" if is_act else "alive",
                          "ms": int(r.get("ms") or 0), "ip": r.get("ip") or "", "err": ""})
         # 在用但没出现在探测结果里的（配置文件里手写的、扫描前刚改的）兜底
@@ -1535,6 +1802,48 @@ def upstreams_payload():
     return up
 
 
+_MS_CACHE = {"mt": 0, "data": {}}
+
+
+def _scan_ms_map():
+    """最近一次上游扫描测到的延时：{(url, ip): ms}，另有 url 兜底。
+
+    概况页「引擎正在用」那几行以前只有名字没有快慢，看不出在用的那条
+    是不是其实已经慢了。这里把扫描结果按地址配回去，界面上就能直接写
+    「13ms」——是不是该换、换了有没有变好，一眼能看见。
+    """
+    p = os.path.join(DATA_DIR, "doh_scan.json")
+    try:
+        mt = os.path.getmtime(p)
+    except Exception:
+        return {}
+    if _MS_CACHE["data"] and _MS_CACHE["mt"] == mt:
+        return _MS_CACHE["data"]
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return _MS_CACHE["data"]
+    out = {}
+    for side in ("local", "remote"):
+        m = {}
+        for r in ((d.get("alive") or {}).get(side) or []):
+            parts = str(r.get("line") or "").split()
+            url = parts[0] if parts else ""
+            ip = r.get("ip") or (parts[1] if len(parts) > 1 else "")
+            try:
+                ms = int(r.get("ms") or 0)
+            except Exception:
+                ms = 0
+            if not (url and ms):
+                continue
+            m.setdefault((url, ip), ms)
+            m.setdefault((url, ""), ms)
+        out[side] = m
+    _MS_CACHE.update({"mt": mt, "data": out})
+    return out
+
+
 def read_upstreams():
     """从引擎实际加载的 config.yaml 里读出 DoH 上游。
 
@@ -1567,6 +1876,7 @@ def read_upstreams():
             cur["dial"] = m.group(1)
     # 补上「主机名 / 直连 IP」两种展示形式：IP 形式的 addr 主机就是 IP，
     # 域名形式要靠 dial_addr 才知道连的是哪个 IP。
+    msmap = _scan_ms_map()
     for key in ("local", "remote"):
         for u in res[key]:
             m = re.match(r"https?://([^/]+)", u["addr"])
@@ -1575,6 +1885,9 @@ def read_upstreams():
             u["ipv6"] = ":" in u["ip"] and not re.match(r"^\d+\.\d+\.\d+\.\d+$", u["ip"])
             # 概况页每行右侧要写清「这是哪家的」：按主机名 + 落地 IP 认，认不出就留主机名
             u["provider"] = provider_of(u["addr"] + " " + u["ip"])[0]
+            # 上次扫描实测的延时：先按「地址+落地 IP」精确配，配不上再按地址配
+            mm = msmap.get(key) or {}
+            u["ms"] = int(mm.get((u["addr"], u["ip"])) or mm.get((u["addr"], "")) or 0)
     return res
 
 
@@ -1786,6 +2099,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, sources_status())
             if path == "/api/push/preview":
                 return self._send(200, {"text": push_brief()})
+            if path == "/api/route/domains":
+                q = parse_qs(u.query)
+                return self._send(200, route_domains_get((q.get("r") or [""])[0].strip()))
             return self._send(404, {"error": "not found"})
 
         return self._send(404, {"error": "not found"})
@@ -2020,6 +2336,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sources/prune":
             r = run_subs(["prune"], timeout=60)
             return self._send(200, r)
+
+        if path == "/api/route/domains":
+            return self._send(200, route_domains_post(self._body()))
 
         if path == "/api/sources/gc":
             # 立即清理：连续失败到阈值的第三方源直接删掉，同时清掉它没验证过的 IP

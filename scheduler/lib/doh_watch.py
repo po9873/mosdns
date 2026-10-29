@@ -301,8 +301,12 @@ def plan_side(k, alive, current, keep):
     """决定这一侧最终用哪几条。
 
     规则：
-      1) 现在正用着、而且仍然通的，原样留着（连 dial_addr 一起）——避免每轮
-         扫描都换一遍，换一次就是一次重载，DNS 会有极短抖动；
+      0) 延时优先：在用的逐条体检。只要候选池里有一条明显更快（快 30ms 以上
+         或快 20% 以上），就把这条慢的换掉——只看「全局最快 vs 在用最快」
+         是不够的：在用三条里只要夹着一条 241ms 的，就够拖慢整轮解析
+         （同一个 IP 换成域名写法常常就从 241ms 掉到 14ms，那种最该换）；
+      1) 体检没换掉的，原样留着（连 dial_addr 一起）——换一次就是一次重载，
+         在用的本来就是最快的那批时不要没事抖一下；
       2) 第一轮每个服务只取最快的一个入口，先保证「多家」而不是「一家多 IP」；
       3) 还不够 keep 条，再拿同一服务的其它 anycast 入口补（这些是真冗余：
          某条路由被掐时另一条往往还通，对只有一家能用的网络很关键）；
@@ -313,38 +317,79 @@ def plan_side(k, alive, current, keep):
         return None
     by_line = {r["line"]: r for r in alive}
     by_url = {_url(r["line"]): r for r in alive}
-    picked, seen_url, seen_line = [], set(), set()
+    picked = []
 
-    def take(line):
-        picked.append(line)
-        seen_line.add(line)
-        seen_url.add(_url(line))
+    def seen_line():
+        return {x["line"] for x in picked}
+
+    def seen_url():
+        return {_url(x["line"]) for x in picked}
+
+    def take(r):
+        picked.append(r)
+
+    # 正在用、而且这轮还通的（按整行找，找不到再按 URL 找：配置里那条
+    # 可能带着 dial_addr，候选里写的是不带 IP 的写法）
+    cur_alive = []
+    for line in current:
+        r = by_line.get(line) or by_url.get(_url(line) or "")
+        if r and all(r["line"] != x["line"] for x in cur_alive):
+            cur_alive.append(r)
+    cur_lines = {x["line"] for x in cur_alive}
+
+    # 先按延时占位：快的先占位，keep 装不下时慢的自然落榜
+    for r in sorted(cur_alive, key=lambda x: x["ms"]):
+        if len(picked) >= keep:
+            break
+        take(r)
+
+    def free_best():
+        """候选池里还没被挑走的最快一条；优先挑「本来没在用」的，
+        免得把 241ms 那条换成一条已经在用的、白换一次。"""
+        sl, su = seen_line(), seen_url()
+        c = [x for x in alive
+             if x["line"] not in sl and _url(x["line"]) not in su and x["line"] not in cur_lines]
+        if not c:
+            c = [x for x in alive if x["line"] not in sl and _url(x["line"]) not in su]
+        return min(c, key=lambda x: x["ms"]) if c else None
+
+    # 0) 延时优先：慢的先挑人，免得快的先把候选池里最快的占走
+    for r in sorted(picked, key=lambda x: x["ms"], reverse=True):
+        c = free_best()
+        if not c:
+            break
+        gain = r["ms"] - c["ms"]
+        if gain >= 30 or c["ms"] <= r["ms"] * 0.8:
+            _log("up: %s侧 %s 在用 %.0fms 偏慢，换成 %s（%.0fms，快 %.0fms）"
+                 % (LABEL.get(k, k), _url(r["line"]), r["ms"], _url(c["line"]), c["ms"], gain))
+            picked[picked.index(r)] = c
 
     # 1) 在用的、仍通的，留着
     for line in current:
-        u = _url(line)
-        if not u or u in seen_url:
+        if len(picked) >= keep:
+            break
+        r = by_line.get(line) or by_url.get(_url(line) or "")
+        if not r:
             continue
-        if line in by_line:
-            take(line)
-        elif u in by_url:
-            take(by_url[u]["line"])
+        if r["line"] in seen_line() or _url(r["line"]) in seen_url():
+            continue
+        take(r)
 
     # 2) 先按「一家一条」补齐
     for r in alive:
         if len(picked) >= keep:
             break
-        if _url(r["line"]) not in seen_url and r["line"] not in seen_line:
-            take(r["line"])
+        if _url(r["line"]) not in seen_url() and r["line"] not in seen_line():
+            take(r)
 
     # 3) 还不够，再用同服务的其它入口补冗余
     for r in alive:
         if len(picked) >= keep:
             break
-        if r["line"] not in seen_line:
-            take(r["line"])
+        if r["line"] not in seen_line():
+            take(r)
 
-    return picked[:keep]
+    return [r["line"] for r in picked[:keep]]
 
 
 def scan(force=False):
@@ -399,6 +444,15 @@ def _scan_locked(force=False):
                 "at": prev.get("at"), "summary": prev.get("summary", "")}
 
     t0 = time.time()
+    # 先自己找一遍新上游：内置清单只是种子，每轮重新解析服务商域名、试各端点
+    # 路径，能正确应答 DNS 的就写进观察名单，后面的 process_watchlist 照老规矩
+    # 「连续两轮可用才收编」。服务商换 IP / 加端点不用人管。
+    try:
+        import doh_discover
+        doh_discover.run_once(force=force)
+    except Exception as e:
+        _log("doh: 自动发现这轮没跑起来（%s），不影响已配好的上游" % e)
+
     pools, seeded = {}, {}
     for k in ("local", "remote"):
         pools[k], seeded[k] = sync_pool(k)

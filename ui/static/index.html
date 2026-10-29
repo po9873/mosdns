@@ -210,13 +210,16 @@
     font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .rline .ago{flex:0 0 4.9em;text-align:right;color:var(--muted);white-space:nowrap;font-size:15px}
   /* 上游那栏：左边「国内/国外」标签定宽，右边地址列表从同一条竖线开始 */
-  .uline{display:grid;grid-template-columns:3.4em minmax(0,1fr) max-content;gap:10px;font-size:15px;line-height:1.9;align-items:baseline}
+  .uline{display:grid;grid-template-columns:3.4em minmax(0,1fr) max-content max-content;gap:10px;font-size:15px;line-height:1.9;align-items:baseline}
   .uline .upv{
     justify-self:end;align-self:center;font-size:12.5px;line-height:1.7;white-space:nowrap;
     color:var(--muted);padding:0 8px;border-radius:999px;
     background:rgba(255,255,255,.06);border:1px solid var(--glass-brd,var(--border));
   }
   html[data-theme="light"] .uline .upv{background:rgba(255,255,255,.75)}
+  /* 延时：跟着「引擎正在用」那几行走，不写快慢就看不出该不该换 */
+  .uline .ums{justify-self:end;align-self:center;font-size:12.5px;line-height:1.7;white-space:nowrap;
+    color:var(--muted);font-variant-numeric:tabular-nums}
   .uline .uk{color:var(--muted)}
   .uline .addr{min-width:0;display:flex;align-items:baseline;gap:8px}
   .uline .addr b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:400;color:var(--text);
@@ -365,6 +368,38 @@
     color:var(--text);word-break:break-all;
   }
   .route-card .rc-d.primary{color:var(--text)}
+  /* 「还有 N 个」：比域名再淡一档，明确它不是可点的条目 */
+  .route-card .rc-d.rc-dmore{color:var(--muted);font-size:12px}
+  /* 自动治理的改动记录：域名 + 原IP → 新IP，单独一档颜色区别于普通域名 */
+  .route-card .rc-d.rc-dip-chg{color:var(--muted);font-size:11.5px;opacity:.95}
+  /* 域名后面挂的「这一行单独用的 IP」：比域名小一号、颜色淡一档，
+     一眼能看出「这个域名没跟主域名共用那批 IP」。 */
+  .route-card .rc-editbtn{display:inline-block;margin-top:7px;font-size:12px;color:var(--muted);
+    text-decoration:none;border-bottom:1px dashed var(--border);cursor:pointer}
+  .route-card .rc-editbtn:hover{color:var(--text);border-bottom-style:solid}
+  .route-card .rc-edbox{display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+  .route-card .rc-ed-head{font-size:12px;color:var(--muted);margin-bottom:5px}
+  .route-card .rc-ed-list{max-height:190px;overflow:auto}
+  .route-card .rc-ed-row{display:flex;justify-content:space-between;align-items:center;gap:8px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.9;
+    color:var(--text);word-break:break-all}
+  .route-card .rc-ed-n{flex:1;min-width:0}
+  .route-card .rc-ed-del{flex:none;font-size:11.5px;color:var(--muted)}
+  .route-card .rc-ed-del:hover{color:#e06c75}
+  .route-card .rc-ed-add{display:flex;gap:6px;margin-top:7px}
+  .route-card .rc-ed-in{flex:1;min-width:0;background:var(--panel2);color:var(--text);
+    border:1px solid var(--border);border-radius:6px;font-size:12px;padding:4px 7px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .route-card .rc-ed-in:focus{outline:none;border-color:var(--accent,var(--muted))}
+  .route-card .rc-ed-ip{flex:1.4;color:var(--muted)}
+  .route-card .rc-ed-node{cursor:default;opacity:.6}
+  .route-card .rc-ed-ban{color:#c6787e}
+  .route-card .rc-ed-list2{max-height:110px;overflow:auto;margin-top:2px}
+  .route-card .rc-ed-add input{flex:1;min-width:0;background:var(--panel2);color:var(--text);
+    border:1px solid var(--border);border-radius:6px;font-size:12px;padding:5px 8px}
+  .route-card .rc-ed-tip{font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.6}
+  .route-card .rc-dip{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:12px;line-height:1.5;letter-spacing:.2px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* 推送正文预览：原样展示会发出去的那段文本 */
   .pushprev{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:8px 11px}
   .pushprev summary{font-size:12.5px;color:var(--muted);cursor:pointer;outline:none}
@@ -496,6 +531,17 @@
   .qstat .s span{display:block;font-size:12px;color:var(--muted)}
   .qstat .s b{display:block;font-size:18px;margin-top:2px;font-weight:600}
   .qstat .s b small{font-size:12px;color:var(--muted);font-weight:400}
+  /* 数字可点：点了要能看出「这个数是怎么来的」 */
+  .qstat .s.clk{cursor:pointer;user-select:none;transition:border-color .12s,background .12s}
+  .qstat .s.clk:hover{border-color:var(--accent,var(--muted))}
+  .qstat .s.clk:active{transform:translateY(1px)}
+  /* 点中的那个数字要高亮，否则看不出「到底有没有点上」 */
+  .qstat .s.clk.on{border-color:var(--accent,var(--muted));background:var(--panel2);box-shadow:inset 0 0 0 1px var(--accent,var(--muted))}
+  .qstat-detail{margin:0 0 10px;border:1px solid var(--border);border-radius:9px;background:var(--panel2);padding:8px 11px}
+  .qstat-detail .qd-head{font-size:12.5px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+  .qstat-detail .qd-close{font-size:12px}
+  .qstat-detail .qd-list{max-height:220px;overflow:auto;margin-top:6px}
+  .qstat-detail .qd-row{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.7;color:var(--text);word-break:break-all}
   .q-live{max-height:340px;overflow-y:auto;overflow-x:auto;border:1px solid var(--border);border-radius:10px}
   .q-live table{width:100%;border-collapse:collapse;font-size:13.5px}
   .q-live th,.q-live td{padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:left}
@@ -1059,10 +1105,9 @@
           <div id="resolveResult"></div>
 
           <div class="qstat" id="qStat"></div>
+          <div class="qstat-detail" id="qStatDetail" style="display:none"></div>
           <div id="qLive" class="q-live"><div class="empty">等待引擎处理查询…</div></div>
         </div>
-
-        <div class="grid route" id="routeCards" style="margin-top:14px"></div>
 
         <div class="card" style="margin-top:16px">
           <div class="flexhead">
@@ -1078,6 +1123,9 @@
           <p class="hint">缓存按 LRU 自动淘汰，条数不会超过上限（<span id="cacheCap">-</span> 条，可用 PREF_CACHE_SIZE 调整）；
             清空后后续查询会重新向上游解析。查询日志超过 32MB 会自动只保留尾部 8MB。</p>
         </div>
+
+        <div class="grid route" id="routeCards" style="margin-top:14px"></div>
+
       </section>
 
       <!-- 日志 -->
@@ -1573,8 +1621,8 @@
 <script>
 (function(){
   "use strict";
-  var ROUTES = ["cf","google","gt","github","ghcr","tmdb","imdb"];
-  var ROUTE_LABEL = {cf:"Cloudflare 优选",google:"Google 搜索",gt:"Google 翻译",github:"GitHub 访问",ghcr:"ghcr 镜像仓库",tmdb:"TMDB 影视库",imdb:"IMDb 影视库"};
+  var ROUTES = ["cf","google","gt","github","ghcr","tmdb","imdb","auto"];
+  var ROUTE_LABEL = {cf:"Cloudflare 优选",google:"Google 搜索",gt:"Google 翻译",github:"GitHub 访问",ghcr:"ghcr 镜像仓库",tmdb:"TMDB 影视库",imdb:"IMDb 影视库",auto:"自动治理"};
   /* 每路的「系列」定义：这一路优选出来的 IP 只给这些域名用，不是通用的 */
   var ROUTE_META = {
     cf:     {series:"cf",    domain:"cloudflare.com",          use:"所有走 Cloudflare CDN 的站点"},
@@ -1791,6 +1839,180 @@
             : (it && it.ip ? [{ip: it.ip, family: it.ip.indexOf(":") >= 0 ? "v6" : "v4", latency: null}] : []);
     return raw.filter(function(x){ return x && x.ip && (x.latency != null || x.speed != null); });
   }
+  /* ---------- 每一路的域名清单：增 / 删 / 改名 / 改 IP ---------- */
+  function domEditorRows(box){ return $$(".rc-ed-row", box); }
+
+  function postDomains(r, payload, box, after){
+    payload.route = r;
+    var tip = box.querySelector(".rc-ed-tip");
+    if (tip) tip.textContent = "保存中…";
+    api("/api/route/domains", {method: "POST", body: JSON.stringify(payload)}).then(function(res){
+      if (res && res.error) {
+        if (tip) tip.textContent = "保存失败：" + res.error;
+        return;
+      }
+      if (tip) tip.textContent = "已保存，正在重跑这一路（1～2 分钟内生效）…";
+      if (typeof refreshAll === "function") { setTimeout(refreshAll, 1500); }
+      setTimeout(function(){
+        api("/api/route/domains?r=" + r).then(function(d2){
+          renderDomainEditor(r, box, d2);
+          var t2 = box.querySelector(".rc-ed-tip");
+          if (t2) t2.textContent = "已生效。";
+        });
+      }, 25000);
+      if (after) after(res);
+    }).catch(function(e){
+      if (tip) tip.textContent = "保存失败：" + (e && e.message ? e.message : e);
+    });
+  }
+
+  function renderDomainEditor(r, box, d){
+    d = d || {};
+    var doms = d.domains || [];
+    var pin = d.pin || {};
+    var deny = d.deny || {};
+    var main = doms.length ? doms[0].d : "";
+    box.innerHTML = "";
+
+    var head = document.createElement("div"); head.className = "rc-ed-head";
+    head.textContent = "这一路共 " + doms.length + " 个域名（域名和 IP 都能直接改）";
+    box.appendChild(head);
+
+    var list = document.createElement("div"); list.className = "rc-ed-list";
+    doms.forEach(function(x){
+      var row = document.createElement("div"); row.className = "rc-ed-row";
+      row.setAttribute("data-orig", x.d);
+      var ni = document.createElement("input"); ni.className = "rc-ed-in";
+      ni.type = "text"; ni.value = x.d;
+      if (x.d === main) { ni.readOnly = true; ni.title = "主域名：这一路的 IP 就是为它选的，改名等于换一整路"; }
+      var ii = document.createElement("input"); ii.className = "rc-ed-in rc-ed-ip";
+      ii.type = "text";
+      ii.value = (pin[x.d] || x.ips || []).join(" ");
+      ii.title = "这个域名现在用的 IP，空格分隔。改了就以你填的为准，不再跟着优选变";
+      var del = document.createElement("a");
+      del.className = "rc-ed-del"; del.href = "#"; del.textContent = "删除";
+      var ban = document.createElement("a");
+      ban.className = "rc-ed-del rc-ed-ban"; ban.href = "#"; ban.textContent = "拉黑";
+      if (x.d === main) {
+        del.textContent = "主域名";
+        del.className = "rc-ed-del rc-ed-node";
+        del.title = "主域名不能删";
+        del.onclick = function(e){ e.preventDefault(); };
+        ban.style.display = "none";
+      } else {
+        del.title = "12 小时内不再自动收录，到期后条件满足会被重新发现";
+        del.onclick = function(e){
+          e.preventDefault();
+          if (!confirm("把 " + x.d + " 从这一路删掉？\n\n删掉后 12 小时内不再自动收录；"
+                       + "到期后如果它又满足条件（又在被访问、又变慢），照样会被重新发现。\n\n"
+                       + "要彻底不回来，请用「拉黑」。")) return;
+          postDomains(r, {del: [x.d]}, box);
+        };
+        ban.title = "永久拉黑：不再自动收录，只有手动移出才回来";
+        ban.onclick = function(e){
+          e.preventDefault();
+          if (!confirm("把 " + x.d + " 永久拉黑？\n\n它不会再被自动发现收回来，"
+                       + "除非你在下面的黑名单里手动移出。")) return;
+          postDomains(r, {ban: [x.d]}, box);
+        };
+      }
+      row.appendChild(ni); row.appendChild(ii); row.appendChild(del); row.appendChild(ban);
+      list.appendChild(row);
+    });
+    box.appendChild(list);
+
+    var saveRow = document.createElement("div"); saveRow.className = "rc-ed-add";
+    var sb = document.createElement("button"); sb.className = "btn"; sb.textContent = "保存修改";
+    sb.onclick = function(){
+      var rename = {}, setpin = {}, n = 0;
+      $$(".rc-ed-row", box).forEach(function(row){
+        var orig = row.getAttribute("data-orig");
+        var ins = row.getElementsByTagName("input");
+        if (ins.length < 2) return;
+        var nv = (ins[0].value || "").trim().toLowerCase();
+        var iv = (ins[1].value || "").trim();
+        if (nv && nv !== orig) { rename[orig] = nv; n++; }
+        var oldv = (pin[orig] || []).join(" ");
+        if (!oldv) {
+          var cur = null;
+          (d.domains || []).forEach(function(x){ if (x.d === orig) cur = x; });
+          oldv = ((cur && cur.ips) || []).join(" ");
+        }
+        if (iv !== oldv) { setpin[orig] = iv; n++; }
+      });
+      if (!n) { var t = box.querySelector(".rc-ed-tip"); if (t) t.textContent = "没改任何东西。"; return; }
+      postDomains(r, {rename: rename, pin: setpin}, box);
+    };
+    saveRow.appendChild(sb);
+    box.appendChild(saveRow);
+
+    var addRow = document.createElement("div"); addRow.className = "rc-ed-add";
+    var inp = document.createElement("input"); inp.className = "rc-ed-in";
+    inp.type = "text"; inp.placeholder = "要加进这一路的域名，如 example.com";
+    var ab = document.createElement("button"); ab.className = "btn"; ab.textContent = "添加";
+    function doAdd(){
+      var v = (inp.value || "").trim().toLowerCase();
+      if (!v) return;
+      inp.value = "";
+      postDomains(r, {add: [v]}, box);
+    }
+    ab.onclick = doAdd;
+    inp.onkeydown = function(e){ if (e.key === "Enter") { e.preventDefault(); doAdd(); } };
+    addRow.appendChild(inp); addRow.appendChild(ab);
+    box.appendChild(addRow);
+
+    var dn = Object.keys(deny);
+    var nowS = Math.floor(Date.now() / 1000);
+    var cooling = dn.filter(function(n){ return (deny[n] || 0) > 0; });
+    var blocked = dn.filter(function(n){ return !deny[n]; });
+    function exSection(title, names, hours){
+      if (!names.length) return;
+      var dh = document.createElement("div"); dh.className = "rc-ed-head";
+      dh.style.marginTop = "8px";
+      dh.textContent = title + "（" + names.length + " 个）";
+      box.appendChild(dh);
+      var dl = document.createElement("div"); dl.className = "rc-ed-list2";
+      names.forEach(function(name){
+        var row = document.createElement("div"); row.className = "rc-ed-row";
+        var nm = document.createElement("span"); nm.className = "rc-ed-n";
+        nm.textContent = hours ? (name + "（还有约 "
+                          + Math.max(0, Math.round(((deny[name] || 0) - nowS) / 3600)) + " 小时）")
+                         : (name + " · 永久");
+        var rs = document.createElement("a");
+        rs.className = "rc-ed-del"; rs.href = "#"; rs.textContent = "移出";
+        rs.title = "移出后，条件满足时会被自动发现收回来";
+        rs.onclick = function(e){ e.preventDefault(); postDomains(r, {undel: [name]}, box); };
+        row.appendChild(nm); row.appendChild(rs);
+        dl.appendChild(row);
+      });
+      box.appendChild(dl);
+    }
+    exSection("已删 · 冷却中，到期后满足条件会被重新发现", cooling, true);
+    exSection("黑名单 · 永久不收录，只有手动移出才回来", blocked, false);
+
+    var tip = document.createElement("div"); tip.className = "rc-ed-tip";
+    tip.textContent = "新加的域名会和这一路的 IP 逐个实测，通不过的不会写进 hosts（日志里能看到原因）";
+    box.appendChild(tip);
+  }
+
+  function toggleDomainEditor(r, box, btn){
+    if (box.style.display === "block") {
+      box.style.display = "none"; box.innerHTML = ""; btn.textContent = "编辑域名"; return;
+    }
+    btn.textContent = "载入中…";
+    api("/api/route/domains?r=" + r).then(function(d){
+      btn.textContent = "收起";
+      renderDomainEditor(r, box, d);
+      box.style.display = "block";
+    }).catch(function(e){
+      /* 读不到就别默默复原，把原因写出来，不然用户只知道「点了没反应」 */
+      btn.textContent = "编辑域名";
+      box.style.display = "block";
+      box.innerHTML = '<div class="rc-ed-tip">读不到这一路的域名清单：'
+        + (e && e.message ? e.message : e) + '</div>';
+    });
+  }
+
   function renderRouteCards(results){
     var host = $("#routeCards");
     host.innerHTML = "";
@@ -1818,18 +2040,77 @@
       var domList = document.createElement("div"); domList.className = "rc-doms";
       var allDoms = (item.domains && item.domains.length) ? item.domains.slice() : [mainDom];
       if (allDoms.indexOf(mainDom) > 0) { allDoms.splice(allDoms.indexOf(mainDom), 1); allDoms.unshift(mainDom); }
+      var mainIpList = ips.map(function(x){ return x.ip; });
       allDoms.forEach(function(d){
         var rowD = document.createElement("div");
         rowD.className = "rc-d" + (d === mainDom ? " primary" : "");
         rowD.textContent = d;
+        /* 这个域名单独映射了另一批 IP（例如 ghcr 拉镜像层的域名走的是 Fastly
+           而不是主域名的 Azure 段）——不显示出来的话，换段到底成没生效根本
+           看不出来。所以 IP 与主域名不同时，直接挂在域名后面。 */
+        var dIps = (item.dom_ips && item.dom_ips[d]) || [];
+        /* 只显示「主域名那批里没有的 IP」。cf 这类共用同一批 IP 的路，
+           给每个域名都挂一串 IP 纯属噪音；真正要看的是 ghcr 那类——拉镜像
+           层的域名用的是另一家 CDN 的另一批 IP，不显示出来就看不出换段生效。 */
+        var mainSet = {}; mainIpList.forEach(function(i){ mainSet[i] = 1; });
+        var extra = dIps.filter(function(ip){ return !mainSet[ip]; });
+        /* IPv6 那一长串挤在域名下面根本没法看，这里只列 v4；完整的（含 v6）
+           放在 title 里，鼠标悬停照样看得到。前面加「独用」两字，别让人以为
+           是域名的一部分。 */
+        var extra4 = extra.filter(function(ip){ return ip.indexOf(":") < 0; });
+        if (extra.length) {
+          var dipEl = document.createElement("span");
+          dipEl.className = "rc-dip";
+          dipEl.textContent = "独用 " + (extra4.length ? extra4.slice(0, 3).join("、")
+                              + (extra4.length > 3 ? " …" : "")
+                              : (extra.length + " 个 IPv6（悬停查看）"));
+          dipEl.title = "这个域名单独用的 IP（主域名那批里没有，共 " + extra.length + " 个）：\n" + extra.join("\n");
+          rowD.appendChild(dipEl);
+        }
         domList.appendChild(rowD);
       });
-      domList.title = "这一路的 IP 写给这些域名（共 " + allDoms.length + " 个）：" + allDoms.join("、");
+      /* 自动发现会一路往 hosts 里加域名，全列出来卡片会拖得老长。这里只按
+         实际访问量列前几个，剩下的折成一行小字，点标题能看到完整清单。 */
+      /* 自动治理那一格：把「已经改过什么」原样列出来（域名 原IP → 新IP），
+         不然换完 IP 用户只看到 hosts 变了，不知道动了哪些、为什么动。 */
+      if (r === "auto" && item.changes && item.changes.length) {
+        var chTitle = document.createElement("div");
+        chTitle.className = "rc-d rc-dmore";
+        chTitle.textContent = "已生效的改动：";
+        domList.appendChild(chTitle);
+        item.changes.slice(0, 8).forEach(function(c){
+          var chRow = document.createElement("div");
+          chRow.className = "rc-d rc-dip-chg";
+          chRow.textContent = (c.domain || "") + "  " + (c.old_ip || "?") + " → " + (c.new_ip || "?");
+          chRow.title = (c.why || "") + "  ·  " + (c.t ? fmtTime(c.t) : "");
+          domList.appendChild(chRow);
+        });
+      }
+      if (item.domains_hidden) {
+        var moreD = document.createElement("div");
+        moreD.className = "rc-d rc-dmore";
+        moreD.textContent = "…还有 " + item.domains_hidden + " 个（按访问量排）";
+        domList.appendChild(moreD);
+      }
+      domList.title = "这一路的 IP 写给这些域名"
+        + (item.domains_hidden ? ("（共 " + (allDoms.length + item.domains_hidden) + " 个，这里按访问量列前 " + allDoms.length + " 个）") : ("（共 " + allDoms.length + " 个）"))
+        + "：" + allDoms.join("、") + (item.domains_hidden ? " …" : "");
       left.appendChild(domList);
 
       var tm = document.createElement("div"); tm.className = "rc-time";
       tm.textContent = item.mtime ? fmtTime(item.mtime) : "未优选";
       left.appendChild(tm);
+
+      /* 域名清单要能自己增删。自动发现只认它知道的几个家族，用户自己清楚哪些
+         域名该走这一路（比如自用的某个站点）；不想要的也要能删掉——删掉的记进
+         deny，下一轮不会被自动发现又收回来。 */
+      var edBox = document.createElement("div"); edBox.className = "rc-edbox";
+      var edBtn = document.createElement("a");
+      edBtn.className = "rc-editbtn"; edBtn.href = "#"; edBtn.textContent = "编辑域名";
+      edBtn.title = "往这一路加域名，或把不想要的域名删掉";
+      edBtn.onclick = function(e){ e.preventDefault(); toggleDomainEditor(r, edBox, edBtn); };
+      left.appendChild(edBtn);
+      left.appendChild(edBox);
 
       /* 卡身：左域名、右 IP，两栏并排 */
       var bodyWrap = document.createElement("div"); bodyWrap.className = "rc-body";
@@ -1903,7 +2184,7 @@
     }
     return row;
   }
-  function uline(tag, addr, extra, provider){
+  function uline(tag, addr, extra, provider, ms){
     var row = document.createElement("div"); row.className = "uline";
     var t = document.createElement("span"); t.className = "uk"; t.textContent = tag || "";
     var box = document.createElement("span"); box.className = "addr";
@@ -1917,6 +2198,12 @@
       pv.textContent = provider;
       pv.title = "这条 DoH 属于 " + provider;
       row.appendChild(pv);
+    }
+    if (ms) {
+      var ms1 = document.createElement("span"); ms1.className = "ums";
+      ms1.textContent = ms + "ms";
+      ms1.title = "上次扫描实测 " + ms + "ms（越小越快）";
+      row.appendChild(ms1);
     }
     return row;
   }
@@ -1948,7 +2235,7 @@
           var host = u.host || u.addr;
           var extra = (u.ip && u.ip !== host) ? "→ " + u.ip : "";
           var vendor = u.provider && u.provider !== host ? u.provider : "";
-          ub.appendChild(uline(i === 0 ? pair[1] : "", host, extra, vendor));
+          ub.appendChild(uline(i === 0 ? pair[1] : "", host, extra, vendor, u.ms));
         });
       });
       // 卡片底部带一行扫描状态：这几条还活着吗、候选池里还有没有新可用的
@@ -2314,9 +2601,94 @@
     return "lat-bad";
   }
   var qSig = "";
+  var lastQlog = null;   /* 统计数字点开要看明细，得留着上一份数据 */
+
+  /* 数字下面那一格：点哪个数就列出「这个数是怎么来的」。
+     光给一个数字，用户只能知道「321 个域名」，不知道是哪些——点开才有用。
+     这里给每个数字直接挂 onclick，不用事件委托：委托容易因为容器被
+     innerHTML 重写、或点到子元素时判断不到而失效（表现就是「点了没反应」）。 */
+  function statRows(k, d){
+    d = d || {};
+    var items = d.items || [];
+    function top(list){
+      var c = {}, n;
+      list.forEach(function(x){
+        n = x.qname || "";
+        if (!n) return;
+        c[n] = (c[n] || 0) + (x.cnt || 1);
+      });
+      return Object.keys(c).sort(function(a, b){ return c[b] - c[a]; })
+                           .map(function(n){ return [n, c[n]]; });
+    }
+    if (k === "domains") return ["解析过的域名（按查询次数）", top(items)];
+    if (k === "hit")     return ["被优选规则命中的域名", top(items.filter(function(x){ return x.pref; }))];
+    if (k === "miss")    return ["没命中优选、走上游解析的域名", top(items.filter(function(x){ return !x.pref; }))];
+    if (k === "cov")     return ["优选 hosts 里写的域名", (d.pref_list || []).map(function(n){ return [n, 0]; })];
+    if (k === "cached")  return ["命中缓存的域名", top(items.filter(function(x){ return x.cached; }))];
+    if (k === "fail")    return ["解析失败的域名", top(items.filter(function(x){ return x.rcode; }))];
+    if (k === "slow") {
+      var agg = {};
+      items.forEach(function(x){
+        if (x.ms == null || !x.qname) return;
+        (agg[x.qname] = agg[x.qname] || []).push(x.ms);
+      });
+      var out = [];
+      Object.keys(agg).forEach(function(n){
+        var a = agg[n], s = 0;
+        a.forEach(function(v){ s += v; });
+        out.push([n + "  平均 " + Math.round(s / a.length) + "ms（" + a.length + " 条记录）",
+                  0, Math.round(s / a.length)]);
+      });
+      out.sort(function(p, q){ return q[2] - p[2]; });
+      return ["最慢的域名（平均耗时从高到低）", out.map(function(r){ return [r[0], 0]; })];
+    }
+    return ["明细", []];
+  }
+
+  function closeStatDetail(){
+    var box = $("#qStatDetail");
+    if (!box) return;
+    box.style.display = "none"; box.innerHTML = ""; box.removeAttribute("data-k");
+    $$("#qStat .s.clk").forEach(function(e){ e.classList.remove("on"); });
+  }
+
+  function showStatDetail(k){
+    var box = $("#qStatDetail");
+    if (!box) return;
+    if (box.getAttribute("data-k") === k && box.style.display === "block") { closeStatDetail(); return; }
+    var pair = statRows(k, lastQlog || {});
+    var rows = pair[1] || [];
+    $$("#qStat .s.clk").forEach(function(e){
+      e.classList.toggle("on", e.getAttribute("data-k") === k);
+    });
+    box.setAttribute("data-k", k);
+    box.innerHTML =
+      '<div class="qd-head"><span>' + pair[0] + '（' + rows.length + '）</span>' +
+        '<a href="#" class="qd-close">收起</a></div>' +
+      (rows.length
+        ? '<div class="qd-list">' + rows.map(function(r){
+            return '<div class="qd-row">' + String(r[0]).replace(/</g, "&lt;") +
+                   (r[1] ? '  \u00d7' + r[1] : '') + '</div>';
+          }).join("") + '</div>'
+        : '<div class="empty">当前日志窗口里没有这类记录（上面的数字是累计统计，' +
+          '明细只列还留在日志里的那些）</div>');
+    box.style.display = "block";
+    var cl = box.querySelector(".qd-close");
+    if (cl) cl.onclick = function(e){ e.preventDefault(); closeStatDetail(); };
+  }
+
+  function bindStatClicks(){
+    $$("#qStat .s.clk").forEach(function(el){
+      if (el._stat) return;
+      el._stat = 1;
+      el.onclick = function(){ showStatDetail(el.getAttribute("data-k")); };
+    });
+  }
+
   function renderQLive(d){
     var box = $("#qLive"), stat = $("#qStat");
     if (!box) return;
+    lastQlog = d;
     var items = (d && d.items) || [];
     if (!d || !d.log_ok || !items.length) {
       qSig = "";
@@ -2324,18 +2696,20 @@
       box.innerHTML = '<div class="empty">还没有查询记录（引擎收到 DNS 请求后这里会自动出现）</div>';
       return;
     }
-    /* 解析了多少、规则命中了多少、没命中多少——这三个数字最能说明优选有没有在干活 */
+    /* 解析了多少、规则命中了多少、没命中多少——这三个数字最能说明优选有没有在干活。
+       每个数字都能点：点开就列出这个数字背后的具体域名/记录，光看一个数没意义。 */
     stat.innerHTML =
-      '<div class="s"><span>解析域名数</span><b>' + d.domains + ' <small>个</small></b></div>' +
-      '<div class="s" title="查询的域名写在优选 hosts 里、由优选 IP 直接应答"><span>规则命中</span><b>' +
+      '<div class="s clk" data-k="domains" title="点击查看这 ' + d.domains + ' 个域名"><span>解析域名数</span><b>' + d.domains + ' <small>个</small></b></div>' +
+      '<div class="s clk" data-k="hit" title="点击查看被优选规则命中的域名"><span>规则命中</span><b>' +
         (d.pref_hit || 0) + ' <small>' + (d.pref_hit_pct || 0) + '%</small></b></div>' +
-      '<div class="s" title="没写进优选 hosts，按分流规则走上游 DoH"><span>没命中规则</span><b>' +
+      '<div class="s clk" data-k="miss" title="点击查看没命中、走上游解析的域名"><span>没命中规则</span><b>' +
         (d.pref_miss || 0) + ' <small>' + (d.pref_miss_domains || 0) + ' 个域名</small></b></div>' +
-      '<div class="s" title="优选 hosts 里当前一共写了多少个域名"><span>优选覆盖</span><b>' +
+      '<div class="s clk" data-k="cov" title="点击查看优选 hosts 里写了哪些域名"><span>优选覆盖</span><b>' +
         (d.pref_total_domains || 0) + ' <small>个域名</small></b></div>' +
-      '<div class="s"><span>命中缓存</span><b>' + d.cached + ' <small>' + d.cached_pct + '%</small></b></div>' +
-      '<div class="s"><span>平均耗时</span><b>' + (d.avg === null ? "—" : d.avg + "<small> ms</small>") + '</b></div>' +
-      '<div class="s"><span>失败</span><b>' + d.failed + '</b></div>';
+      '<div class="s clk" data-k="cached" title="点击查看命中缓存的查询"><span>命中缓存</span><b>' + d.cached + ' <small>' + d.cached_pct + '%</small></b></div>' +
+      '<div class="s clk" data-k="slow" title="点击查看最慢的域名（看看谁在拖后腿）"><span>平均耗时</span><b>' + (d.avg === null ? "—" : d.avg + "<small> ms</small>") + '</b></div>' +
+      '<div class="s clk" data-k="fail" title="点击查看解析失败的域名"><span>失败</span><b>' + d.failed + '</b></div>';
+    bindStatClicks();
 
     /* 数据未变化时不重建表格，避免每 5 秒刷新一次导致浏览位置跳回顶部。 */
     var sig = items.length + "|" + items.map(function(x){
