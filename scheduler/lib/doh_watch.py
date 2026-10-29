@@ -104,11 +104,16 @@ def sync_pool(k):
     去重键是整行而不是 URL：同一个服务常有多个 anycast 入口
     （dns.controld.com 就有 76.76.2.0~2.5），
     按 URL 去重会把备用入口全吃掉，只剩一条能试。
+
+    补过的种子行记在 .doh_seeded.json：删掉的死条目不会再被补回来，
+    否则「扫描删掉 → 下轮种子补回」会死循环，面板上永远挂着一堆不通。
     """
     lines = read_pool(POOL[k])
     seed = read_pool(os.path.join(SEED_DIR, "doh_%s_candidates.txt" % k))
+    hist = _seeded_history()
+    done = set(hist.get(k) or [])
     have = {x for x in lines}
-    added = [s for s in seed if s not in have]
+    added = [s for s in seed if s not in have and s not in done]
     if added and lines:
         try:
             with open(POOL[k], "a", encoding="utf-8") as f:
@@ -117,7 +122,32 @@ def sync_pool(k):
             _log("候选池补充 %d 条（%s，来自内置清单）" % (len(added), LABEL[k]))
         except Exception as e:
             _log("候选补充写不进 %s：%s" % (POOL[k], e))
+    if added:
+        hist[k] = sorted(done | set(added))
+        _save_seeded(hist)
     return lines + added, len(added)
+
+
+SEED_MARK = os.path.join(DATA_DIR, ".doh_seeded.json")
+
+
+def _seeded_history():
+    try:
+        with open(SEED_MARK, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_seeded(d):
+    try:
+        tmp = SEED_MARK + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, SEED_MARK)
+    except Exception:
+        pass
 
 
 # ---- 观察名单：新上游的「转正」通道 ----

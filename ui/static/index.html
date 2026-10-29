@@ -2032,10 +2032,8 @@
   function upScanText(s){
     if (!s || !s.at) return "候选池还没扫过";
     var parts = ["上次扫描 " + fmtAgo(s.at)];
-    if (s.pool_total) parts.push("候选 <b>" + s.pool_total + "</b> 条");
     parts.push("可用 <b>" + (s.alive || 0) + "</b> 条");
     if (s.new_count) parts.push("还有 <b>" + s.new_count + "</b> 条可用未启用");
-    if ((s.dead || []).length) parts.push("失效 <b>" + s.dead.length + "</b> 条");
     return parts.join('<span class="sep">·</span>');
   }
   function upRenderScan(s){
@@ -2060,7 +2058,6 @@
     if (!c || !c.total) return "—";
     var p = ["在用 " + c.active + " 条"];
     if (c.alive) p.push("可用未启用 " + c.alive + " 条");
-    if (c.dead) p.push("不通 " + c.dead + " 条");
     return p.join(" · ");
   }
   function upAppend(side, line){
@@ -2114,10 +2111,12 @@
       if (st) st.textContent = upPoolStat(counts[p[0]]);
       if (!host) return;
       host.innerHTML = "";
-      var rows = detail[p[0]] || [];
+      // 不通的不往页面上摆：既然是「用不了的上游」，列出来只有噪音。
+      // 死条目仍在扫描结果里（用于连续两轮后自动从池子删除），只是不占这一屏。
+      var rows = (detail[p[0]] || []).filter(function(r){ return r.state !== "dead"; });
       if (!rows.length) {
         var e = document.createElement("div"); e.className = "upfoot";
-        e.textContent = (s && s.at) ? "这次扫描没留下这一侧的记录" : "还没扫过，点「扫描候选池」跑一遍";
+        e.textContent = (s && s.at) ? "这一侧暂时没有可用上游" : "还没扫过，点「扫描候选池」跑一遍";
         host.appendChild(e);
         return;
       }
@@ -2125,15 +2124,22 @@
     });
     var head = $("#upPoolHead");
     if (head) {
+      var okN = 0, okL = 0, okR = 0;
+      ["local", "remote"].forEach(function(k){
+        (detail[k] || []).forEach(function(r){
+          if (r.state === "dead") return;
+          okN++;
+          if (k === "local") okL++; else okR++;
+        });
+      });
       head.innerHTML = (s && s.at)
-        ? "<b>" + (s.pool_total || 0) + "</b> 条（国内 " + ((s.pool || {}).local || 0)
-          + " · 国外 " + ((s.pool || {}).remote || 0) + "）· " + fmtAgo(s.at)
+        ? "<b>" + okN + "</b> 条可用（国内 " + okL + " · 国外 " + okR + "）· " + fmtAgo(s.at)
         : "";
     }
     var foot = $("#upPoolFoot");
     if (foot) {
       foot.innerHTML = (s && s.at)
-        ? "绿点＝正在用；橙点＝探测通过但没启用，点「加入」可加进上面的清单；红点＝连不上，后面是实际错误。"
+        ? "绿点＝正在用；橙点＝探测通过但没启用，点「加入」可加进上面的清单。"
           + "整池每 <b>" + (s.due_min || 60) + "</b> 分钟重测一次，变可用的会自动出现在这里。"
         : "";
     }
@@ -3608,8 +3614,6 @@
     if (pend) txt += " · 已测 <b>" + (list.length - pend) + "</b>";
     txt += " · 可用 <b>" + ok.length + "</b>";
     if (act.length) txt += " · 在用 <b>" + act.length + "</b>";
-    var dead = list.length - ok.length - pend;
-    if (dead) txt += " · 不通 <b>" + dead + "</b>";
     if (ok.length) {
       var msv = ok.map(function(x){ return x.ms; }).sort(function(a, b){ return a - b; });
       txt += " · 最快 <b>" + msv[0] + "ms</b>";
@@ -3637,12 +3641,14 @@
       var box = $(p[1]), st = $(p[2]);
       if (!box) return;
       box.innerHTML = "";
-      var list = g[p[0]] || [];
+      // 不通的不显示：用不了的上游列出来只有噪音。死条目仍留在扫描结果里，
+      // 连续两轮不通会被自动从候选池删掉。
+      var list = (g[p[0]] || []).filter(function(it){ return it.ok || it.pending || it.active; });
       if (st) st.innerHTML = list.length ? spStat(list) : (running ? "正在准备…" : "—");
       list.forEach(function(it){ box.appendChild(spRow(it)); });
       if (!list.length) {
         var e = document.createElement("div"); e.className = "upfoot";
-        e.textContent = running ? "正在准备测速入口…" : "没有这一侧的上游";
+        e.textContent = running ? "正在准备测速入口…" : "这一侧暂时没有可用上游";
         box.appendChild(e);
       }
     });
@@ -3660,9 +3666,9 @@
         var ts = new Date(d.at * 1000).toLocaleTimeString("zh-CN", {hour12: false});
         var okAll = items.filter(function(x){ return x.ok; }).length;
         st.innerHTML = "测于 <b>" + ts + "</b>" +
-          '<span class="sep">·</span>整池 <b>' + items.length + "</b> 条（国内 " +
-          ((g.local || []).length) + " / 国外 " + ((g.remote || []).length) + "）" +
-          '<span class="sep">·</span>此刻可用 <b>' + okAll + "</b> 条";
+          '<span class="sep">·</span>可用 <b>' + okAll + "</b> 条（国内 " +
+          ((g.local || []).filter(function(x){ return x.ok; }).length) + " / 国外 " +
+          ((g.remote || []).filter(function(x){ return x.ok; }).length) + "）";
       } else {
         st.textContent = "—";
       }
