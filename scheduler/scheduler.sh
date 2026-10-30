@@ -12,6 +12,14 @@ LISTS_PY="/app/scheduler/lib/lists.py"
 SUB_PY="/app/scheduler/lib/subs.py"
 DOH_WATCH="/app/scheduler/lib/doh_watch.py"
 DOM_WATCH="/app/scheduler/lib/dom_watch.py"
+IKUAI_SYNC="/app/scheduler/ikuai_sync.py"
+
+# 把 pin 的 IP 同步进爱快「DNS加速」规则（未配置 IKUAI_TOKEN 时静默跳过）
+sync_ikuai() {
+  if [ -n "$IKUAI_TOKEN" ]; then
+    python3 "$IKUAI_SYNC" || true
+  fi
+}
 
 # 域名自动发现：从查询日志里找「该走优选但还没映射」的域名，登记给各路
 # 下一轮优选探测。每轮优选前跑一次；优选手动触发（once）也跑，保证点了
@@ -149,6 +157,7 @@ once_mode() {
   maybe_discover_domains
   if [ "$which" = "all" ]; then
     run_all
+    sync_ikuai
   else
     case " $ROUTES " in
       *" $which "*) ;;
@@ -157,6 +166,7 @@ once_mode() {
     fp=$(file_sig "$PREF_DIR/all.hosts")
     "/app/scheduler/${which}_pref.sh" || exit 1
     reload_if_changed "$fp"
+    sync_ikuai
   fi
 }
 
@@ -187,6 +197,7 @@ daemon_mode() {
       continue
     fi
     run_all
+    sync_ikuai
     maybe_pull_sources
     maybe_scan_doh
     log "本轮完成，${interval} 分钟后再次执行"
@@ -210,6 +221,7 @@ case "${1:-daemon}" in
     esac
     ;;
   reload) reload_mosdns ;;
+  ikuai) python3 "$IKUAI_SYNC" ;;
   doh)
     case "${2:-scan}" in
       scan) python3 "$DOH_WATCH" scan ${3:+--force} ;;
