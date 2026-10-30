@@ -245,6 +245,9 @@ route_denied() {
 domain_probe_path() {
   case "$1" in
     avatars.githubusercontent.com) printf '%s' "/u/1?v=4" ;;
+    # api.github.com 必须用真实 API 路径：网页边缘对任何路径都 301 跳
+    # github.com，而真 API 边缘对 /rate_limit 回 200（与 api_pin_refresh 同判据）
+    api.github.com) printf '%s' "/rate_limit" ;;
     *) printf '%s' "/" ;;
   esac
 }
@@ -379,6 +382,17 @@ def norm(x):
 # 以前不校验，日志里一句话被重定向进来就能让 mosdns 直接起不来。
 DOM_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z]{2,}$", re.I)
 
+# 黑名单（未过期的）里的 IP 绝不进 all.hosts：拉黑只写了 blacklist.json 时，
+# 别处还 pin 着的坏 IP 会残留到下一轮优选，这条过滤是每轮合并时的保险层。
+banned = set()
+try:
+    import json as _json, time as _time
+    _bl = _json.load(open("/data/blacklist.json"))
+    _now = _time.time()
+    banned = {ip for ip, v in _bl.items() if (v.get("until") or 0) > _now}
+except Exception:
+    pass
+
 best = {}
 for ln in open(src, encoding="utf-8", errors="replace"):
     p = ln.split()
@@ -393,7 +407,7 @@ for ln in open(src, encoding="utf-8", errors="replace"):
         if k is None:
             bad = True
             break
-        if k in seen:
+        if k in banned or k in seen:
             continue
         seen.add(k)
         ips.append(k)
@@ -907,7 +921,10 @@ run_route() {
   # SYN-ACK，压根不提供这个服务（CloudFront 中国区边缘、GitHub 的 192.30 段都是），
   # 一按连接时间排序就把种子 IP 挤出前 N 名。ghcr 那 10 个入口就是这么被挤掉、
   # 常年只剩 1 个的。宁可为这十几个 IP 多花一秒校验，也别让它们没机会说话。
-  seed_fb=$(fallback_ips "$seed" 2>/dev/null | awk 'NF')
+  # 种子兜底也必须过黑名单：种子文件里手写的 IP 平时「无条件进校验」防被
+  # TCP 排序挤掉，但一旦哪个种子 IP 被拉黑（比如假边缘 20.205.243.166 对
+  # github.com 网页校验能过），不过滤它就会每轮全量重探都被选回去。
+  seed_fb=$(fallback_ips "$seed" 2>/dev/null | awk 'NF' | filter_bad_ips)
   if [ -n "$seed_fb" ]; then
     batch=$( { printf '%s\n' "$batch"; printf '%s\n' "$seed_fb"; } \
              | awk 'NF && !seen[$1]++' )

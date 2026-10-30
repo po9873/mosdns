@@ -232,6 +232,11 @@ def write_hosts(route, domain, ips, extra=None):
             f.write("\n".join(lines) + "\n")
         os.replace(tmp, path)
     # 合并成 mosdns 实际读取的 all.hosts
+    _rebuild_all_hosts()
+
+
+def _rebuild_all_hosts():
+    """把各路 *.hosts 合并成 mosdns 实际读取的 all.hosts"""
     out = []
     try:
         for name in os.listdir(PREF_DIR):
@@ -250,6 +255,46 @@ def write_hosts(route, domain, ips, extra=None):
     os.replace(tmp, allp)
 
 
+def purge_ips_everywhere(bad_ips):
+    """拉黑后立刻把这些 IP 从所有路的 hosts 文件里撤下，并重建 all.hosts。
+
+    只调 mark_bad 的话，这个 IP 之前 pin 在别的域名上的记录会一直残留，
+    要等下一轮优选（最长一小时）才会被换掉——GitHub 曾因此整批域名
+    （avatars/codeload/objects 等）跟着一个被打入黑名单的 IP 一起打不开。"""
+    bad = set(bad_ips)
+    if not bad:
+        return
+    try:
+        names = [n for n in os.listdir(PREF_DIR)
+                 if n.endswith(".hosts") and n != "all.hosts"]
+    except Exception:
+        return
+    purged = False
+    for name in names:
+        path = os.path.join(PREF_DIR, name)
+        try:
+            lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        out, hit = [], False
+        for ln in lines:
+            p = ln.split()
+            if not p:
+                continue
+            keep = [x for x in p[1:] if x not in bad]
+            if len(keep) != len(p) - 1:
+                hit = True
+            if keep:
+                out.append(" ".join([p[0]] + keep))
+        if not hit:
+            continue
+        purged = True
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + ("\n" if out else ""))
+        os.replace(tmp, path)
+    if purged:
+        _rebuild_all_hosts()
 def seed_ips(route):
     """该路的种子兜底 IP（镜像内置，无需联网）。"""
     out = []
@@ -349,6 +394,8 @@ def run_once():
             state.pop("%s|%s" % (route, ip), None)
             log("%s 路：%s 打不开（%s），已加入黑名单，%d 小时内不再用"
                 % (route, ip, why_label(why), subs.BAD_TTL_H))
+        # 联动清理：刚拉黑的 IP 从所有路的 hosts 立即撤下（别处还 pin 着的话）
+        purge_ips_everywhere([ip for ip, _ in dropped])
 
         # 剩下的继续留着；缺的从池子里补
         need = max(0, len(ips) - len(keep))

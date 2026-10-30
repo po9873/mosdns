@@ -30,12 +30,17 @@ LOC_RE = re.compile(r"(?im)^location:\s*(\S+)")
 
 
 def _same_site(host_a, host_b):
-    """粗略注册域比较：末两段相同视为同站（github.com vs www.github.com）。"""
-    a = host_a.strip(".").lower().split(".")
-    b = host_b.strip(".").lower().split(".")
-    if len(a) < 2 or len(b) < 2:
-        return a == b
-    return a[-2:] == b[-2:]
+    """同站判定：只接受完全相同或仅差 www 前缀的跳转。
+
+    以前按「末两段相同」粗略比较，结果 api.github.com 301 → github.com
+    被当成同站跳转放行——网页边缘冒充 API 边缘全是从这个口子漏进来的。
+    http→https 已由请求本身保证；域名 → www.域名 / www.域名 → 域名 这类
+    正常跳转继续放行；其余（含子域跳父域、兄弟域）一律视为「不承载本服务」。"""
+    a = host_a.strip(".").lower()
+    b = host_b.strip(".").lower()
+    if a == b:
+        return True
+    return a == "www." + b or b == "www." + a
 
 BODY_CAP = 262144     # 最多读 256KB 用于估算速度
 BODY_MIN = 4096       # 少于 4KB 的响应体太小，算出来的速度没意义

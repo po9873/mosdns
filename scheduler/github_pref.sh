@@ -7,14 +7,19 @@
 # 既然选不出来，就别每轮白探十几个、每个等 6 秒。哪天通了把这行删掉即可。
 export PREF_NO_V6=1
 
-# github.com 那批 IP 同时服务这些域名（实测逐个通过证书校验）：
-#   www/codeload/collector  github 自己的主机名
-#   avatars/camo/user-images   README 里的图片、头像
-#   raw/objects/gist           raw 文件、Release 附件、gist
-# 注意 api.github.com 不在此列：优选池里的网页边缘对 API 路径回 301 踢到
-# github.com 网页端（App 的 API 请求全被带偏，表现为 429/410 报错页），
-# 实测全网段只有少数 IP 真承载 API，见下方 PREF_EXTRA_LINES 固定映射。
-export PREF_EXTRA_DOMAINS="www.github.com codeload.github.com collector.github.com avatars.githubusercontent.com camo.githubusercontent.com user-images.githubusercontent.com raw.githubusercontent.com objects.githubusercontent.com gist.githubusercontent.com"
+# github 路分两类节点，绝不能混：
+#   ① 网页边缘（140.82.x）——服务 github.com / www.github.com。
+#      由主优选按 github.com 校验选出，PREF_EXTRA_DOMAINS 里只放这批。
+#   ② Fastly 边缘（151.101.x / 185.199.x）——服务 avatars/raw/objects/gist/
+#      user-images/camo/pkg-containers/codeload/collector（实测 codeload、
+#      collector 也是 Fastly：网页边缘对它们连不存在的 repo 都 301 踢走）。
+#      对 github.com 校验根本通不过，必须每个域名独立选 IP，
+#      见下方 fastly_pin_refresh.py（每域名专属探测路径 + 判定码）。
+#   ③ api.github.com——网页边缘对 API 路径回 301 踢到 github.com（App 表现为
+#      429/410 报错页），由 api_pin_refresh.py 验证 GET /rate_limit=200 单独选。
+# 以前把 ② 塞在 PREF_EXTRA_DOMAINS 里靠主选 IP 映射，映射得上的全是
+# 「301 跳走被漏放行」的假边缘——头像/附件实际全被踢到主站。
+export PREF_EXTRA_DOMAINS="www.github.com"
 
 # 必须「真能打开 GitHub 页面」才算可用：根路径返回的内容里必须包含 GitHub。
 # 否则会出现「TCP 通、证书也对、但页面只回 OK / 空白」的假可用 IP 被写进 hosts，
@@ -33,15 +38,28 @@ set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1
 
-# api.github.com 固定映射（须在 source common.sh 之后，PREF_DIR 才有定义）：
-# 不再写死——每轮先跑 api_pin_refresh.py：向多个公共DNS解析 api.github.com 拿
-# 候选 + 已知种子，逐个验证 GET /rate_limit 返回 200 JSON（网页边缘给不出），
-# 取最快的 2 个写入固定行。IP 失效/被限流时下轮自动换新，无需人工。
-# 刷新失败则回退到上次结果或内置种子。
+# 固定映射行（须在 source common.sh 之后，PREF_DIR 才有定义）：
+# 每行「域名 ip1 ip2 ...」，每个域名配自己的那批 IP，写入 .github.extra。
+# 刷新失败则沿用旧结果；连旧结果都没有才用内置兜底。
 export PREF_EXTRA_LINES="$PREF_DIR/.github.extra"
-if ! python3 /app/scheduler/lib/api_pin_refresh.py "$PREF_EXTRA_LINES" 2>/dev/null \
-   || [ ! -s "$PREF_EXTRA_LINES" ]; then
-  printf 'api.github.com 140.82.116.6 20.205.243.168\n' > "$PREF_EXTRA_LINES"
+api_f="$PREF_DIR/.github.api"
+fastly_f="$PREF_DIR/.github.fastly"
+# set -u 下引用未定义变量会直接炸掉脚本（之前 PREF_LOG 就这样把两个刷新全弄失败）
+pref_log="${PREF_LOG:-$DATA_DIR/pref.log}"
+
+if python3 /app/scheduler/lib/api_pin_refresh.py "$api_f" 2>>"$pref_log" \
+   && [ -s "$api_f" ]; then
+  :
+else
+  [ -s "$api_f" ] || printf 'api.github.com 140.82.116.6\n' > "$api_f"
 fi
+
+if ! python3 /app/scheduler/lib/fastly_pin_refresh.py "$fastly_f" 2>>"$pref_log" \
+   || [ ! -s "$fastly_f" ]; then
+  [ -s "$fastly_f" ] || printf 'avatars.githubusercontent.com 151.101.2.217 151.101.66.217 151.101.130.217 151.101.194.217\n' > "$fastly_f"
+fi
+
+: > "$PREF_EXTRA_LINES"
+cat "$api_f" "$fastly_f" >> "$PREF_EXTRA_LINES"
 
 run_route "github" "/app/config/seeds/github.txt" 443
