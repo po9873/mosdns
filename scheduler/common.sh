@@ -238,6 +238,17 @@ route_denied() {
       '$1==d && (NF<2 || $2+0==0 || $2+0>now){f=1} END{exit !f}' "$f"
 }
 
+# 逐域名探测路径：个别域名的「根路径」本身就会正常跳转/404，必须用真实资源路径
+# 才能区分真边缘和假边缘。典型：avatars.githubusercontent.com 的 / 正常 302 到
+# github.com（GitHub 官方行为），而假边缘对任何路径都 301 跳走——
+# 用真实头像路径 /u/1?v=4（octocat）：真边缘回 200 图片，假边缘照样跳走。
+domain_probe_path() {
+  case "$1" in
+    avatars.githubusercontent.com) printf '%s' "/u/1?v=4" ;;
+    *) printf '%s' "/" ;;
+  esac
+}
+
 auto_map_domains() {
   local route="$1" skip="$2" dedupe="$3"; shift 3
   local ips="$*" adf="$PREF_DIR/.autodom/$route.txt" cdf="$PREF_DIR/$route.custom.txt"
@@ -260,7 +271,7 @@ auto_map_domains() {
         printf '%s\n' "$cur_have" | grep -qxF "$d" && continue
       fi
       dok=$(printf '%s\n' $ips \
-            | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 / "" "" 2>/dev/null \
+            | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 "$(domain_probe_path "$d")" "" "" 2>/dev/null \
             | awk '$2=="ok"{print $1}')
       if [ -z "$dok" ]; then
         log "$route: 域名 $d 没有 IP 通过校验，暂不映射（确认这批节点是否服务它）"
@@ -303,7 +314,7 @@ write_route() {
       # IMDb 那批 IP 里就有一个对 m.media-amazon.com 回 421 Misdirected，
       # 照抄过去的结果是网页能开、海报全裂。
       dok=$(printf '%s\n' $ips \
-            | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 / "" "" 2>/dev/null \
+            | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 "$(domain_probe_path "$d")" "" "" 2>/dev/null \
             | awk '$2=="ok"{print $1}')
       if [ -z "$dok" ]; then
         log "$route: 附加域名 $d 没有 IP 通过校验，本次不映射（否则那个域名会打不开）"

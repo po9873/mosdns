@@ -26,6 +26,16 @@ import time
 
 CF_ERR = re.compile(r"[Ee]rror(?:\s+code:?)?\s+(10\d\d)", re.I)
 STATUS_RE = re.compile(r"^HTTP/1\.[01]\s+(\d{3})")
+LOC_RE = re.compile(r"(?im)^location:\s*(\S+)")
+
+
+def _same_site(host_a, host_b):
+    """粗略注册域比较：末两段相同视为同站（github.com vs www.github.com）。"""
+    a = host_a.strip(".").lower().split(".")
+    b = host_b.strip(".").lower().split(".")
+    if len(a) < 2 or len(b) < 2:
+        return a == b
+    return a[-2:] == b[-2:]
 
 BODY_CAP = 262144     # 最多读 256KB 用于估算速度
 BODY_MIN = 4096       # 少于 4KB 的响应体太小，算出来的速度没意义
@@ -114,6 +124,18 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None):
             # m.media-amazon.com 回 421。必须判成不能用，否则会把海报域名
             # 指到一个根本不认它的 IP 上（页面打得开、图全裂）。
             return "wrong", ttfb, None, False
+        if status in (301, 302, 303, 307, 308):
+            # 跳走检测：Location 离开了本域名 → 这个 IP 不承载本服务。
+            # 典型：假 GitHub 边缘对 avatars/objects.githubusercontent.com 回
+            # 301 → github.com，证书还合法（*.githubusercontent.com 被伪造或
+            # 泛域名共用），能骗过证书校验；浏览器头像/附件全被带到主站。
+            # 同域跳转（如 http→https、加 www）属正常，放行。
+            mloc = LOC_RE.search(text)
+            if mloc:
+                loc = mloc.group(1).strip()
+                host = loc.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+                if host and not _same_site(host, domain):
+                    return "wrong", ttfb, None, False
         if status >= 500:
             # 5xx 也顺手测速度，方便判断是节点挂了还是单纯慢
             return "http%d" % status, ttfb, None, False
