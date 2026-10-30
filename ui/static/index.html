@@ -402,8 +402,12 @@
   .route-card .rc-ed-add input{flex:1;min-width:0;background:var(--panel2);color:var(--text);
     border:1px solid var(--border);border-radius:6px;font-size:12px;padding:5px 8px}
   .route-card .rc-ed-tip{font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.6}
+  /* v6 一条就是 25 个字符，一行放不下两条，允许折行；别再 ellipsis 截断，
+     截了就跟「不显示」一样。 */
   .route-card .rc-dip{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    font-size:12px;line-height:1.5;letter-spacing:.2px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    font-size:12px;line-height:1.5;letter-spacing:.2px;color:var(--muted);margin-top:2px;
+    white-space:normal;word-break:break-all;overflow-wrap:anywhere}
+  .route-card .rc-dip.v6{font-size:11.5px;letter-spacing:0;opacity:.95}
   /* 推送正文预览：原样展示会发出去的那段文本 */
   .pushprev{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:8px 11px}
   .pushprev summary{font-size:12.5px;color:var(--muted);cursor:pointer;outline:none}
@@ -2058,16 +2062,23 @@
            层的域名用的是另一家 CDN 的另一批 IP，不显示出来就看不出换段生效。 */
         var mainSet = {}; mainIpList.forEach(function(i){ mainSet[i] = 1; });
         var extra = dIps.filter(function(ip){ return !mainSet[ip]; });
-        /* IPv6 那一长串挤在域名下面根本没法看，这里只列 v4；完整的（含 v6）
-           放在 title 里，鼠标悬停照样看得到。前面加「独用」两字，别让人以为
-           是域名的一部分。 */
+        /* 有 v4 就先列 v4（短、好认）；一条 v4 都没有时也不能只写「N 个 IPv6
+           悬停查看」——手机上没有悬停，等于什么都没说。这时直接把 v6 列出来，
+           反正域名行本来就一行一个，多占一两行不影响阅读。
+           前面加「独用」两字，别让人以为是域名的一部分。 */
         var extra4 = extra.filter(function(ip){ return ip.indexOf(":") < 0; });
+        var extra6 = extra.filter(function(ip){ return ip.indexOf(":") >= 0; });
         if (extra.length) {
           var dipEl = document.createElement("span");
-          dipEl.className = "rc-dip";
-          dipEl.textContent = "独用 " + (extra4.length ? extra4.slice(0, 3).join("、")
-                              + (extra4.length > 3 ? " …" : "")
-                              : (extra.length + " 个 IPv6（悬停查看）"));
+          dipEl.className = "rc-dip" + (extra4.length ? "" : " v6");
+          var show = extra4.slice(0, 3);
+          var more = extra4.length - show.length;
+          if (!show.length) {
+            /* v6 一条 35 个字符，一行最多放两条，再多就太占地方了 */
+            show = extra6.slice(0, 2);
+            more = extra6.length - show.length;
+          }
+          dipEl.textContent = "独用 " + show.join("、") + (more > 0 ? " …+" + more : "");
           dipEl.title = "这个域名单独用的 IP（主域名那批里没有，共 " + extra.length + " 个）：\n" + extra.join("\n");
           rowD.appendChild(dipEl);
         }
