@@ -217,9 +217,11 @@
     background:rgba(255,255,255,.06);border:1px solid var(--glass-brd,var(--border));
   }
   html[data-theme="light"] .uline .upv{background:rgba(255,255,255,.75)}
-  /* 延时：跟着「引擎正在用」那几行走，不写快慢就看不出该不该换 */
+  /* 延时：跟着「引擎正在用」那几行走，不写快慢就看不出该不该换。
+     配色跟设置页候选池、实时解析延时用同一套 lat-pill（<100 绿 / <300 黄 / 更慢红），
+     两处看到的 466ms 必须是同一个颜色，否则一眼就分不清是「慢」还是「就是这色」。 */
   .uline .ums{justify-self:end;align-self:center;font-size:12.5px;line-height:1.7;white-space:nowrap;
-    color:var(--muted);font-variant-numeric:tabular-nums}
+    font-variant-numeric:tabular-nums}
   .uline .uk{color:var(--muted)}
   .uline .addr{min-width:0;display:flex;align-items:baseline;gap:8px}
   .uline .addr b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:400;color:var(--text);
@@ -289,7 +291,9 @@
   .plrow.dead .paddr{color:var(--muted)}
   .plrow .pmeta{color:var(--muted);white-space:nowrap;font-size:12.5px;
     font-variant-numeric:tabular-nums;display:flex;gap:8px;align-items:baseline}
-  .plrow.alive .pmeta .pms{color:var(--amber)}
+  /* 候选池里的毫秒数不再按「在用/可用」染成一种颜色，改成按快慢分档，
+     跟概况页、实时解析用的是同一套 lat-pill（<100 绿 / <300 黄 / 更慢红） */
+  .plrow .pmeta .pms.lat-pill{padding:1px 7px}
   .plrow.dead{grid-template-columns:8px minmax(0,1fr)}
   .plrow.dead .pmeta{grid-column:2;justify-content:flex-start}
   .plrow.dead .pmeta .perr{color:var(--red);opacity:.8;white-space:normal;
@@ -2200,9 +2204,10 @@
       row.appendChild(pv);
     }
     if (ms) {
-      var ms1 = document.createElement("span"); ms1.className = "ums";
+      var ms1 = document.createElement("span");
+      ms1.className = "ums lat-pill " + latClass(ms);   /* 跟候选池/实时解析同一套配色 */
       ms1.textContent = ms + "ms";
-      ms1.title = "上次扫描实测 " + ms + "ms（越小越快）";
+      ms1.title = "上次扫描实测 " + ms + "ms（<100 绿 · <300 黄 · 更慢红）";
       row.appendChild(ms1);
     }
     return row;
@@ -2377,7 +2382,9 @@
       e.textContent = String(r.err || "不通").replace(/^[0-9a-fA-F:.\[\]]+:\s*/, "");
       m.appendChild(e);
     } else {
-      var t = document.createElement("span"); t.className = "pms";
+      var t = document.createElement("span");
+      /* 有实测值就按快慢上色，跟概况页「引擎正在用」那一列完全同一套规则 */
+      t.className = "pms" + (r.ms ? " lat-pill " + latClass(r.ms) : "");
       t.textContent = r.ms ? r.ms + "ms" : (r.state === "active" ? "在用" : "可用");
       m.appendChild(t);
       if (r.state === "alive") {
