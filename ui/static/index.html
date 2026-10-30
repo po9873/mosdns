@@ -1639,7 +1639,8 @@
     github: {series:"github",domain:"github.com",              use:"GitHub 网页 / raw"},
     ghcr:   {series:"ghcr",  domain:"ghcr.io",                 use:"GitHub 镜像仓库 + raw/Release 下载（Fastly 185.199 段）"},
     tmdb:   {series:"tmdb",  domain:"www.themoviedb.org",      use:"TMDB 网页 / API / 海报（含 Jellyfin 用的 api.themoviedb.org）"},
-    imdb:   {series:"imdb",  domain:"www.imdb.com",            use:"IMDb 网页 / 海报（AWS CloudFront）"}
+    imdb:   {series:"imdb",  domain:"www.imdb.com",            use:"IMDb 网页 / 海报（AWS CloudFront）"},
+    auto:   {series:"auto",  domain:"",                        use:"自动治理（体检 / 换血 / 黑名单，不是独立 IP 系列）"}
   };
   var state = { view:"overview", settings:{}, results:{}, logSrc:"pref", timers:[] };
   var $ = function(s){ return document.querySelector(s); };
@@ -3210,11 +3211,11 @@
     if (h.auto_disabled) t += ' <span class="tag">已停用</span>';
     return t;
   }
-  /* 这个源的 IP 只喂给哪一路（系列）+ 那一路服务哪个域名 */
+  /* 这个源的 IP 只喂给哪一路（系列）+ 那一路服务哪个域名（auto 是治理伪路线，源不喂它） */
   function routeSel(it){
     var cur = it.route && ROUTE_META[it.route] ? it.route : "cf";
-    var opts = ROUTES.map(function(r){
-      var m = ROUTE_META[r];
+    var opts = ROUTES.filter(function(r){ return r !== "auto"; }).map(function(r){
+      var m = ROUTE_META[r] || {series:r, domain:""};
       return '<option value="' + r + '"' + (r === cur ? " selected" : "") + ">" +
         escH(m.series) + " · " + escH(m.domain) + "</option>";
     }).join("");
@@ -3346,7 +3347,8 @@
   }
   function renderPool(pools){
     var N = {cf:"Cloudflare", google:"Google", gt:"翻译", github:"GitHub", ghcr:"ghcr", tmdb:"TMDB", imdb:"IMDb"};
-    $("#poolStat").innerHTML = ROUTES.map(function(r){
+    // auto 是治理伪路线，池子里没它的数据时不渲染空格子
+    $("#poolStat").innerHTML = ROUTES.filter(function(r){ return pools[r] || r !== "auto"; }).map(function(r){
       var p = pools[r] || {};
       var meta = ROUTE_META[r] || {series:r, domain:"", use:""};
       var rows = p.by_source || [];
