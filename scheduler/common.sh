@@ -933,6 +933,38 @@ run_route() {
 
   # 通过校验的：ip TTFB ok 吞吐（TTFB 排序，界面显示的就是这个真实响应时间）
   ok=$(printf '%s\n' "$vres" | awk '$2=="ok"{print $1, $3, "ok", ($4==""?"-":$4)}' | sort -k2 -n)
+
+  # 优先社区源：官方网段 / DNS 实时解析出的 IP 在部分受限网络里会「容器侧探测正常、
+  # 用户那边却回 OK / 打不开」。社区源（GitHub520 / ineo6 等）是专为这类网络挑的入口，
+  # 更可能在用户网络里真能打开。开了 PREF_PREFER_THIRD 时，先按来源分档
+  # （社区源/custom=0 优先，镜像=1，官方/feed=2 靠后），同档内再按 TTFB。
+  if [ "${PREF_PREFER_THIRD:-0}" = "1" ]; then
+    local src_rank
+    src_rank=$(python3 - "$route" <<'PY' 2>/dev/null
+import json, sys
+rt = sys.argv[1]
+try:
+    d = json.load(open("/data/pool/%s.json" % rt))
+except Exception:
+    d = {"ips": {}}
+rank = {"thirdparty": 0, "custom": 0, "mirror": 1, "official": 2}
+out = []
+for ip, v in d.get("ips", {}).items():
+    s = str(v.get("s", ""))
+    if s.startswith("feed:"):
+        r = 2
+    else:
+        r = rank.get(s.split("-")[0] if "-" in s else s, 1)
+    out.append("%s %d" % (ip, r))
+print("\n".join(out))
+PY
+)
+    if [ -n "$src_rank" ]; then
+      ok=$(printf '%s\n' "$ok" | awk -v R="$src_rank" '
+        BEGIN { n=split(R, l, "\n"); for (i=1;i<=n;i++){ split(l[i], a, " "); if (a[2]!="") r[a[1]]=a[2] } }
+        { rk=(($1 in r)? r[$1] : 1); print rk, $0 }' | sort -k1,1n -k3,3n | sed 's/^[0-9] //')
+    fi
+  fi
   # 明确不可用：1034/1010/1020、证书不符、5xx、以及「能连但这个地址不提供该服务」
   hard=$(printf '%s\n' "$vres" | awk '$2!="ok" && $2!="timeout" && $2!="fail" && $2!="busy"{print $1" "$2}')
   # 不确定（可能只是网络抖动或对方限速）：超时、连接失败、429
