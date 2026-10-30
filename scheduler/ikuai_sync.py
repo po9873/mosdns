@@ -137,7 +137,10 @@ def main():
 
     created = updated = failed = 0
     for dom in doms:
-        ips = maps[dom][:max_ip]
+        # 只取 IPv4（爱快 parse_type=ipv4 规则不收 v6；v6 留给 mosdns 自己答）
+        ips = [p for p in maps[dom] if _is_ip(p) and ":" not in p][:max_ip]
+        if not ips:
+            continue
         body = {
             "domain": dom,
             "dns_addr": ",".join(ips),
