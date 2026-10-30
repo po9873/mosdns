@@ -8,10 +8,13 @@
 export PREF_NO_V6=1
 
 # github.com 那批 IP 同时服务这些域名（实测逐个通过证书校验）：
-#   www/api/codeload/collector  github 自己的主机名
+#   www/codeload/collector  github 自己的主机名
 #   avatars/camo/user-images   README 里的图片、头像
 #   raw/objects/gist           raw 文件、Release 附件、gist
-export PREF_EXTRA_DOMAINS="www.github.com api.github.com codeload.github.com collector.github.com avatars.githubusercontent.com camo.githubusercontent.com user-images.githubusercontent.com raw.githubusercontent.com objects.githubusercontent.com gist.githubusercontent.com"
+# 注意 api.github.com 不在此列：优选池里的网页边缘对 API 路径回 301 踢到
+# github.com 网页端（App 的 API 请求全被带偏，表现为 429/410 报错页），
+# 实测全网段只有少数 IP 真承载 API，见下方 PREF_EXTRA_LINES 固定映射。
+export PREF_EXTRA_DOMAINS="www.github.com codeload.github.com collector.github.com avatars.githubusercontent.com camo.githubusercontent.com user-images.githubusercontent.com raw.githubusercontent.com objects.githubusercontent.com gist.githubusercontent.com"
 
 # 必须「真能打开 GitHub 页面」才算可用：根路径返回的内容里必须包含 GitHub。
 # 否则会出现「TCP 通、证书也对、但页面只回 OK / 空白」的假可用 IP 被写进 hosts，
@@ -29,4 +32,14 @@ export PREF_PREFER_THIRD=1
 set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1
+
+# api.github.com 固定映射（须在 source common.sh 之后，PREF_DIR 才有定义）：
+# 只 pin 实测通过 GET /rate_limit 返回 200 JSON 的「真 API 边缘」
+# （140.82.116.6 / 20.205.243.168，2026-10-30 验证）。每轮优选原样追加，
+# 不会被网页 IP 覆盖。IP 失效时手动更新此文件即可。
+export PREF_EXTRA_LINES="$PREF_DIR/.github.extra"
+cat > "$PREF_EXTRA_LINES" <<'EOT'
+api.github.com 140.82.116.6 20.205.243.168
+EOT
+
 run_route "github" "/app/config/seeds/github.txt" 443
