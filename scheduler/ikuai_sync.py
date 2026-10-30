@@ -109,14 +109,13 @@ def main():
     tag = os.environ.get("IKUAI_COMMENT", TAG_DEFAULT)
     max_ip = int(os.environ.get("IKUAI_MAXIP", MAX_IP_DEFAULT))
 
-    # 令牌完整性自检: 爱快令牌是 base64 的 UUID，解出来应是 8-4-4-4-12
+    # 令牌完整性自检: 爱快令牌是 base64，解码应得 24 或 36 位
     try:
         dec = base64.b64decode(token + "=" * (-len(token) % 4)).decode()
-        parts = dec.split("-")
-        if len(parts) != 5 or len(dec) != 36:
-            log("警告: 令牌解码=%s 长度异常, 可能复制不完整!" % dec)
+        if len(dec) not in (24, 36) or not all(c in "0123456789abcdef-" for c in dec):
+            log("警告: 令牌解码=%s 格式异常, 请核对是否复制完整" % dec)
     except Exception:
-        log("警告: 令牌不是合法 base64, 可能复制不完整!")
+        log("警告: 令牌不是合法 base64, 请核对是否复制完整")
 
     maps = load_mappings()
     if not maps:
