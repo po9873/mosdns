@@ -34,12 +34,14 @@ source /app/scheduler/common.sh
 acquire_lock || exit 1
 
 # api.github.com 固定映射（须在 source common.sh 之后，PREF_DIR 才有定义）：
-# 只 pin 实测通过 GET /rate_limit 返回 200 JSON 的「真 API 边缘」
-# （140.82.116.6 / 20.205.243.168，2026-10-30 验证）。每轮优选原样追加，
-# 不会被网页 IP 覆盖。IP 失效时手动更新此文件即可。
+# 不再写死——每轮先跑 api_pin_refresh.py：向多个公共DNS解析 api.github.com 拿
+# 候选 + 已知种子，逐个验证 GET /rate_limit 返回 200 JSON（网页边缘给不出），
+# 取最快的 2 个写入固定行。IP 失效/被限流时下轮自动换新，无需人工。
+# 刷新失败则回退到上次结果或内置种子。
 export PREF_EXTRA_LINES="$PREF_DIR/.github.extra"
-cat > "$PREF_EXTRA_LINES" <<'EOT'
-api.github.com 140.82.116.6 20.205.243.168
-EOT
+if ! python3 /app/scheduler/lib/api_pin_refresh.py "$PREF_EXTRA_LINES" 2>/dev/null \
+   || [ ! -s "$PREF_EXTRA_LINES" ]; then
+  printf 'api.github.com 140.82.116.6 20.205.243.168\n' > "$PREF_EXTRA_LINES"
+fi
 
 run_route "github" "/app/config/seeds/github.txt" 443
