@@ -297,14 +297,16 @@ def process_watchlist(pools, alive, prev):
     return promoted, wst
 
 
-def plan_side(k, alive, current, keep):
+def plan_side(k, alive, current, keep, protect=()):
     """决定这一侧最终用哪几条。
 
     规则：
       0) 延时优先：在用的逐条体检。只要候选池里有一条明显更快（快 30ms 以上
-         或快 20% 以上），就把这条慢的换掉——只看「全局最快 vs 在用最快」
+         或快 30% 以上），就把这条慢的换掉——只看「全局最快 vs 在用最快」
          是不够的：在用三条里只要夹着一条 241ms 的，就够拖慢整轮解析
          （同一个 IP 换成域名写法常常就从 241ms 掉到 14ms，那种最该换）；
+         上一轮刚换进来的那条给一轮豁免（除非新候选快一倍），否则测量噪声
+         会让 A→B→A 来回换，每换一次引擎就要重载一次；
       1) 体检没换掉的，原样留着（连 dial_addr 一起）——换一次就是一次重载，
          在用的本来就是最快的那批时不要没事抖一下；
       2) 第一轮每个服务只取最快的一个入口，先保证「多家」而不是「一家多 IP」；
@@ -344,22 +346,33 @@ def plan_side(k, alive, current, keep):
         take(r)
 
     def free_best():
-        """候选池里还没被挑走的最快一条；优先挑「本来没在用」的，
-        免得把 241ms 那条换成一条已经在用的、白换一次。"""
+        """候选池里还没被挑走的最快一条。
+
+        优先挑「本来没在用」的，免得把 241ms 那条换成一条已经在用的、白换一次；
+        再优先挑「落地 IP 还没出现在已选里」的——两条都落在同一个 IP 上，
+        快是快，可一旦那个 IP 被掐就一起完，冗余等于没有。
+        """
         sl, su = seen_line(), seen_url()
-        c = [x for x in alive
-             if x["line"] not in sl and _url(x["line"]) not in su and x["line"] not in cur_lines]
+        ips = {x.get("ip") for x in picked if x.get("ip")}
+        free = [x for x in alive if x["line"] not in sl and _url(x["line"]) not in su]
+        c = [x for x in free if x["line"] not in cur_lines and x.get("ip") not in ips]
         if not c:
-            c = [x for x in alive if x["line"] not in sl and _url(x["line"]) not in su]
+            c = [x for x in free if x["line"] not in cur_lines]
+        if not c:
+            c = free
         return min(c, key=lambda x: x["ms"]) if c else None
 
     # 0) 延时优先：慢的先挑人，免得快的先把候选池里最快的占走
+    protect = {str(x).strip() for x in (protect or ())}
     for r in sorted(picked, key=lambda x: x["ms"], reverse=True):
         c = free_best()
         if not c:
             break
         gain = r["ms"] - c["ms"]
-        if gain >= 30 or c["ms"] <= r["ms"] * 0.8:
+        if gain >= 30 or c["ms"] <= r["ms"] * 0.7:
+            # 刚换进来的那条：除非新候选快一倍，否则这轮先不折腾它
+            if r["line"] in protect and c["ms"] > r["ms"] * 0.5:
+                continue
             _log("up: %s侧 %s 在用 %.0fms 偏慢，换成 %s（%.0fms，快 %.0fms）"
                  % (LABEL.get(k, k), _url(r["line"]), r["ms"], _url(c["line"]), c["ms"], gain))
             picked[picked.index(r)] = c
@@ -492,7 +505,9 @@ def _scan_locked(force=False):
         for r in alive[k]:
             if _url(r["line"]) not in act_urls and not manual:
                 new.append({"side": k, "line": r["line"], "ms": r["ms"], "ip": r["ip"]})
-        plan[k] = plan_side(k, alive[k], act[k], keep)
+        # 上一轮刚换进来的那条，这一轮先别急着再换走（防测量噪声来回抖）
+        plan[k] = plan_side(k, alive[k], act[k], keep,
+                            protect=(prev.get("swapped") or {}).get(k) or ())
 
     applied, changed_sides = False, []
     if not manual:
@@ -544,11 +559,19 @@ def _scan_locked(force=False):
         except Exception as e:
             _log("收编后重渲染失败：%s" % e)
 
+    # 本轮新换进来的那几条：下一轮给它们一轮豁免，免得延时测量的一点点
+    # 抖动就把刚换好的又换回去，每换一次引擎都要重载
+    swapped = {}
+    for k in ("local", "remote"):
+        act_urls_now = {_url(x) for x in act[k]}
+        swapped[k] = [x for x in (plan.get(k) or []) if _url(x) not in act_urls_now]
+
     out = {
         "at": now,
         "took_ms": int((time.time() - t0) * 1000),
         "mode": "manual" if manual else "auto",
         "applied": applied,
+        "swapped": swapped,
         "changed_sides": changed_sides,
         "keep": keep,
         "due_min": due,
