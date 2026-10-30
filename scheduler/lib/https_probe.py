@@ -102,13 +102,12 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None):
             # 对方限速：只是这一会儿忙，不代表这个 IP 坏了，别拉黑、也别写进 hosts
             return "busy", ttfb, None, False
         if status == 400:
-            # GitHub 的「Whoa there! You have sent an invalid request」就是 400。
-            # 看着像「站点返回 400」，实际是这个落地 IP 被对方风控盯上了：
-            # TCP 通、证书对、TTFB 甚至很快，但整站打不开。以前 400 被当成 ok，
-            # 于是这种 IP 被优选写进 hosts，浏览器一直吃这张拦截页。
-            low = buf.decode("utf-8", "replace").lower()
-            if "whoa there" in low or "invalid request" in low:
-                return "blocked", ttfb, None, False
+            # GitHub 的「Whoa there!」/「Bad request」都是 400：TCP 通、证书对、
+            # TTFB 甚至很快，但整站打不开——是这个落地 IP 被对方风控盯上了。
+            # 以前 400 落到下面当 ok，于是这种 IP 被优选写进 hosts，浏览器
+            # 一直吃那张拦截页。校验请求的都是正常页面，正常页面不会回 400，
+            # 所以一概判死，不再看正文（正文里到底写 Whoa 还是 Bad request 不重要）。
+            return "blocked", ttfb, None, False
         if status == 421:
             # 421 Misdirected：证书对、TCP 通，但这个 IP 不服务这个域名。
             # 典型场景：CloudFront 上能服务 www.imdb.com 的 IP，对
