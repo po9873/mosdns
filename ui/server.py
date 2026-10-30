@@ -1237,6 +1237,9 @@ def scan_detail(d):
     act = d.get("active") or {}
     alive = d.get("alive") or {}
     failed = d.get("failed") or {}
+    # 候选池里显示的延时和概况页用同一本台账（测速优先），否则同一条上游
+    # 在这个列表写 103ms、在概况页写 466ms，看着就像两个东西
+    lat = upstream_latency()
     for k in ("local", "remote"):
         active_lines = [str(x).strip() for x in (act.get(k) or []) if str(x).strip()]
         active_urls = {x.split()[0] for x in active_lines}
@@ -1259,12 +1262,16 @@ def scan_detail(d):
             ip = str(r.get("ip") or "").strip() or (lp[1] if len(lp) > 1 else "")
             is_act = line in active_lines or (lp[0] in active_urls) or bool(ip and ip in active_ips)
             rows.append({"line": line, "state": "active" if is_act else "alive",
-                         "ms": int(r.get("ms") or 0), "ip": r.get("ip") or "", "err": ""})
+                         "ms": int(lat.get((lp[0], ip)) or lat.get((lp[0], "")) or r.get("ms") or 0),
+                         "ip": r.get("ip") or "", "err": ""})
         # 在用但没出现在探测结果里的（配置文件里手写的、扫描前刚改的）兜底
         for line in active_lines:
             if line not in seen:
                 seen.add(line)
-                rows.append({"line": line, "state": "active", "ms": 0, "ip": "", "err": ""})
+                lp2 = line.split()
+                rows.append({"line": line, "state": "active",
+                             "ms": int(lat.get((lp2[0], "")) or lat.get((lp2[0], lp2[1] if len(lp2) > 1 else "")) or 0),
+                             "ip": "", "err": ""})
         for r in failed.get(k) or []:
             line = str(r.get("line") or "").strip()
             if not line or line in seen:
@@ -1491,6 +1498,9 @@ _SCAN_INFO = {
     "next_at": 0,
 }
 _DEAD_FILE = os.path.join(DATA_DIR, ".speed_dead.json")
+# 最近一次测速的延时落盘：容器重启后内存里的 _SPEED 就没了，概况页会掉回
+# 「定时扫描」那套并发测出来的假高延时，和用户刚看过的测速页对不上。
+_SPEED_MS_FILE = os.path.join(DATA_DIR, "doh_speed_ms.json")
 
 
 def _speed_snapshot():
@@ -1710,6 +1720,17 @@ def _speed_worker(items, qname, act):
             _SPEED["phase"] = ""
             _SPEED["retry_left"] = 0
             _SPEED["done"] = len(out)
+        # 延时台账落盘：重启后概况页还能显示「上次测出来是多少」，
+        # 而不是掉回扫描口径的一堆虚高数字
+        try:
+            keep = [{"side": x.get("side"), "line": x.get("line"), "ms": x.get("ms")}
+                    for x in out if x.get("ok") and x.get("ms")]
+            tmp = _SPEED_MS_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"at": int(time.time()), "items": keep}, f, ensure_ascii=False)
+            os.replace(tmp, _SPEED_MS_FILE)
+        except Exception:
+            pass
         # 不管这轮是手动点的还是后台定时跑的，扫完都把确认死的候选池条目删掉——
         # 之前只挂在后台调度里，手动点「立即测速」不会清理，等于留个口子。
         prune_dead()
@@ -1806,11 +1827,10 @@ _MS_CACHE = {"mt": 0, "data": {}}
 
 
 def _scan_ms_map():
-    """最近一次上游扫描测到的延时：{(url, ip): ms}，另有 url 兜底。
+    """最近一次定时扫描测到的延时：{(url, ip): ms}，另有 url 兜底。
 
-    概况页「引擎正在用」那几行以前只有名字没有快慢，看不出在用的那条
-    是不是其实已经慢了。这里把扫描结果按地址配回去，界面上就能直接写
-    「13ms」——是不是该换、换了有没有变好，一眼能看见。
+    注意这套数是「12 路一起抢」测出来的，握手排队都算在延时里，同一条上游
+    能报到 466ms，而测速页写 103ms。所以只在「还没测过速」时兜底用。
     """
     p = os.path.join(DATA_DIR, "doh_scan.json")
     try:
@@ -1826,7 +1846,6 @@ def _scan_ms_map():
         return _MS_CACHE["data"]
     out = {}
     for side in ("local", "remote"):
-        m = {}
         for r in ((d.get("alive") or {}).get(side) or []):
             parts = str(r.get("line") or "").split()
             url = parts[0] if parts else ""
@@ -1837,11 +1856,57 @@ def _scan_ms_map():
                 ms = 0
             if not (url and ms):
                 continue
-            m.setdefault((url, ip), ms)
-            m.setdefault((url, ""), ms)
-        out[side] = m
+            out.setdefault((url, ip), ms)
+            out.setdefault((url, ""), ms)
     _MS_CACHE.update({"mt": mt, "data": out})
     return out
+
+
+def _speed_ms_map():
+    """最近一次「测速」的延时台账：走 mosdns 自己的转发端口逐条问出来的，
+    并发压到 6，测的才是这台机器真实转发一次要多久。
+
+    为什么延时只认这一个来源：概况页原来只取定时扫描的数（12 路并发、
+    握手互相挤），同一时刻测速页写 103ms、概况页写 466ms，两个界面摆在一起
+    就像互相打脸。延时是同一件事，只能有一个数。
+    """
+    with _SPEED_LOCK:
+        items = list(_SPEED.get("items") or [])
+    if not items:
+        # 内存里还没有（刚重启、这轮还没测完）：用上回落盘的那批
+        try:
+            with open(_SPEED_MS_FILE, encoding="utf-8") as f:
+                items = json.load(f).get("items") or []
+        except Exception:
+            items = []
+    m = {}
+    for it in items:
+        if it.get("pending"):
+            continue
+        if "ok" in it and not it.get("ok"):
+            continue
+        try:
+            ms = int(it.get("ms") or 0)
+        except Exception:
+            ms = 0
+        if not ms:
+            continue
+        parts = str(it.get("line") or "").split()
+        url = parts[0] if parts else ""
+        ip = parts[1] if len(parts) > 1 else ""
+        if not url:
+            continue
+        m.setdefault((url, ip), ms)
+        m.setdefault((url, ""), ms)
+    return m
+
+
+def upstream_latency():
+    """统一延时台账 {(url, ip): ms}：测速结果优先，没测过才退回扫描结果。"""
+    sp = _speed_ms_map()
+    if sp:
+        return sp
+    return _scan_ms_map() or {}
 
 
 def read_upstreams():
@@ -1876,7 +1941,7 @@ def read_upstreams():
             cur["dial"] = m.group(1)
     # 补上「主机名 / 直连 IP」两种展示形式：IP 形式的 addr 主机就是 IP，
     # 域名形式要靠 dial_addr 才知道连的是哪个 IP。
-    msmap = _scan_ms_map()
+    msmap = upstream_latency()
     for key in ("local", "remote"):
         for u in res[key]:
             m = re.match(r"https?://([^/]+)", u["addr"])
@@ -1885,9 +1950,8 @@ def read_upstreams():
             u["ipv6"] = ":" in u["ip"] and not re.match(r"^\d+\.\d+\.\d+\.\d+$", u["ip"])
             # 概况页每行右侧要写清「这是哪家的」：按主机名 + 落地 IP 认，认不出就留主机名
             u["provider"] = provider_of(u["addr"] + " " + u["ip"])[0]
-            # 上次扫描实测的延时：先按「地址+落地 IP」精确配，配不上再按地址配
-            mm = msmap.get(key) or {}
-            u["ms"] = int(mm.get((u["addr"], u["ip"])) or mm.get((u["addr"], "")) or 0)
+            # 上次实测的延时：先按「地址+落地 IP」精确配，配不上再按地址配
+            u["ms"] = int(msmap.get((u["addr"], u["ip"])) or msmap.get((u["addr"], "")) or 0)
     return res
 
 

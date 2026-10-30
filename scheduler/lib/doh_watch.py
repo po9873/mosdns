@@ -481,7 +481,10 @@ def _scan_locked(force=False):
                 pools[k].append(line)
     results = {}
     for k in ("local", "remote"):
-        results[k] = dp.probe_many(pools[k], qname=QNAME[k], timeout=5, workers=12)
+        # 并发压到 4：12 路一起握手，谁先抢到谁快，测出来的 ms 里混着排队时间，
+        # 同一条上游能被报成 466ms（实际转发 103ms），拿这种数做「换不换」的
+        # 判断就是拿噪声当依据。慢一点没关系，一小时才扫一次。
+        results[k] = dp.probe_many(pools[k], qname=QNAME[k], timeout=5, workers=4)
     alive = {k: sorted([r for r in results[k] if r["ok"]], key=lambda r: r["ms"]) for k in ("local", "remote")}
 
     # 观察名单：够格的新上游在这里转正（写候选池 + 并入本轮可用集合）
