@@ -225,32 +225,53 @@ filter_bad_ips() {
 # 用法: auto_map_domains <route> <skip域名列表> <dedupe:0|1> <ip...>
 #   skip   —— 已会写入的域名（主域名 + 附加域名），跳过避免重复行
 #   dedupe —— 1 = 追加场景，跳过当前 hosts 里已有的域名；0 = 整文件重写场景
+# 面板上被用户删掉的域名记在 /data/prefs/<route>.deny.txt，
+# 写在这里的域名不再映射，也不会被自动发现收回来（否则删了下一轮又回来）。
+route_denied() {
+  local f="$PREF_DIR/$1.deny.txt" d="$2" now
+  [ -s "$f" ] || return 1
+  now=$(date +%s)
+  # 每行「域名 到期时间戳」：
+  #   NF<2 或时间戳=0 —— 永久黑名单（面板上手动拉黑的），只有移出才回来；
+  #   时间戳>now      —— 冷却期，到期就当没删过，条件满足照样重新发现。
+  awk -v d="$d" -v now="$now" \
+      '$1==d && (NF<2 || $2+0==0 || $2+0>now){f=1} END{exit !f}' "$f"
+}
+
 auto_map_domains() {
   local route="$1" skip="$2" dedupe="$3"; shift 3
-  local ips="$*" adf="$PREF_DIR/.autodom/$route.txt" d dok cur_have=""
-  [ -s "$adf" ] || return 0
+  local ips="$*" adf="$PREF_DIR/.autodom/$route.txt" cdf="$PREF_DIR/$route.custom.txt"
+  local d dok cur_have="" src
+  # 两个来源：自动发现（日志里捞的漏网域名）+ 面板上手动加的域名。
+  # 手动加的走同一套校验——「这个 IP 能服务 A 域名」不等于能服务 B 域名，
+  # 不验一遍会把用户加的域名指到一批根本不认它的 IP 上，直接打不开。
+  [ -s "$adf" ] || [ -s "$cdf" ] || return 0
   if [ "$dedupe" = "1" ] && [ -f "$PREF_DIR/$route.hosts" ]; then
     cur_have=$(awk 'NF{print $1}' "$PREF_DIR/$route.hosts")
   fi
-  while IFS= read -r d; do
-    d=$(printf '%s' "$d" | tr -d '\r' | awk 'NF')
-    case "$d" in ''|\#*) continue ;; esac
-    case " $skip " in *" $d "*) continue ;; esac
-    if [ -n "$cur_have" ]; then
-      printf '%s\n' "$cur_have" | grep -qxF "$d" && continue
-    fi
-    dok=$(printf '%s\n' $ips \
-          | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 / "" "" 2>/dev/null \
-          | awk '$2=="ok"{print $1}')
-    if [ -z "$dok" ]; then
-      log "$route: 自动域名 $d 没有 IP 通过校验，暂不映射（日志里仍会跟踪）"
-      continue
-    fi
-    log "$route: 自动发现域名 $d 校验通过，已加入映射"
-    printf '%s' "$d"
-    printf ' %s' $dok
-    printf '\n'
-  done < "$adf"
+  for src in "$adf" "$cdf"; do
+    [ -s "$src" ] || continue
+    while IFS= read -r d; do
+      d=$(printf '%s' "$d" | tr -d '\r' | awk 'NF')
+      case "$d" in ''|\#*) continue ;; esac
+      case " $skip " in *" $d "*) continue ;; esac
+      route_denied "$route" "$d" && continue
+      if [ -n "$cur_have" ]; then
+        printf '%s\n' "$cur_have" | grep -qxF "$d" && continue
+      fi
+      dok=$(printf '%s\n' $ips \
+            | python3 "$SELF_DIR/lib/https_probe.py" "$d" 443 6 4 1 / "" "" 2>/dev/null \
+            | awk '$2=="ok"{print $1}')
+      if [ -z "$dok" ]; then
+        log "$route: 域名 $d 没有 IP 通过校验，暂不映射（确认这批节点是否服务它）"
+        continue
+      fi
+      log "$route: 域名 $d 校验通过，已加入映射"
+      printf '%s' "$d"
+      printf ' %s' $dok
+      printf '\n'
+    done < "$src"
+  done
 }
 
 # mosdns hosts 格式：每行「域名 ip1 ip2 ...」，域名必须在第一位，
@@ -276,6 +297,7 @@ write_route() {
     # 不能所有路都这么干：github.com 和 raw.githubusercontent.com 根本不是一批 IP。
     for d in ${PREF_EXTRA_DOMAINS:-}; do
       [ "$d" = "$domain" ] && continue
+      route_denied "$route" "$d" && continue
       # 附加域名也得逐个 IP 验一遍，不能照抄主域名的 IP。
       # 「这个 IP 能服务 A 域名」不等于「能服务 B 域名」——CloudFront 上实测
       # IMDb 那批 IP 里就有一个对 m.media-amazon.com 回 421 Misdirected，
@@ -300,6 +322,16 @@ write_route() {
   # 是两个完全不同的 CDN，共用一批 IP 必然有一个打不开。
   if [ -n "${PREF_EXTRA_LINES:-}" ] && [ -s "$PREF_EXTRA_LINES" ]; then
     awk 'NF' "$PREF_EXTRA_LINES" >> "$PREF_DIR/$route.hosts"
+  fi
+  # 面板上固定下来的 IP（<route>.pin.txt，每行「域名 ip1 ip2 ...」）：
+  # 写了就以这里为准，不再跟着优选变。同名的行先换成 pin 的内容，再补上没有的。
+  pinf="$PREF_DIR/$route.pin.txt"
+  if [ -s "$pinf" ]; then
+    awk 'NR==FNR{if(NF>1)p[$1]=$0; next}
+         { if ($1 in p) { print p[$1]; delete p[$1] } else print }
+         END{ for (k in p) print p[k] }' \
+        "$pinf" "$PREF_DIR/$route.hosts" > "$PREF_DIR/$route.hosts.tmp" \
+      && mv "$PREF_DIR/$route.hosts.tmp" "$PREF_DIR/$route.hosts"
   fi
   printf '%s\n' "$pairs" > "$PREF_DIR/$route.meta"
   merge_hosts
@@ -553,6 +585,44 @@ fill_backup() {
   return 0
 }
 
+# ---------- 同 CDN 横向扩段 ----------
+# 场景：这一路「整体被限速」——不是 IP 坏了，而是这一段在国内就是慢（Fastly
+# 185.199 段 6~20KB/s、CloudFront 65.9 段也一样）。在原来那段里再怎么重探、
+# 换多少个 IP 都没用，得换到同一家 CDN 的其它边缘段去。CDN 普遍按 SNI 路由，
+# 同家的其它边缘 IP 也认这个域名、证书也是同一张，所以换段对客户端透明——
+# 这正是「只改 DNS 就能修好」的前提，不需要任何代理。
+cdn_ranges_file() {
+  if [ -s /data/cdn_ranges.txt ]; then echo /data/cdn_ranges.txt; else echo /app/config/cdn_ranges.txt; fi
+}
+
+# 输出可用的换段 IP（每行 "ip 延时 ok 速度"），取不到就什么都不输出
+cdn_expand_ips() {  # $1=域名 $2=端口 $3=路径 $4=expect $5=最低吞吐 $6=保留数；stdin=当前 IP
+  local dom="$1" port="$2" ppath="$3" pexp="$4" min="${5:-200}" keep="${6:-3}" ips
+  ips=$(cat)
+  [ -z "$ips" ] && return 0
+  printf '%s\n' "$ips" | python3 "$SELF_DIR/lib/cdn_expand.py" --domain "$dom" --port "$port" \
+    --timeout 6 --conc "${conc:-4}" --path "$ppath" --expect "$pexp" \
+    --speed-url "${PREF_SPEED_URL:-}" --min-kbps "$min" --keep "$keep" \
+    --ranges "$(cdn_ranges_file)" 2>/dev/null
+}
+
+# 找到更快段就喂进候选池：本轮全量重探自然会把它们选进来（延迟也更低）
+cdn_expand_seed() {  # $1=路 $2=域名 $3=端口 $4=路径 $5=expect $6=当前IP（换行分隔）
+  local route="$1" dom="$2" port="$3" ppath="$4" pexp="$5" cur="$6"
+  local out n sp
+  out=$(printf '%s\n' "$cur" | cdn_expand_ips "$dom" "$port" "$ppath" "$pexp" "${st_speed:-200}" "${keep_min:-3}")
+  if [ -z "$out" ]; then
+    log "$route: 同家 CDN 也没找到更快的段，继续按原池重探"
+    return 1
+  fi
+  n=$(printf '%s\n' "$out" | awk 'NF' | wc -l | tr -d ' ')
+  sp=$(printf '%s\n' "$out" | awk '$4!="-"{print $4}' | sort -n | tail -1)
+  printf '%s\n' "$out" | awk 'NF{print $1, "verify"}' | sub_cli feed "$route" >/dev/null 2>&1
+  printf '%s\n' "$out" | awk 'NF{print $1, "ok"}' | sub_cli bump-many "$route" >/dev/null 2>&1
+  log "$route: 横向换段命中 ${n} 个同 CDN 其它网段 IP（最快 ${sp:-?}KB/s），已并入候选池参加本轮重探"
+  return 0
+}
+
 # ---------- 单路优选主流程 ----------
 run_route() {
   local route="$1" seed="$2" port="${3:-443}"
@@ -662,6 +732,12 @@ run_route() {
             slow=1; why="响应 ${vbest%.*}ms 超过 ${st_ttfb}ms"
           elif [ -n "$vspeed" ] && [ "${vspeed%%.*}" -lt "$st_speed" ] 2>/dev/null; then
             slow=1; why="两轮实测吞吐都只有 ${vspeed%.*}KB/s（低于 ${st_speed}KB/s）"
+          fi
+          # 变慢了先别急着在老段里死磕：很可能整段被限速，换到同家 CDN 的其它
+          # 边缘段才有救（换完客户端无感，证书同属一张）。找到就并入本轮重探。
+          if [ -n "$slow" ]; then
+            log "$route: $why —— 先看是不是当地这段被限速（同 CDN 横向换段）"
+            cdn_expand_seed "$route" "$ptarget" "$port" "$ppath" "$pexp" "$cur"
           fi
           if [ -z "$slow" ]; then
             local shown_speed live_rows orig_n state_rows

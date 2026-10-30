@@ -1,0 +1,39 @@
+# 上游 DoH 自动发现的「种子服务商」（doh_discover.py 用）
+#
+# 格式:  域名 端点路径(逗号分隔多个) 已知IP(逗号分隔多个) 侧(local/remote/auto)
+#
+# 这里的 IP 只是起点，不是定论：每一轮都会重新解析域名拿到它现在的 A/AAAA，
+# 所以服务商哪天换 IP、加新端点，系统自己就跟上来了，不用人改。侧写 auto 的
+# 按探测连接 IP 查 china_ip 库判断（和观察名单同一套判据）。
+#
+# /data/doh_services.txt 存在的话会一起读（追加或覆盖都行），镜像升级不会冲掉。
+
+# ---- 国内 ----
+dns.alidns.com                 /dns-query,/query        223.5.5.5,223.6.6.6,2400:3200::1      local
+alidns.cn                      /dns-query               223.5.5.5,223.6.6.6                   local
+doh.pub                        /dns-query,/query        1.12.12.12,120.53.53.53               local
+dns.pub                        /dns-query               1.12.12.12,120.53.53.53               local
+doh.360.cn                     /dns-query               101.226.4.6,123.125.81.6              local
+doh.tuna.tsinghua.edu.cn       /dns-query               101.6.6.6                             local
+dns.ipv6dns.com                /dns-query                                                      local
+
+# ---- 国外 ----
+cloudflare-dns.com             /dns-query                1.1.1.1,1.0.0.1,2606:4700:4700::1111  remote
+family.cloudflare-dns.com      /dns-query                1.1.1.3,1.0.0.3                       remote
+security.cloudflare-dns.com    /dns-query                1.1.1.2,1.0.0.2                       remote
+dns.google                     /dns-query                8.8.8.8,8.8.4.4,2001:4860:4860::8888  remote
+dns.quad9.net                  /dns-query                9.9.9.9,149.112.112.112               remote
+dns11.quad9.net                /dns-query                9.9.9.11,149.112.112.11              remote
+dns.adguard-dns.com            /dns-query                94.140.14.14,94.140.15.15             remote
+family.adguard-dns.com         /dns-query                94.140.14.15,94.140.15.16             remote
+unfiltered.adguard-dns.com     /dns-query                94.140.14.140,94.140.14.141           remote
+dns.nextdns.io                 /dns-query                                                      remote
+freeresolv.dns.controld.com    /dns-query                76.76.2.11,76.76.10.11                remote
+p0.freeresolv.dns.controld.com /dns-query                76.76.2.0,76.76.10.0                  remote
+dns.sb                         /dns-query                185.222.222.222,2a09::                remote
+doh.opendns.com                /dns-query                208.67.222.222,208.67.220.220         remote
+dns.mullvad.net                /dns-query                194.242.2.2                           remote
+dns0.eu                        /dns-query                193.110.81.0,185.253.5.0              remote
+dns.digitale-gesellschaft.ch   /dns-query                185.95.218.42,2a05:fc84::42           remote
+doh.libredns.gr                /dns-query                116.202.176.26                        remote
+dns.switch.ch                  /dns-query                130.59.31.248                         remote

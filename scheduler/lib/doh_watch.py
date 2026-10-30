@@ -18,7 +18,9 @@
 import ipaddress
 import json
 import os
+import socket
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -405,6 +407,89 @@ def plan_side(k, alive, current, keep, protect=()):
     return [r["line"] for r in picked[:keep]]
 
 
+def _diag_ms(port, qname, timeout=3.0, tries=2):
+    """经 127.0.0.1:<port> 问一次，返回毫秒；失败返回 0。
+
+    这条入口是 mosdns 里「只指向某一条上游」的转发器，问它就等于让 mosdns
+    真转发一趟：连接复用、并发取最快、命中缓存都算在里面。监测页测速走的是
+    同一批端口，所以这个数和界面上的毫秒是同一个口径。
+
+    查询名每次带随机标签：同名会被 mosdns 缓存，第二次测出来 1ms，那就成
+    假数据了。两趟取最快——单趟偶尔撞上上游重解析，能报出 1s 以上。
+    """
+    best = 0
+    for i in range(tries):
+        rand = "%05x" % ((int(time.time() * 1000) + i * 7919) & 0xFFFFF)
+        pkt = dp._wire_query("w%s.%s" % (rand, qname), 1,
+                             (int(time.time() * 1000) + i) & 0xFFFF)
+        if isinstance(pkt, tuple):   # 兼容老版本返回 (报文, qid)
+            pkt = pkt[0]
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(timeout)
+        t0 = time.time()
+        try:
+            s.sendto(pkt, ("127.0.0.1", port))
+            data, _ = s.recvfrom(4096)
+            if data:
+                ms = int((time.time() - t0) * 1000.0)
+                if best == 0 or ms < best:
+                    best = ms
+        except Exception:
+            pass
+        finally:
+            s.close()
+    return best
+
+
+def warm_measure(alive):
+    """把每条的毫秒数换成「mosdns 真转发一趟」的耗时。
+
+    为什么必须换：冷启动 TLS 握手测出来的数（并发 4、每条一个新连接）和用户
+    实际体验差一个量级——同一条 1.12.12.12，冷测能报 2128ms，走 mosdns 转发
+    只有 111ms；界面按前者排，就会出现「明明有 55ms 的却守着 111ms 不换」。
+    两边用同一批 diag 端口量，排名才和界面对得上。
+
+    返回 {(side, line): ms}；量不到的条目不出现在结果里（调用方保持冷测值）。
+    """
+    ports = {}
+    try:
+        for p in dc.diag_ports():
+            ports[(p["side"], " ".join(str(p["line"]).split()))] = p["port"]
+    except Exception as e:
+        _log("读测速入口失败：%s" % e)
+        return {}
+    jobs = []
+    for side in ("local", "remote"):
+        for r in alive.get(side) or []:
+            port = ports.get((side, " ".join(str(r["line"]).split())))
+            if port:
+                jobs.append((side, " ".join(str(r["line"]).split()), port))
+    if not jobs:
+        return {}
+    out = {}
+    lock = threading.Lock()
+
+    def run(job):
+        side, line, port = job
+        ms = _diag_ms(port, QNAME[side])
+        if ms:
+            with lock:
+                out[(side, line)] = ms
+
+    ths = []
+    for job in jobs:
+        t = threading.Thread(target=run, args=(job,))
+        t.daemon = True
+        t.start()
+        ths.append(t)
+        # 一次别开太多：10 条同时问会互相排队，又把数测脏
+        while sum(1 for x in ths if x.is_alive()) >= 4:
+            time.sleep(0.02)
+    for t in ths:
+        t.join()
+    return out
+
+
 def scan(force=False):
     lock = os.path.join(DATA_DIR, ".doh_scan.lock")
     if not _acquire(lock):
@@ -486,6 +571,29 @@ def _scan_locked(force=False):
         # 判断就是拿噪声当依据。慢一点没关系，一小时才扫一次。
         results[k] = dp.probe_many(pools[k], qname=QNAME[k], timeout=5, workers=4)
     alive = {k: sorted([r for r in results[k] if r["ok"]], key=lambda r: r["ms"]) for k in ("local", "remote")}
+
+    # 冷测只用来判断「通不通」；「谁快谁慢」必须换成经 mosdns 转发的实测，
+    # 否则判决依据和界面显示的毫秒数对不上，用户看到 55ms 的闲置、
+    # 111ms 的占着位，怎么都想不明白为什么没换。
+    t_warm = time.time()
+    try:
+        wm = warm_measure(alive)
+        for k in ("local", "remote"):
+            n = 0
+            for r in alive[k]:
+                key = (k, " ".join(str(r["line"]).split()))
+                w = wm.get(key)
+                if w:
+                    r["cold_ms"] = r["ms"]
+                    r["ms"] = w
+                    n += 1
+            alive[k].sort(key=lambda r: r["ms"])
+        if wm:
+            _log("转发实测 %d 条（%.1fs）：%s" % (
+                len(wm), time.time() - t_warm,
+                "，".join("%s %dms" % (_url(r["line"]), r["ms"]) for r in alive["local"][:3])))
+    except Exception as e:
+        _log("转发实测失败，退回冷测值：%s" % e)
 
     # 观察名单：够格的新上游在这里转正（写候选池 + 并入本轮可用集合）
     promoted, watch_ok = [], {}

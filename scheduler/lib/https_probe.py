@@ -9,7 +9,7 @@
 # 用法: python3 https_probe.py <domain> <port> <timeout> <concurrency> [samples] [path] [expect]
 # 输入(stdin): 每行 "ip" 或 "ip tcp_ms"
 # 输出(stdout): "ip 状态 ttfb_ms speed_kbps"
-#   状态 = ok / wrong / cf1034 / cf10xx / cert / timeout / fail / http5xx
+#   状态 = ok / wrong / blocked / busy / cf1034 / cf10xx / cert / timeout / fail / http5xx
 #
 # 为什么能传 path/expect：不同服务「能用」的样子不一样。
 #   Google 翻译的根路径 / 本来就回 404（前端节点就这样），拿 GET / 判断，
@@ -101,6 +101,14 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None):
         if status == 429:
             # 对方限速：只是这一会儿忙，不代表这个 IP 坏了，别拉黑、也别写进 hosts
             return "busy", ttfb, None, False
+        if status == 400:
+            # GitHub 的「Whoa there! You have sent an invalid request」就是 400。
+            # 看着像「站点返回 400」，实际是这个落地 IP 被对方风控盯上了：
+            # TCP 通、证书对、TTFB 甚至很快，但整站打不开。以前 400 被当成 ok，
+            # 于是这种 IP 被优选写进 hosts，浏览器一直吃这张拦截页。
+            low = buf.decode("utf-8", "replace").lower()
+            if "whoa there" in low or "invalid request" in low:
+                return "blocked", ttfb, None, False
         if status == 421:
             # 421 Misdirected：证书对、TCP 通，但这个 IP 不服务这个域名。
             # 典型场景：CloudFront 上能服务 www.imdb.com 的 IP，对

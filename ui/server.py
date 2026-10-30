@@ -904,7 +904,7 @@ def is_ip(s):
 
 # 「明确坏」的校验结果：Cloudflare 10xx 错误页 / 证书不符 / 5xx
 # 这类 IP 绝不允许出现在「优选 IP」里——UI 再兜一道，防止 hosts 里的历史残留被展示出来
-HARD_FAIL = re.compile(r"^(cf\d{3,4}|cert|wrong|http5\d\d)$")
+HARD_FAIL = re.compile(r"^(cf\d{3,4}|cert|wrong|blocked|http5\d\d)$")
 
 
 def is_hard_fail(status):

@@ -179,9 +179,47 @@ esc() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
 # 控制台里手动指定了上游（/data/doh_*_custom.txt）就直接用，不再探测：
 # 用户填什么就用什么，容器重启也照办；只有没填的才自动探测。
 _p1=""; _p2=""
+
+# 上次扫描（doh_watch）按实测延时挑出来的那几条，重启时原样沿用。
+#
+# 为什么必须先问它：启动时 select_doh 是「新探一遍、挑最快 3 条」，它和扫描
+# 用的不是同一套测量，而且顺序也不一样 —— 每重启一次就把扫描辛苦换好的上游
+# 换回去，界面上就成了「明明有 55ms 的，在用的却是 111ms」。数据还新（6 小时
+# 内）就以扫描结果为准，扫描自然会继续按延时优化。
+carry_scan() { # $1=side $2=输出文件
+  python3 - "$1" "$2" <<'PY'
+import json, sys, time
+side, out = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(open("/data/doh_scan.json", encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+if time.time() - float(d.get("at") or 0) > 6 * 3600:
+    sys.exit(1)
+lines = (d.get("active") or {}).get(side) or []
+if not lines:
+    sys.exit(1)
+buf = []
+for ln in lines:
+    parts = str(ln).split()
+    if not parts:
+        continue
+    buf.append('        - addr: "%s"' % parts[0])
+    if len(parts) > 1:
+        buf.append('          dial_addr: "%s:443"' % parts[1].strip("[]"))
+    buf.append("          insecure_skip_verify: true")
+if not buf:
+    sys.exit(1)
+with open(out, "w", encoding="utf-8") as f:
+    f.write("\n".join(buf) + "\n")
+PY
+}
+
 if [ -s "$DATA_DIR/doh_remote_custom.txt" ]; then
   cp -f "$DATA_DIR/doh_remote_custom.txt" /tmp/remote_list.txt
   elog "国外上游：沿用控制台手动配置"
+elif carry_scan remote /tmp/remote_list.txt; then
+  elog "国外上游：沿用上次扫描结果（实测延时排序）"
 else
   python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_remote_candidates.txt" www.google.com 3 6 >/tmp/remote_list.txt 2>/tmp/remote_doh.log &
   _p1=$!
@@ -189,6 +227,8 @@ fi
 if [ -s "$DATA_DIR/doh_local_custom.txt" ]; then
   cp -f "$DATA_DIR/doh_local_custom.txt" /tmp/local_list.txt
   elog "国内上游：沿用控制台手动配置"
+elif carry_scan local /tmp/local_list.txt; then
+  elog "国内上游：沿用上次扫描结果（实测延时排序）"
 else
   python3 /app/scheduler/lib/select_doh.py "$DATA_DIR/doh_local_candidates.txt"  www.baidu.com  3 6 >/tmp/local_list.txt  2>/tmp/local_doh.log &
   _p2=$!
