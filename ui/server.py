@@ -1829,8 +1829,10 @@ _MS_CACHE = {"mt": 0, "data": {}}
 def _scan_ms_map():
     """最近一次定时扫描测到的延时：{(url, ip): ms}，另有 url 兜底。
 
-    注意这套数是「12 路一起抢」测出来的，握手排队都算在延时里，同一条上游
-    能报到 466ms，而测速页写 103ms。所以只在「还没测过速」时兜底用。
+    以前这里是「12 路一起冷握手」，排队时间也算进延时，同一条上游能报 466ms
+    而实际转发只有 100ms 出头，所以只敢当兜底。现在 doh_watch 扫完会再用
+    diag 端口按「mosdns 真转发一趟」重测一遍（warm_measure），这里读到的就是
+    和设置页同一份的数，可以当主口径用了。
     """
     p = os.path.join(DATA_DIR, "doh_scan.json")
     try:
@@ -1902,11 +1904,18 @@ def _speed_ms_map():
 
 
 def upstream_latency():
-    """统一延时台账 {(url, ip): ms}：测速结果优先，没测过才退回扫描结果。"""
-    sp = _speed_ms_map()
-    if sp:
-        return sp
-    return _scan_ms_map() or {}
+    """统一延时台账 {(url, ip): ms}：以「扫描的转发实测」为准，没扫过才用测速结果。
+
+    为什么反过来：扫描现在也走同一批 diag 端口、按 mosdns 真转发一趟来量
+    （doh_watch.warm_measure），和设置页候选池是同一份数、同一个口径。
+    概况页要是不跟它同源，两边就永远差一截——重开容器后测速那本账还是冷的，
+    概况写 1039ms、候选写 20ms，用户只能认为「又没生效」。
+    测速只是「点一下立刻测」的临时数，留作扫描还没跑过时的兜底。
+    """
+    sc = _scan_ms_map()
+    if sc:
+        return sc
+    return _speed_ms_map() or {}
 
 
 def read_upstreams():
