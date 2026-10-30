@@ -7,7 +7,7 @@
 set -u
 source /app/scheduler/common.sh
 
-ROUTES="cf google gt github ghcr tmdb imdb"
+ROUTES="cf google gt github ghcr tmdb imdb auto"
 LISTS_PY="/app/scheduler/lib/lists.py"
 SUB_PY="/app/scheduler/lib/subs.py"
 DOH_WATCH="/app/scheduler/lib/doh_watch.py"

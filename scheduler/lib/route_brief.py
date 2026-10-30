@@ -12,7 +12,7 @@ import sys
 ROUTES = ["cf", "google", "gt", "github", "ghcr", "tmdb", "imdb"]
 LABEL = {
     "cf": "Cloudflare", "google": "Google 搜索", "gt": "Google 翻译",
-    "github": "GitHub", "ghcr": "ghcr", "tmdb": "TMDB", "imdb": "IMDb",
+    "github": "GitHub", "ghcr": "ghcr", "tmdb": "TMDB", "imdb": "IMDb", "auto": "自动治理",
 }
 
 
