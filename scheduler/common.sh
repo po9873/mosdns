@@ -384,12 +384,18 @@ DOM_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z]{2,
 
 # 黑名单（未过期的）里的 IP 绝不进 all.hosts：拉黑只写了 blacklist.json 时，
 # 别处还 pin 着的坏 IP 会残留到下一轮优选，这条过滤是每轮合并时的保险层。
+# 例外：pin_exempt.json 里登记的「固定映射专属 IP」——它们被拉黑的原因是
+# 对主域名不服务（如 116.6 对 github.com 网页 blocked），但专属探针刚验证过
+# 它们对自己的域名（api.github.com /rate_limit=200）是好的，按域名豁免。
 banned = set()
+exempt = {}
 try:
     import json as _json, time as _time
     _bl = _json.load(open("/data/blacklist.json"))
     _now = _time.time()
     banned = {ip for ip, v in _bl.items() if (v.get("until") or 0) > _now}
+    _ex = _json.load(open("/data/prefs/pin_exempt.json"))
+    exempt = _ex if isinstance(_ex, dict) else {}
 except Exception:
     pass
 
@@ -407,7 +413,9 @@ for ln in open(src, encoding="utf-8", errors="replace"):
         if k is None:
             bad = True
             break
-        if k in banned or k in seen:
+        if k in banned and dom not in exempt.get(k, []):
+            continue
+        if k in seen:
             continue
         seen.add(k)
         ips.append(k)
@@ -474,9 +482,17 @@ purge_bad_from_hosts() {
   [ -f "$hf" ] || return 0
   tmp="$hf.purge"
   python3 - "$hf" "$tmp" "$@" <<'PY'
-import sys
+import sys, json, os
 hf, tmp = sys.argv[1], sys.argv[2]
 bad = set(sys.argv[3:])
+# 固定映射豁免：专属 IP 对豁免域名保留（见 pin_exempt.py 顶部说明）
+exempt = {}
+try:
+    with open(os.path.join(os.path.dirname(hf), "pin_exempt.json")) as f:
+        _ex = json.load(f)
+        exempt = _ex if isinstance(_ex, dict) else {}
+except Exception:
+    pass
 out = []
 try:
     lines = open(hf, encoding="utf-8").read().splitlines()
@@ -486,7 +502,8 @@ for ln in lines:
     parts = ln.split()
     if not parts:
         continue
-    keep = [x for x in parts[1:] if x not in bad]
+    keep = [x for x in parts[1:]
+            if x not in bad or parts[0] in exempt.get(x, [])]
     if keep:
         out.append(" ".join([parts[0]] + keep))
 open(tmp, "w", encoding="utf-8").write("\n".join(out) + ("\n" if out else ""))

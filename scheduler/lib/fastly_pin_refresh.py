@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import subs  # noqa: E402
+import pin_exempt  # noqa: E402
 
 DATA_DIR = "/data"
 PREF_DIR = os.path.join(DATA_DIR, "prefs")
@@ -238,6 +239,12 @@ def main():
         ips = results.get(dom) or old.get(dom) or []
         if ips:
             lines.append(" ".join([dom] + ips))
+            # 登记黑名单豁免（专属探针刚验证过才登记；沿用旧结果时保留旧豁免）
+            if results.get(dom):
+                try:
+                    pin_exempt.update(dom, results[dom])
+                except Exception:
+                    pass
         else:
             log("警告: %s 一个可用 IP 都没有，本轮不写它的固定行" % dom)
     tmp = out_file + ".tmp"

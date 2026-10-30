@@ -123,6 +123,13 @@ def main():
         return
     with open(out, "w") as f:
         f.write("%s %s\n" % (DOMAIN, " ".join(good)))
+    # 登记黑名单豁免：这些 IP 可能因「对 github.com 网页 blocked」被主优选
+    # 拉黑，但它们对 api.github.com 是真 API 边缘（刚验证过 /rate_limit=200）。
+    try:
+        import pin_exempt
+        pin_exempt.update(DOMAIN, good)
+    except Exception:
+        pass
     print("api pins refreshed: %s (ttfb %s ms)" % (
         " ".join(good), "/".join("%.0f" % t for t, _i in results[:KEEP])))
 

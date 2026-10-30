@@ -2264,6 +2264,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/resolve":
             data = self._body()
             domain = str(data.get("domain", "")).strip()
+            # 支持直接粘贴完整网址：剥掉协议前缀 / 路径 / 查询串 / 端口 /
+            # 用户信息，只留主机名。https://www.sehuatang.org/ 和
+            # www.sehuatang.org 效果一样，不用手动删前缀。
+            m = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", domain)
+            if m:
+                domain = domain[m.end():]
+            domain = domain.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+            if "@" in domain:
+                domain = domain.rsplit("@", 1)[-1]
+            if domain.startswith("["):          # [v6字面量]:端口
+                domain = domain[1:domain.index("]")] if "]" in domain else domain.strip("[]")
+            elif domain.count(":") == 1:        # host:port
+                domain = domain.rsplit(":", 1)[0]
+            domain = domain.strip(".").strip("[]")
             if not re.match(r"^[A-Za-z0-9_.-]{1,253}$", domain):
                 return self._send(400, {"error": "非法域名"})
             pairs = dns_lookup(domain)

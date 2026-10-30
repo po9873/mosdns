@@ -1106,7 +1106,7 @@
             <span class="hint" style="margin:0">每个域名一行、全部列出 · 最近 40 条带应答 IP 与来源 · 框内滚动</span>
           </div>
           <form class="resolve-row" id="resolveForm">
-            <input id="resolveInput" placeholder="输入域名，例如 www.google.com" autocomplete="off">
+            <input id="resolveInput" placeholder="输入域名或完整网址，如 www.google.com 或 https://www.google.com/" autocomplete="off">
             <button class="btn primary" type="submit">解析</button>
           </form>
           <div class="resolve-meta" id="resolveMeta"></div>
@@ -2578,6 +2578,16 @@
   $("#resolveForm").addEventListener("submit", function(e){
     e.preventDefault();
     var domain = $("#resolveInput").value.trim();
+    if (!domain) return;
+    // 支持直接粘贴完整网址：剥协议前缀/路径/端口，只留主机名
+    var m = domain.match(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//);
+    if (m) domain = domain.slice(m[0].length);
+    domain = domain.split("/")[0].split("?")[0].split("#")[0];
+    if (domain.indexOf("@") >= 0) domain = domain.split("@").pop();
+    if (domain.charAt(0) === "[") { var e2 = domain.indexOf("]"); if (e2 > 0) domain = domain.slice(1, e2); }
+    else if (domain.split(":").length === 2) domain = domain.split(":")[0];
+    domain = domain.replace(/^\.+|\.+$/g, "");
+    $("#resolveInput").value = domain;
     if (!domain) return;
     $("#resolveMeta").textContent = "解析中…";
     $("#resolveResult").innerHTML = "";

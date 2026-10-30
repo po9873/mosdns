@@ -270,6 +270,15 @@ def purge_ips_everywhere(bad_ips):
     except Exception:
         return
     purged = False
+    # 固定映射豁免：专属 IP（api.github.com 的 API 边缘等）被拉黑是因为对
+    # 主域名不服务，但对豁免域名是好的（专属探针刚验证过），不撤。
+    exempt = {}
+    try:
+        with open(os.path.join(DATA_DIR, "pin_exempt.json")) as f:
+            _ex = json.load(f)
+            exempt = _ex if isinstance(_ex, dict) else {}
+    except Exception:
+        pass
     for name in names:
         path = os.path.join(PREF_DIR, name)
         try:
@@ -281,7 +290,8 @@ def purge_ips_everywhere(bad_ips):
             p = ln.split()
             if not p:
                 continue
-            keep = [x for x in p[1:] if x not in bad]
+            keep = [x for x in p[1:]
+                    if x not in bad or p[0] in exempt.get(x, [])]
             if len(keep) != len(p) - 1:
                 hit = True
             if keep:
