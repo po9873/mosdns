@@ -1,32 +1,52 @@
 #!/bin/bash
-# Google Translate 路优选：目标 translate.google.com
+# Google 翻译路优选：目标 translate.google.com / translate.googleapis.com
+#
+# 关键原则：翻译「能不能用」不在网页壳，而在翻译后台接口。早先只验「首页含
+# translate 字样」，把一批「只代理网页壳、后台翻译接口 403/404」的半吊子反代
+# 收了进去——页面能打开、翻译做不出来（用户原话：假的你加载进去干嘛）。
+#
+# 现在两层保险：
+#   ① 主优选改用强判定：探针目标直接指向翻译接口 translate.googleapis.com，
+#      必须真翻出译文（响应含原文 hello）才算 ok，半吊子 403/404 直接出局。
+#   ② 翻译路由各域（接口端 / Chrome 翻译接口 / 静态资源域）由 gt_pin_refresh.py
+#      独立强校验后写进 .gt.extra，经 PREF_EXTRA_LINES 注入；只有「真能翻」的 IP
+#      才会被写进任何翻译域，杜绝假可用。
+# 两路结果合并进 gt.hosts，稳定模式同样用强判定复核（已选 IP 若不再能翻会重探）。
 set -u
 
-# 这一路「什么算能用」= 真能打开 Google 翻译的页面，而不是「HTTP 通就算」。
-# 踩过的两个坑（都已修在 https_probe 里 / 这里）：
-#   1) 不能用 GET / 只看状态码：Google 前端节点对不认识的路径一律回 404，
-#      状态码判断等于把所有真能用的节点全判死。
-#   2) 不能拿 translate_a/single 接口做校验：无 key 的接口有配额，探测太频繁会被
-#      429 限速，于是所有节点都「失败」——探测行为本身耗尽了配额。
-# 现在用首页 + 页面特征判定，不消耗接口配额。
-# 注意：translate.google.com 首页是纯 JS 壳，整页没有 <title>（实测 70KB 内都没有），
-# 所以这里不能用标题判断，用页面里必然出现的 translate 字样。
-export PREF_PROBE_TARGET=translate.google.com
-export PREF_PROBE_PATH='/'
-export PREF_PROBE_EXPECT='translate'
+# 主优选探针：直击翻译接口，必须真翻出译文（响应里回显原文 hello）
+#
+# client 必须是 dict-chrome-ex —— Chrome 浏览器翻译/划词翻译真实使用的接口。
+# 同一个 IP 在 HTTP/2 下：client=gtx → 429「Sorry」、client=webapp → 403、
+# 只有 client=dict-chrome-ex → 200 真译文。拿错 client 会把自己骗过去。
+export PREF_PROBE_TARGET=translate.googleapis.com
+export PREF_PROBE_PATH='/translate_a/single?client=dict-chrome-ex&sl=en&tl=zh-CN&dt=t&q=hello'
+export PREF_PROBE_EXPECT='hello'
 
-# 网页端和接口端是同一批边缘节点，两个域名都要写进 hosts：
-# 只映射 translate.google.com 的话，浏览器插件/接口走 translate.googleapis.com
-# 时仍会去上游拿解析结果，那多半是污染值，等于白优选。
-# 另外几个也在用：
-#   translate.googleusercontent.com  「翻译后的网页」代理，点开译文里的链接走它
-#   clients5.google.com              网页端/App 取语言包与部分接口
-#   translate-pa.googleapis.com      Chrome 内置「翻译此网页」真正调用的接口
-#                                    （v1/translateHtml）。漏了它的后果很具体：
-#                                    这个域名会解析到真实 Google IP（172.217.x），
-#                                    国内连不上，浏览器只报「无法翻译此网页」。
-export PREF_EXTRA_DOMAINS="translate.googleapis.com translate-pa.googleapis.com translate.googleusercontent.com clients5.google.com www.gstatic.com fonts.gstatic.com ssl.gstatic.com"
+# 翻译各域的「真能力」由 gt_pin_refresh 强校验后注入；主优选不再靠弱判定写域名
+export PREF_EXTRA_DOMAINS=""
 
 source /app/scheduler/common.sh
 acquire_lock || exit 1
+
+pref_log="${PREF_LOG:-$DATA_DIR/pref.log}"
+gt_extra="$PREF_DIR/.gt.extra"
+
+# 翻译路真能力验证（接口能翻出译文才算数），结果供主优选合并注入
+if ! python3 /app/scheduler/lib/gt_pin_refresh.py "$gt_extra" 2>>"$pref_log" \
+   || [ ! -s "$gt_extra" ]; then
+  [ -s "$gt_extra" ] \
+    && log "gt: gt_pin_refresh 本轮未产出新结果，沿用旧 .gt.extra" \
+    || log "gt: 本轮未能选出任何真能翻的 IP，翻译将回退上游解析（不写假 IP）"
+fi
+export PREF_EXTRA_LINES="$gt_extra"
+
 run_route "gt" "/app/config/seeds/ghtranslate.txt" 443
+
+# 兜底：若主优选因整层不通撤下了 gt.hosts，但 .gt.extra 有强校验过的可用 IP，
+# 仍把它写进去，避免「明明有真能翻的 IP 却整路回退」
+if [ ! -s "$PREF_DIR/gt.hosts" ] && [ -s "$gt_extra" ]; then
+  cp "$gt_extra" "$PREF_DIR/gt.hosts"
+  merge_hosts
+  log "gt: 主优选未选出，已用强校验结果兜底写入 gt.hosts"
+fi

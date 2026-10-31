@@ -75,8 +75,10 @@ def probe_api(ip):
         ss = ctx.wrap_socket(s, server_hostname=DOMAIN)
         ss.sendall((
             "GET %s HTTP/1.1\r\nHost: %s\r\n"
-            "User-Agent: Mozilla/5.0 (compatible; mosdns-pref/1.0)\r\n"
-            "Accept: */*\r\nConnection: close\r\n\r\n" % (PROBE_PATH, DOMAIN)
+            "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n"
+            "Accept: */*\r\nAccept-Language: zh-CN,zh;q=0.9,en;q=0.8\r\n"
+            "Connection: close\r\n\r\n" % (PROBE_PATH, DOMAIN)
         ).encode())
         buf = b""
         while len(buf) < 65536:
@@ -99,6 +101,19 @@ def probe_api(ip):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else ".github.extra"
+
+    # —— 稳定复用（省负载）：现有首选 IP 仍通过 /rate_limit 真校验就沿用，
+    # 不重扫候选。用户要求「能用就别动它」，失效才换。
+    try:
+        for ln in open(out, encoding="utf-8", errors="replace"):
+            p = ln.split()
+            if len(p) >= 2 and p[0] == DOMAIN:
+                if probe_api(p[1]) is not None:
+                    print("%s pins reused: %s" % (DOMAIN, p[1]))
+                    return
+    except Exception:
+        pass
+
     cands = []
     for r in RESOLVERS:
         for ip in dns_a(DOMAIN, r):

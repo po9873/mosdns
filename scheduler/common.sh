@@ -252,10 +252,29 @@ domain_probe_path() {
   esac
 }
 
+# 域名专属路线：有些域名有专门的优选路、用更严的判定（如翻译走 HTTP/2 + 真实
+# 翻译接口），其他路自动发现时必须让开。否则 google 路会用「页面含 Google 字样」
+# 这种弱标准把 translate.* 映射到一批 h2 下 429 的节点，直接盖掉 gt 路的强校验
+# 结果——用户看到的就是「面板显示优选好了、浏览器照样用不了」。
+# 返回空 = 无专属归属，谁都能映射。
+domain_owner() {
+  case "$1" in
+    translate.google.com|translate.googleapis.com|translate-pa.googleapis.com|\
+    translate.googleusercontent.com|clients5.google.com) printf 'gt' ;;
+    api.github.com|avatars.githubusercontent.com|raw.githubusercontent.com|\
+    objects.githubusercontent.com|camo.githubusercontent.com|\
+    gist.githubusercontent.com|user-images.githubusercontent.com|\
+    pkg-containers.githubusercontent.com|codeload.github.com|\
+    collector.github.com|cafe.github.com) printf 'github' ;;
+    ghcr.io) printf 'ghcr' ;;
+    *) printf '' ;;
+  esac
+}
+
 auto_map_domains() {
   local route="$1" skip="$2" dedupe="$3"; shift 3
   local ips="$*" adf="$PREF_DIR/.autodom/$route.txt" cdf="$PREF_DIR/$route.custom.txt"
-  local d dok cur_have="" src
+  local d dok cur_have="" src own
   # 两个来源：自动发现（日志里捞的漏网域名）+ 面板上手动加的域名。
   # 手动加的走同一套校验——「这个 IP 能服务 A 域名」不等于能服务 B 域名，
   # 不验一遍会把用户加的域名指到一批根本不认它的 IP 上，直接打不开。
@@ -270,6 +289,12 @@ auto_map_domains() {
       case "$d" in ''|\#*) continue ;; esac
       case " $skip " in *" $d "*) continue ;; esac
       route_denied "$route" "$d" && continue
+      # 有专属路线的域名让开：翻译走 gt（h2 真翻强校验），github 数据面走
+      # github 路（按 CDN 分治）。别的路用弱标准映射它，只会把强结果盖掉。
+      own=$(domain_owner "$d")
+      if [ -n "$own" ] && [ "$own" != "$route" ]; then
+        continue
+      fi
       if [ -n "$cur_have" ]; then
         printf '%s\n' "$cur_have" | grep -qxF "$d" && continue
       fi
@@ -337,6 +362,20 @@ write_route() {
   if [ -n "${PREF_EXTRA_LINES:-}" ] && [ -s "$PREF_EXTRA_LINES" ]; then
     awk 'NF' "$PREF_EXTRA_LINES" >> "$PREF_DIR/$route.hosts"
   fi
+  # 同一域名只留一行。主优选、自动发现域名、PREF_EXTRA_LINES 三处都可能写同一个
+  # 域名（翻译的接口域就是主优选和强校验各写一次），拼起来就是重复行——面板上
+  # 看着像「同一个域名好几条、IP 还不一样」，也容易让下游误判该用哪条。
+  # 规则：后写的赢。PREF_EXTRA_LINES 是独立强校验（h2 真翻）的产物，比主优选
+  # 更可信，让它覆盖主行；顺序按域名首次出现位置保持，便于阅读。
+  # 放在 pin 覆盖之前 —— 面板固定的 IP 优先级最高，不能被这里覆盖掉。
+  awk 'NF{
+         if (!($1 in seen)) order[++n] = $1
+         seen[$1] = 1
+         line[$1] = $0
+       }
+       END{ for (i = 1; i <= n; i++) print line[order[i]] }' \
+      "$PREF_DIR/$route.hosts" > "$PREF_DIR/$route.hosts.tmp" \
+    && mv "$PREF_DIR/$route.hosts.tmp" "$PREF_DIR/$route.hosts"
   # 面板上固定下来的 IP（<route>.pin.txt，每行「域名 ip1 ip2 ...」）：
   # 写了就以这里为准，不再跟着优选变。同名的行先换成 pin 的内容，再补上没有的。
   pinf="$PREF_DIR/$route.pin.txt"

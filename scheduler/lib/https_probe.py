@@ -28,6 +28,17 @@ CF_ERR = re.compile(r"[Ee]rror(?:\s+code:?)?\s+(10\d\d)", re.I)
 STATUS_RE = re.compile(r"^HTTP/1\.[01]\s+(\d{3})")
 LOC_RE = re.compile(r"(?im)^location:\s*(\S+)")
 
+# 探针必须伪装成真实浏览器：Google 系对非浏览器 UA 直接回 429「Sorry...」，
+# CloudFront 对脚本 UA 回 202/403 挑战页。用自造 UA 会被当成「这个 IP 不能用」，
+# 实测却恰恰相反——同一 IP 换浏览器 UA 立刻返回 200 真内容/真译文。
+# 探针的职责是「模拟用户浏览器能不能用」，所以 UA 必须和浏览器一致。
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+BROWSER_HDRS = ("User-Agent: %s\r\n"
+                "Accept: */*\r\n"
+                "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8\r\n"
+                "Connection: close\r\n\r\n" % BROWSER_UA)
+
 
 def _same_site(host_a, host_b):
     """同站判定：只接受完全相同或仅差 www 前缀的跳转。
@@ -84,9 +95,7 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None):
         except ssl.SSLError:
             return "fail", None, None, False
         req = (
-            "GET %s HTTP/1.1\r\nHost: %s\r\n"
-            "User-Agent: Mozilla/5.0 (compatible; mosdns-pref/1.0)\r\n"
-            "Accept: */*\r\nConnection: close\r\n\r\n" % (path or "/", domain)
+            "GET %s HTTP/1.1\r\nHost: %s\r\n%s" % (path or "/", domain, BROWSER_HDRS)
         )
         ss.sendall(req.encode())
 
@@ -228,9 +237,7 @@ def _speed_probe(ip, url, timeout=8, budget=6.0):
     try:
         s.connect(addr)
         ss = ctx.wrap_socket(s, server_hostname=host)
-        req = ("GET %s HTTP/1.1\r\nHost: %s\r\n"
-               "User-Agent: Mozilla/5.0 (compatible; mosdns-pref/1.0)\r\n"
-               "Accept: */*\r\nConnection: close\r\n\r\n" % (path, host))
+        req = ("GET %s HTTP/1.1\r\nHost: %s\r\n%s" % (path, host, BROWSER_HDRS))
         ss.sendall(req.encode())
         buf = b""
         while b"\r\n\r\n" not in buf and len(buf) < 24576:

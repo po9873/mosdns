@@ -19,7 +19,12 @@ source /app/scheduler/common.sh
 acquire_lock || exit 1
 
 export PREF_PROBE_TARGET=ghcr.io
-export PREF_PROBE_PATH='/'
+# 验「Docker registry 真实能力」而不是「首页任意响应」：真 ghcr 对 /v2/ 返回
+# 401 且 body 含 UNAUTHORIZED（Bearer token 缺失的标准应答）。证书对 + 这个
+# 应答 = 这个 IP 确实承载 ghcr registry，docker pull 能走通。光靠 401 状态码
+# 太松（任何返回 401 的站点都算过），收紧到 registry 专属报文体。
+export PREF_PROBE_PATH='/v2/'
+export PREF_PROBE_EXPECT='UNAUTHORIZED'
 # 数据面域名已移交 github 路（fastly_pin_refresh），本路不再写 extra 行
 export PREF_EXTRA_LINES="$PREF_DIR/.ghcr.extra"
 : > "$PREF_EXTRA_LINES"

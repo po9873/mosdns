@@ -167,7 +167,9 @@ def check(ip, domain, path, ok_codes, ok_jump):
         s.settimeout(TIMEOUT)
         ss = ctx.wrap_socket(s, server_hostname=domain)
         req = ("GET %s HTTP/1.1\r\nHost: %s\r\n"
-               "User-Agent: Mozilla/5.0\r\nAccept: */*\r\n"
+               "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n"
+               "Accept: */*\r\nAccept-Language: zh-CN,zh;q=0.9,en;q=0.8\r\n"
                "Connection: close\r\n\r\n" % (path, domain))
         ss.sendall(req.encode())
         buf = b""
@@ -216,6 +218,30 @@ def check_retry(ip, domain, path, ok_codes, ok_jump):
 
 def main():
     out_file = sys.argv[1] if len(sys.argv) > 1 else os.path.join(PREF_DIR, ".github.fastly")
+
+    # —— 稳定复用（省负载）：现有固定映射里每个域的首选 IP 仍真实可用，
+    # 就沿用、不重扫。用户要求「能用就别动它，不要每次都跑」；失效才换 IP。
+    old_all = {}
+    try:
+        for ln in open(out_file, encoding="utf-8", errors="replace"):
+            p = ln.split()
+            if len(p) >= 2:
+                old_all[p[0]] = p[1:]
+    except Exception:
+        old_all = {}
+    if old_all and all(d in old_all for d in DOMAIN_SPECS):
+        def _probe_old(dom):
+            path, codes, jumps = DOMAIN_SPECS[dom]
+            _ip, ok, _t = check_retry(old_all[dom][0], dom, path, codes, jumps)
+            return ok
+        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+            alive = list(ex.map(_probe_old, list(DOMAIN_SPECS)))
+        if alive and all(alive):
+            log("现有固定映射 %d 域全部仍可用，跳过本轮全量扫描" % len(DOMAIN_SPECS))
+            print(json.dumps({"domains": len(DOMAIN_SPECS), "reused": True},
+                             ensure_ascii=False))
+            return
+
     cands = candidates()
     log("候选 %d 个，开始逐域名校验" % len(cands))
     results = {}   # domain -> [(ttfb, ip)]
