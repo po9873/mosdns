@@ -63,6 +63,37 @@ SESSIONS = {}
 SESSION_TTL = 7 * 24 * 3600
 LOCK = threading.Lock()
 
+PING_PAGE = """<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>ICMP Ping 测试</title>
+<style>body{font-family:system-ui;max-width:780px;margin:24px auto;padding:0 16px;color:#222}input{padding:8px;border:1px solid #ccc;border-radius:6px}button{padding:8px 14px;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer}pre{background:#0b1020;color:#9fe;padding:12px;border-radius:8px;overflow:auto}#msg{margin:10px 0;font-weight:600}.err{color:#d33}.ok{color:#1a7f37}</style>
+</head>
+<body>
+<h2>MosDNS . ICMP Ping 测试</h2>
+<p>真正的 ICMP 回显（后端以 root 执行 ping），非 TCP 探测。请先在本面板登录。</p>
+<input id="h" placeholder="域名或 IP，如 ghcr.io / 1.1.1.1" value="ghcr.io" size="32">
+<input id="n" type="number" min="1" max="20" value="4" style="width:64px">
+<button onclick="run()">Ping</button>
+<div id="msg"></div>
+<pre id="out"></pre>
+<script>
+async function run(){
+  var host=document.getElementById("h").value.trim();
+  var count=document.getElementById("n").value||4;
+  var msg=document.getElementById("msg"); var out=document.getElementById("out");
+  msg.textContent="测试中..."; msg.className=""; out.textContent="";
+  try{
+    var r=await fetch("/api/diag/ping",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({host:host,count:Number(count)})});
+    var j=await r.json();
+    if(!r.ok){msg.textContent="失败："+(j.error||r.status); msg.className="err"; return;}
+    msg.className="ok";
+    msg.textContent=j.sent+" 发 / "+j.recv+" 收 / 丢包 "+j.loss+"%"+(j.rtt?("  .  RTT "+j.rtt.min+"/"+j.rtt.avg+"/"+j.rtt.max+" ms"):"");
+    out.textContent=j.raw;
+  }catch(e){msg.textContent="请求错误："+e; msg.className="err";}
+}
+</script>
+</body></html>"""
+
 
 def load_auth():
     """返回 (user, pass, is_default)。is_default=True 表示仍是初始 admin/admin。"""
@@ -2098,6 +2129,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._static("index.html")
         if path.startswith("/static/"):
             return self._static(path[len("/static/"):])
+        if path == "/ping":
+            return self._send(200, PING_PAGE, "text/html; charset=utf-8")
+
         if path == "/api/login":
             return self._send(405, {"error": "use POST"})
 
@@ -2330,6 +2364,40 @@ class Handler(BaseHTTPRequestHandler):
             # 解析只问 127.0.0.1（mosdns 自己），随后逐个 IP 发真实 HTTPS 请求，
             # 「能不能打开」是实测出来的，不是拿两边答案比对推出来的。
             return self._send(200, diag_run(["domain", domain], 90))
+
+        if path == "/api/diag/ping":
+            data = self._body()
+            import re as _re
+            host = (str(data.get("host", "")) or str(data.get("target", ""))).strip()
+            try:
+                count = int(data.get("count") or 4)
+            except Exception:
+                count = 4
+            count = max(1, min(20, count))
+            if not (is_ip(host) or _re.match(r"^[A-Za-z0-9_.-]{1,253}$", host)):
+                return self._send(400, {"error": "请输入合法 IP 或域名"})
+            try:
+                r = subprocess.run(
+                    ["/bin/ping", "-c", str(count), "-W", "2", host],
+                    capture_output=True, timeout=count * 3 + 10,
+                )
+                out = (r.stdout or b"").decode("utf-8", "replace")
+                m = _re.search(r"(\d+) packets transmitted, (\d+) packets received, (\d+)% packet loss", out)
+                if not m:
+                    m = _re.search(r"(\d+) packets transmitted, (\d+) packets received", out)
+                sent = int(m.group(1)) if m else 0
+                recv = int(m.group(2)) if m else 0
+                loss = int(m.group(3)) if (m and m.lastindex >= 3) else (100 if recv == 0 else 0)
+                rtt = None
+                rm = _re.search(r"(?:round-trip|rtt) min/avg/max(?:/mdev)? = ([\d.]+)/([\d.]+)/([\d.]+)", out)
+                if rm:
+                    rtt = {"min": float(rm.group(1)), "avg": float(rm.group(2)), "max": float(rm.group(3))}
+                return self._send(200, {"host": host, "sent": sent, "recv": recv, "loss": loss, "rtt": rtt, "raw": out.strip()})
+            except subprocess.TimeoutExpired:
+                return self._send(504, {"error": "ping 超时", "host": host})
+            except Exception as e:
+                return self._send(500, {"error": "ping 失败: %s" % e, "host": host})
+
 
         if path == "/api/cache/flush":
             try:
