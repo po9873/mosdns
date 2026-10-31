@@ -197,6 +197,50 @@ docker compose pull && docker compose up -d
 判断顺序与 `config.yaml` 中的 `main_sequence` 一致。后面的浅色小字为应答 IP 的归属
 （按 `/data/cdn_ranges.txt` 与镜像内置网段库合并判定），用于判断实际落地位置。
 
+## ICMP Ping 诊断
+
+控制台附带一个真正的 ICMP 回显测试页（区别于「监测」里的 TCP 端口探测）。后端以容器内的 `root` 身份执行 `/bin/ping`，因此能发出真实 ICMP 报文，适合排查「TCP 通但 ICMP 被拦」或反之的场景。
+
+### 使用
+
+浏览器访问 `http://<控制台IP>/ping`，填入目标 IP 或域名与探测次数后点击 **Ping**。该页与所有 `/api/*` 一样需要登录会话。
+
+等价地可直接调接口（cookie 为登录后后端下发的 `pref_session`）：
+
+```bash
+curl -b "pref_session=<登录后cookie>" \
+  -H "Content-Type: application/json" \
+  -d '{"host":"1.1.1.1","count":4}' \
+  http://<控制台IP>/api/diag/ping
+```
+
+返回示例：
+
+```json
+{
+  "host": "1.1.1.1",
+  "sent": 4, "recv": 4, "loss": 0,
+  "rtt": {"min": 12.3, "avg": 13.1, "max": 15.0},
+  "raw": "PING 1.1.1.1 ... 4 packets transmitted, 4 received, 0% packet loss ..."
+}
+```
+
+### 参数与行为
+
+| 项 | 说明 |
+|---|---|
+| `host` / `target` | 目标 IP 或域名（二者等价）；非法值返回 `400` |
+| `count` | 探测次数，默认 `4`，范围 `1~20` 自动截断 |
+| 单次超时 | `ping` 以 `-W 2` 限每包 2 秒，整体超时 `count*3+10` 秒；超时返回 `504` |
+| 解析 | 按 busybox / Linux 的 `N packets transmitted … % packet loss` 与 `round-trip min/avg/max = …` 行提取结果 |
+| 失败 | 命令异常返回 `500` |
+
+### 权限与永久化
+
+- 后端发出原始套接字需要 `NET_RAW`。Docker 默认已带该能力，开箱即用；仅在编排设了 `cap_drop: ALL` 或容器能力被限制时才需补 `cap_add: [NET_ADMIN, NET_RAW]`（见 `docker-compose.yml` 注释）。
+- **ICMP 功能已固化进镜像**：自 commit `9bf14ad` 起 `ui/server.py` 含该实现，由 CI 构建进每一版镜像。因此只要 `docker compose pull` 拉到含该提交的镜像，重建 / 升级容器都不会丢失，无需额外挂载。
+- 如需在不重新构建镜像的前提下热替换 `server.py`，可将宿主机的修改版以只读方式挂载到容器内的 `/app/ui/server.py`（`:ro`）；这属于调试手段，常规部署不需要。
+
 ## 优选机制
 
 ### 七路与对应域名
