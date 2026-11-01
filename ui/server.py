@@ -1272,6 +1272,28 @@ def scan_detail(d):
     # 在这个列表写 103ms、在概况页写 466ms，看着就像两个东西
     lat = upstream_latency()
     for k in ("local", "remote"):
+        if k == "remote":
+            # 国外上游是手写 config 的纯 UDP IP，调度器按 DoH 规则扫描会误判成
+            # 「不是合法的 DoH 地址」并丢弃/判死；且扫描台账也没有实时往返。
+            # 直接读 read_upstreams() 的实时结果，与概况页「引擎正在用」完全同源，
+            # 这样两个面板国外显示一致、且是真实测速。
+            rows = []
+            try:
+                for u in read_upstreams().get("remote", []):
+                    ip = u.get("addr")
+                    ms = u.get("ms")
+                    rows.append({
+                        "line": ip,
+                        "state": "active",
+                        "ms": ms if ms is not None else 0,
+                        "na": ms is None,
+                        "ip": ip,
+                        "err": "" if ms is not None else "实时探测不通（被墙/超时）",
+                    })
+            except Exception:
+                pass
+            out["remote"] = rows
+            continue
         active_lines = [str(x).strip() for x in (act.get(k) or []) if str(x).strip()]
         active_urls = {x.split()[0] for x in active_lines}
         # 同一条上游在配置里可能写成 IP 直连（https://223.5.5.5/dns-query），
@@ -1692,7 +1714,14 @@ def _speed_worker(items, qname, act):
         _SPEED["items"] = list(out)
 
     def one(it, timeout):
-        r = _dns_udp(it["port"], qname.get(it["side"], "www.baidu.com"), timeout=timeout)
+        # 先热身一次（结果丢弃）：DoH 首查要 TCP+TLS 握手，那一段（100ms 以上）
+        # 算进延时就会让测速页显示 148ms、扫描页显示 20ms，两个界面互相打脸。
+        qn = qname.get(it["side"], "www.baidu.com")
+        try:
+            _dns_udp(it["port"], qn, timeout=min(timeout, 3))
+        except Exception:
+            pass
+        r = _dns_udp(it["port"], qn, timeout=timeout)
         cur = {str(x).strip() for x in (act.get(it["side"]) or [])}
         name, host = provider_of(it["line"])
         return dict(it, **r, active=(it["line"] in cur), provider=name, host=host, pending=False)
@@ -1798,7 +1827,10 @@ def diag_speed(refresh=False):
                        "items": [], "counts": {}, "note": "", "done": 0,
                        "total": len(items), "retry_left": 0})
 
-    qname = {"local": "www.baidu.com", "remote": "www.google.com"}
+    # 国外探测域名不能用 www.google.com 这类被墙域名：GFW 会回伪造的快速应答
+    # (5~13ms、62 字节)，把延时测成假的「最快」；换一个能正常解析又没被墙的域名，
+    # 量的才是到上游的真实往返。国内仍用 www.baidu.com。
+    qname = {"local": "www.baidu.com", "remote": "www.bing.com"}
     act = doh_cfg.active() if doh_cfg else {"local": [], "remote": []}
     threading.Thread(target=_speed_worker, args=(items, qname, act), daemon=True).start()
     return _speed_snapshot()
@@ -1944,10 +1976,109 @@ def upstream_latency():
     测速只是「点一下立刻测」的临时数，留作扫描还没跑过时的兜底。
     """
     sc = _scan_ms_map()
-    if sc:
-        return sc
+    # 「测速」台账优先：概况页/测速面板/上游诊断页都读这一份，三处才可能同数；
+    # 扫描缓存只用来补台账里没有的条目（比如刚加进来还没测过的候选）。
+    base = {}
+    try:
+        for k, v in (_speed_ms_map() or {}).items():
+            base[k] = v
+    except Exception:
+        pass
+    for k, v in (sc or {}).items():
+        base.setdefault(k, v)
+    # 真·国外 UDP 上游(纯 IP，手写 config)不在扫描/测速台账里，
+    # 用实时 UDP 探测值，与概况页「引擎正在用」同一口径，避免两个面板对不上
+    udp_ips = []
+    try:
+        with open(os.path.join(DATA_DIR, "config.yaml"), encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                m = re.search(r"-\s*addr:\s*\"?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\"?", ln)
+                if m:
+                    udp_ips.append(m.group(1))
+    except Exception:
+        pass
+    if udp_ips:
+        # 先取「测速」台账（和概况页/诊断页同一口径），台账里没有的再实时探测
+        try:
+            sm = _speed_ms_map()
+        except Exception:
+            sm = {}
+        missing = []
+        for ip in udp_ips:
+            v = sm.get((ip, ip)) or sm.get((ip, ""))
+            if v:
+                base[(ip, ip)] = int(v)
+                base[(ip, "")] = int(v)
+            else:
+                missing.append(ip)
+        if missing:
+            try:
+                live = remote_udp_latencies(missing)
+                for ip, ms in live.items():
+                    if ms is not None:
+                        base[(ip, ip)] = ms
+                        base[(ip, "")] = ms
+            except Exception:
+                pass
+    if base:
+        return base
     return _speed_ms_map() or {}
 
+
+_UDP_LAT = {"at": 0.0, "data": {}}
+
+def _probe_udp_one(ip, port=53, timeout=1.2, qname=None):
+    """直连真·国外 UDP 上游(53)，问一次并量往返耗时(ms)；不通/超时返回 None。
+
+    探测域名用随机不存在的子域，避免 GFW 对已知被墙域名(www.google.com 等)
+    回伪造的快速应答、把延时测成假的 0ms。
+    """
+    if qname is None:
+        qname = "spd-%d.example.com" % int(time.time() * 1000000)
+    try:
+        body, _ = doh_pb._wire_query(qname)
+    except Exception:
+        return None
+    sock = None
+    t0 = time.time()
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(body, (ip, int(port)))
+        raw, _ = sock.recvfrom(4096)
+        if len(raw) < 12:
+            return None
+        return int((time.time() - t0) * 1000)
+    except Exception:
+        return None
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+def remote_udp_latencies(ips, ttl=120):
+    """带 120s 缓存的真·国外 UDP 上游延迟表 {ip: ms|None}，并发探测；概况页与上游诊断页共用同一份缓存，保证两处显示的数字一致。"""
+    now = time.time()
+    if ips and now - _UDP_LAT["at"] < ttl and all(ip in _UDP_LAT["data"] for ip in ips):
+        return dict(_UDP_LAT["data"])
+    results = {}
+    if not ips:
+        _UDP_LAT.update({"at": now, "data": results})
+        return results
+    lock = threading.Lock()
+    def worker(ip):
+        r = _probe_udp_one(ip)
+        with lock:
+            results[ip] = r
+    ths = [threading.Thread(target=worker, args=(ip,)) for ip in ips]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(timeout=2.0)
+    _UDP_LAT.update({"at": now, "data": results})
+    return results
 
 def read_upstreams():
     """从引擎实际加载的 config.yaml 里读出 DoH 上游。
@@ -1982,6 +2113,18 @@ def read_upstreams():
     # 补上「主机名 / 直连 IP」两种展示形式：IP 形式的 addr 主机就是 IP，
     # 域名形式要靠 dial_addr 才知道连的是哪个 IP。
     msmap = upstream_latency()
+    try:
+        spd = _speed_ms_map()
+    except Exception:
+        spd = {}
+    # 真·国外上游是纯 UDP(手写 IP)，不走 DoH 探测池，这里并发量一次往返延迟
+    udp_ips = []
+    for u in res["remote"]:
+        if not re.match(r"https?://", u["addr"]):
+            ip = u["addr"].rsplit(":", 1)[0] if ":" in u["addr"] else u["addr"]
+            if is_ip(ip):
+                udp_ips.append(ip)
+    udp_ms = remote_udp_latencies(udp_ips) if udp_ips else {}
     for key in ("local", "remote"):
         for u in res[key]:
             m = re.match(r"https?://([^/]+)", u["addr"])
@@ -1990,8 +2133,22 @@ def read_upstreams():
             u["ipv6"] = ":" in u["ip"] and not re.match(r"^\d+\.\d+\.\d+\.\d+$", u["ip"])
             # 概况页每行右侧要写清「这是哪家的」：按主机名 + 落地 IP 认，认不出就留主机名
             u["provider"] = provider_of(u["addr"] + " " + u["ip"])[0]
-            # 上次实测的延时：先按「地址+落地 IP」精确配，配不上再按地址配
-            u["ms"] = int(msmap.get((u["addr"], u["ip"])) or msmap.get((u["addr"], "")) or 0)
+            if key == "remote" and not re.match(r"https?://", u["addr"]):
+                # 国外 UDP 上游不在 DoH 探测池里。延时只认「测速」那本台账
+                # （走 mosdns 自己的转发端口实测），这样概况页和上游诊断页
+                # 显示的是同一个数；台账里还没有才退回直连 UDP 往返；
+                # 都没有就是 None，前端显示「不可达」（而不是假的 0ms）
+                sm = (spd.get((u["addr"], u["ip"])) or spd.get((u["addr"], ""))
+                      or msmap.get((u["addr"], u["ip"])) or msmap.get((u["addr"], "")))
+                u["ms"] = int(sm) if sm else udp_ms.get(u["ip"])
+            else:
+                # 国内 DoH：同样只认「测速」台账（和上游诊断页同一份数），
+                # 台账里没有才退回上次扫描缓存，都没有就 0（前端显示「在用」）
+                sl = spd.get((u["addr"], u["ip"])) or spd.get((u["addr"], ""))
+                if sl:
+                    u["ms"] = int(sl)
+                else:
+                    u["ms"] = int(msmap.get((u["addr"], u["ip"])) or msmap.get((u["addr"], "")) or 0)
     return res
 
 
@@ -2129,11 +2286,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._static("index.html")
         if path.startswith("/static/"):
             return self._static(path[len("/static/"):])
-        if path == "/ping":
-            return self._send(200, PING_PAGE, "text/html; charset=utf-8")
-
         if path == "/api/login":
             return self._send(405, {"error": "use POST"})
+
+        if path == "/ping":
+            return self._send(200, PING_PAGE, "text/html; charset=utf-8")
 
         if path.startswith("/api/"):
             if not self._authed():
@@ -2411,7 +2568,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(504, {"error": "ping 超时", "host": host})
             except Exception as e:
                 return self._send(500, {"error": "ping 失败: %s" % e, "host": host})
-
 
         if path == "/api/cache/flush":
             try:

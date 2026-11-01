@@ -2215,12 +2215,18 @@
       pv.title = "这条 DoH 属于 " + provider;
       row.appendChild(pv);
     }
-    if (ms) {
+    if (ms != null && ms !== "" && !isNaN(ms)) {
       var ms1 = document.createElement("span");
       ms1.className = "ums lat-pill " + latClass(ms);   /* 跟候选池/实时解析同一套配色 */
       ms1.textContent = ms + "ms";
-      ms1.title = "上次扫描实测 " + ms + "ms（<100 绿 · <300 黄 · 更慢红）";
+      ms1.title = "实时探测往返 " + ms + "ms（<100 绿 · <300 黄 · 更慢红）";
       row.appendChild(ms1);
+    } else {
+      var ms2 = document.createElement("span");
+      ms2.className = "ums lat-pill lat-na";
+      ms2.textContent = "不可达";
+      ms2.title = "探测超时或被干扰，连不上";
+      row.appendChild(ms2);
     }
     return row;
   }
@@ -2396,8 +2402,9 @@
     } else {
       var t = document.createElement("span");
       /* 有实测值就按快慢上色，跟概况页「引擎正在用」那一列完全同一套规则 */
-      t.className = "pms" + (r.ms ? " lat-pill " + latClass(r.ms) : "");
-      t.textContent = r.ms ? r.ms + "ms" : (r.state === "active" ? "在用" : "可用");
+      t.className = "pms" + (r.ms ? " lat-pill " + latClass(r.ms) : (r.na ? " lat-na" : ""));
+      t.textContent = r.na ? "不可达" : (r.ms ? r.ms + "ms" : (r.state === "active" ? "在用" : "可用"));
+      if (r.na) t.title = "实时探测不通（国外 DNS 波动大，过会儿可能恢复）";
       m.appendChild(t);
       if (r.state === "alive") {
         var b = document.createElement("button");
