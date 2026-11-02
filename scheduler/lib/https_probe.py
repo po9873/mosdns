@@ -65,8 +65,18 @@ BODY_BUDGET = 6.0     # 读 body 最多再花 6 秒
 SPEED_TRUST_BYTES = 32768
 
 
-def _attempt(ip, domain, port, timeout, path="/", expect=None):
-    """跑一次完整探测，返回 (状态, ttfb_ms, speed_kbps, 是否估算)。"""
+def _attempt(ip, domain, port, timeout, path="/", expect=None, strict_redirect=True):
+    """跑一次完整探测，返回 (状态, ttfb_ms, speed_kbps, 是否估算)。
+
+    strict_redirect：是否把「跳去别的站点」判成 wrong。
+
+    只有探的是**该服务专属路径**（/v2/、/raw/...）时才该严格：那种路径正确
+    应答本身就说明这个 IP 承载该服务，跳走 = 假边缘。
+
+    探根路径 / 时必须关掉：很多服务首页天然跳产品页，ghcr.io 就是活例——
+    GET / → 301 https://github.com/features/packages（registry 正常行为），
+    被判跨站跳转后守护把刚优选出来的好 IP 全拉黑了，面板直接「没有优选结果」。
+    """
     v6 = ":" in ip
     fam = socket.AF_INET6 if v6 else socket.AF_INET
     addr = (ip, port, 0, 0) if v6 else (ip, port)
@@ -145,7 +155,7 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None):
             # 泛域名共用），能骗过证书校验；浏览器头像/附件全被带到主站。
             # 同域跳转（如 http→https、加 www）属正常，放行。
             mloc = LOC_RE.search(text)
-            if mloc:
+            if mloc and strict_redirect:
                 loc = mloc.group(1).strip()
                 host = loc.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
                 if host and not _same_site(host, domain):
@@ -274,18 +284,21 @@ def _speed_probe(ip, url, timeout=8, budget=6.0):
             pass
 
 
-def check(item, domain, port, timeout, samples=1, path="/", expect=None, speed_url=None):
+def check(item, domain, port, timeout, samples=1, path="/", expect=None, speed_url=None,
+          strict_redirect=True):
     """对单个 IP 探测；samples>1 时多测几次取「最好的一次」。
 
     为什么要多测：单次吞吐会抖动（实测同一 IP 158/289/532 KB/s），拿一次结果
     就判「慢了」会误触发全量重探。只要任意一次证明它不慢，就不算慢。
     path / expect 用于「这个服务真实长什么样」的判定（见文件头说明）。
+    strict_redirect 见 _attempt 的说明。
     返回 (ip, 状态, ttfb, speed, 是否估算)。
     """
     ip = item.split()[0]
     best = None          # (状态, ttfb, speed, est)
     for _ in range(max(1, int(samples))):
-        st, ttfb, speed, est = _attempt(ip, domain, port, timeout, path, expect)
+        st, ttfb, speed, est = _attempt(ip, domain, port, timeout, path, expect,
+                                        strict_redirect)
         if best is None:
             best = (st, ttfb, speed, est)
             continue

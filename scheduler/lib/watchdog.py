@@ -80,13 +80,31 @@ _GOOGLE_DOMS = ("www.google.com", "www.google.com.hk")
 # CloudFront 对不认识域名的请求在 TLS 阶段就用默认证书，校验根本过不去。
 
 
-def spec_for(domain):
+# 每路专属探测规格：(路径, 正文必须出现的内容)。
+#
+# 守护巡检的默认规格是「根路径、不校验内容」，这对多数站够用，但对
+# 「根路径不代表真实能力」的服务就是误杀机器。ghcr 是最典型的：
+#   GET https://ghcr.io/       → 301 https://github.com/features/packages（跨站）
+#   GET https://ghcr.io/v2/    → 401 + www-authenticate: Bearer realm=...（registry 正常应答）
+# 守护拿根路径去探，撞上跨站 301 判 wrong，把优选刚验证通过的 IP 拉黑 6 小时
+# 并撤下整条路，界面上就成了「还没有优选结果」——IP 好好的，是探针问错了问题。
+#
+# 所以：优选用什么标准，守护就必须用同一套标准。以后新增路时，如果它的
+# 「能用」长在专属路径上（registry / API / raw），在这里补一行。
+_ROUTE_SPEC = {
+    "ghcr": ("/v2/", "UNAUTHORIZED"),
+}
+
+
+def spec_for(domain, route=None):
     """这一路该请求什么路径、正文里该出现什么（默认根路径，不校验内容）。
 
     翻译首页是纯 JS 壳，整页没有 <title>；搜索首页有 <title>Google。
     用这两种特征判断，既不用调翻译接口（有配额，巡检频繁会被 429 限速），
     也能把「能连但不提供该服务」的节点筛掉。
     """
+    if route and route in _ROUTE_SPEC:
+        return _ROUTE_SPEC[route]
     if domain in _TRANS_DOMS:
         return "/", "translate"
     if domain in _GOOGLE_DOMS:
@@ -335,13 +353,19 @@ def candidates(route, domain, skip):
     return out
 
 
-def probe(ip, domain):
+def probe(ip, domain, route=None):
     """巡检只关心「能不能打开」，但 https_probe.check 现在返回 4 个字段
     （ip / 状态 / TTFB / 吞吐）。这里统一补成 4 元组，避免以后它再加字段
-    又把守护线程整个搞崩（之前就崩过：too many values to unpack）。"""
-    path, expect = spec_for(domain)
+    又把守护线程整个搞崩（之前就崩过：too many values to unpack）。
+
+    根路径不启用「跨站跳转 = 坏」的判定（strict_redirect=False）：
+    根路径跳产品页是正常行为，拿来判死会误杀（ghcr 就是这么被撤的）。
+    只有探专属路径（/v2/ 等）时，正确应答才是身份证明，跳走才算假边缘。
+    """
+    path, expect = spec_for(domain, route)
     try:
-        r = https_probe.check(ip, domain, PORT, TIMEOUT, 1, path, expect)
+        r = https_probe.check(ip, domain, PORT, TIMEOUT, 1, path, expect,
+                              strict_redirect=bool(path and path != "/"))
     except Exception:
         return ip, "fail", None, None
     r = tuple(r)
@@ -378,7 +402,7 @@ def run_once():
 
         keep, dropped = [], []
         for ip in ips:
-            _ip, st, ms, _sp = probe(ip, domain)  # check() 返回 (ip, 状态, TTFB, 吞吐)
+            _ip, st, ms, _sp = probe(ip, domain, route)  # check() 返回 (ip, 状态, TTFB, 吞吐)
             checked += 1
             if st == "ok":
                 state.pop("%s|%s" % (route, ip), None)
@@ -414,7 +438,7 @@ def run_once():
             for cand in candidates(route, domain, set(ips) | {d[0] for d in dropped}):
                 if len(added) >= need:
                     break
-                _ip2, st2, _ms2, _sp2 = probe(cand, domain)
+                _ip2, st2, _ms2, _sp2 = probe(cand, domain, route)
                 checked += 1
                 if st2 == "ok":
                     added.append(cand)
