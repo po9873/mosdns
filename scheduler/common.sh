@@ -360,7 +360,19 @@ write_route() {
   # 接口端）。ghcr 不一样——ghcr.io 与 pkg-containers.githubusercontent.com
   # 是两个完全不同的 CDN，共用一批 IP 必然有一个打不开。
   if [ -n "${PREF_EXTRA_LINES:-}" ] && [ -s "$PREF_EXTRA_LINES" ]; then
-    awk 'NF' "$PREF_EXTRA_LINES" >> "$PREF_DIR/$route.hosts"
+    # 固定映射行是唯一「不经过探测就落盘」的入口，所以 v6 过滤必须在这一层也做一遍。
+    # 只靠各路的候选池过滤不够：.github.extra 是 api/fastly 两个子脚本 cat 出来的，
+    # 子脚本里残留的 v6 会原样穿过候选池直接进 hosts，下发给下游客户端后被 reset
+    # （docker pull ghcr 卡在 pkg-containers 就是这个路径）。
+    if [ "${PREF_NO_V6:-0}" = "1" ] || [ "$(setting ipv6)" = "false" ]; then
+      awk 'NF{
+             out = $1; n = 0
+             for (i = 2; i <= NF; i++) if ($i !~ /:/) { out = out " " $i; n++ }
+             if (n > 0) print out
+           }' "$PREF_EXTRA_LINES" >> "$PREF_DIR/$route.hosts"
+    else
+      awk 'NF' "$PREF_EXTRA_LINES" >> "$PREF_DIR/$route.hosts"
+    fi
   fi
   # 同一域名只留一行。主优选、自动发现域名、PREF_EXTRA_LINES 三处都可能写同一个
   # 域名（翻译的接口域就是主优选和强校验各写一次），拼起来就是重复行——面板上

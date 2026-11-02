@@ -235,17 +235,23 @@ def main():
     except Exception:
         old_all = {}
     if old_all and all(d in old_all for d in DOMAIN_SPECS):
-        def _probe_old(dom):
-            path, codes, jumps = DOMAIN_SPECS[dom]
-            _ip, ok, _t = check_retry(old_all[dom][0], dom, path, codes, jumps)
-            return ok
-        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-            alive = list(ex.map(_probe_old, list(DOMAIN_SPECS)))
-        if alive and all(alive):
-            log("现有固定映射 %d 域全部仍可用，跳过本轮全量扫描" % len(DOMAIN_SPECS))
-            print(json.dumps({"domains": len(DOMAIN_SPECS), "reused": True},
-                             ensure_ascii=False))
-            return
+        # 旧结果里混着 v6 就不许复用：v6 在容器侧能通、下游客户端侧会被 reset，
+        # 复用等于把「看着正常其实打不开」的状态一直固化下去（ghcr pull 卡死
+        # 的残留就是这么留下来的），必须重扫一遍把它洗干净。
+        if any(":" in ip for ips in old_all.values() for ip in ips):
+            log("旧固定映射含 IPv6，跳过复用，直接全量重扫")
+        else:
+            def _probe_old(dom):
+                path, codes, jumps = DOMAIN_SPECS[dom]
+                _ip, ok, _t = check_retry(old_all[dom][0], dom, path, codes, jumps)
+                return ok
+            with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+                alive = list(ex.map(_probe_old, list(DOMAIN_SPECS)))
+            if alive and all(alive):
+                log("现有固定映射 %d 域全部仍可用，跳过本轮全量扫描" % len(DOMAIN_SPECS))
+                print(json.dumps({"domains": len(DOMAIN_SPECS), "reused": True},
+                                 ensure_ascii=False))
+                return
 
     cands = candidates()
     log("候选 %d 个，开始逐域名校验" % len(cands))
@@ -267,7 +273,7 @@ def main():
         pass
     lines = []
     for dom in DOMAIN_SPECS:
-        ips = results.get(dom) or old.get(dom) or []
+        ips = results.get(dom) or [ip for ip in old.get(dom, []) if ":" not in ip] or []
         if ips:
             lines.append(" ".join([dom] + ips))
             # 登记黑名单豁免（专属探针刚验证过才登记；沿用旧结果时保留旧豁免）

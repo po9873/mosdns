@@ -70,6 +70,18 @@ __REMOTE_DOH_LIST__
       files:
         - /data/china_ip.txt
 
+  # ---- 只发 IPv4 的域名集合（GitHub 全族 + ghcr）----
+  # 为什么需要单独一张表：优选出来的 hosts 只写 A 记录，AAAA 查询会穿过 hosts
+  # 继续走上游，拿回 GitHub 的 Fastly v6（2606:50c0::/32）。这些 v6 在容器/服务端
+  # 侧探测可通，国内客户端侧却被连接重置——docker pull ghcr 就是 ghcr.io 拿到 IPv4、
+  # 真正下层的 pkg-containers.githubusercontent.com 拿到 v6，下到一半 connection reset。
+  # 所以在 DNS 层直接把它们的 AAAA 判成 NODATA，任何设备都不会再选到 v6。
+  - tag: github_v4only
+    type: domain_set
+    args:
+      files:
+        - /app/config/github_v4only.txt
+
   # ---- 国内优先序列：只有返回的 IP 属于国内段才采用，否则丢弃 ----
   - tag: local_seq
     type: sequence
@@ -95,6 +107,15 @@ __REMOTE_DOH_LIST__
       threshold: 500
       always_standby: true
 
+  # ---- AAAA 拦截序列：命中就是 NODATA（rcode 0、无 answer）----
+  # 用 reject 0 而不是 NXDOMAIN/REFUSED：NODATA 在客户端看来就是「这个域名没有
+  # IPv6」，getaddrinfo 会安安静静只用 A 记录；NXDOMAIN 反而可能让整个解析失败。
+  - tag: github_no_aaaa
+    type: sequence
+    args:
+      - matches: qtype 28
+        exec: reject 0
+
   # ---- 主处理序列 ----
   # 第一行 query_summary：把每条查询的 qname/rcode/elapsed 以 INFO 写入日志，
   # 控制台「实时解析域名」读这个日志生成最近若干条记录（不额外存盘、不写死）。
@@ -102,6 +123,10 @@ __REMOTE_DOH_LIST__
     type: sequence
     args:
       - exec: query_summary qlog
+      - matches: qname $github_v4only
+        exec: $github_no_aaaa
+      - matches: has_resp
+        exec: accept
       - exec: $dns_cache
       - exec: $pref_hosts
       - matches: has_resp

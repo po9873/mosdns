@@ -1,0 +1,17 @@
+# 只发 IPv4 的域名（AAAA 一律返回 NODATA）
+#
+# 背景：GitHub 的资源域走 Fastly，其 v6 段 2606:50c0::/32 在服务端/容器侧探测
+# 可通，国内客户端侧却被连接重置。优选出来的 hosts 只写 A 记录，AAAA 查询会穿过
+# hosts 走上游拿回真 v6，于是支持 v6 的设备优先选 v6 → 卡死。
+# docker pull ghcr 的典型表现：ghcr.io 正常拿到 IPv4，真正下载镜像层的
+# pkg-containers.githubusercontent.com 拿到 v6，下到一半 connection reset。
+#
+# 这里列的是「这个网络里走 v6 一定坏」的域，不是「没有 v6」的域：
+# github.com / api.github.com 本来就是纯 v4，列上只是让规则更完整、少一次上游查询。
+# 新增域时确认一遍：它在 v6 上是不是真的不可用，别把能用的 v6 也关掉。
+
+domain:github.com
+domain:githubusercontent.com
+domain:githubassets.com
+domain:github.io
+domain:ghcr.io
