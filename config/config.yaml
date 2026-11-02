@@ -127,10 +127,14 @@ __REMOTE_DOH_LIST__
         exec: $github_no_aaaa
       - matches: has_resp
         exec: accept
-      - exec: $dns_cache
+      # 优选 hosts 必须排在 cache 前面（本文件开头写的规则 1 就是这个顺序）。
+      # 反过来的话，一条上游答案（比如 pkg-containers 落到 185.199.x、TTL 一小时）
+      # 会在缓存里待一小时，优选出来的、逐 IP 实测过的记录根本轮不到生效——
+      # 表现就是「优选明明选了 151.101.x，客户端拿到的却是 185.199.x，拉镜像照样卡」。
       - exec: $pref_hosts
       - matches: has_resp
         exec: accept
+      - exec: $dns_cache
       - matches: qname $gfw_domains
         exec: $forward_remote
       - matches: has_resp
