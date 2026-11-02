@@ -154,7 +154,12 @@ def candidates():
                 out.append(ip)
     except Exception:
         pass
-    return out
+    # 只保留 IPv4：GitHub 资源域的 v6 段（2606:50c0::/32）在国内客户端侧基本
+    # 会被连接重置，而容器侧探测却能通——结果就是 hosts 里落进 v6 地址、下游
+    # 客户端优先走 v6 然后卡死（docker pull ghcr 就是典型：ghcr.io 正常拿到
+    # IPv4，真正下层的 pkg-containers 拿到 v6，下到一半 connection reset）。
+    # github_pref.sh 早就用 PREF_NO_V6=1 表达了「不要 v6」，本脚本必须遵守。
+    return [ip for ip in out if ":" not in ip]
 
 
 def check(ip, domain, path, ok_codes, ok_jump):
