@@ -70,7 +70,10 @@ __REMOTE_DOH_LIST__
       files:
         - /data/china_ip.txt
 
-  # ---- 只发 IPv4 的域名集合（GitHub 全族 + ghcr）----
+  # ---- 只发 IPv4 的域名集合（GitHub 全族 + ghcr + 翻译族）----
+  # 翻译族同样在内：优选 hosts 只有 A 记录，ipv6=true 时客户端会优先走
+  # AAAA 拿到的 v6，而翻译族 v6 在国内连不通，表现为「时好时坏」。
+  # 列表见 /app/config/github_v4only.txt 末尾的翻译族段。
   # 为什么需要单独一张表：优选出来的 hosts 只写 A 记录，AAAA 查询会穿过 hosts
   # 继续走上游，拿回 GitHub 的 Fastly v6（2606:50c0::/32）。这些 v6 在容器/服务端
   # 侧探测可通，国内客户端侧却被连接重置——docker pull ghcr 就是 ghcr.io 拿到 IPv4、

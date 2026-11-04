@@ -93,6 +93,11 @@ _GOOGLE_DOMS = ("www.google.com", "www.google.com.hk")
 # 「能用」长在专属路径上（registry / API / raw），在这里补一行。
 _ROUTE_SPEC = {
     "ghcr": ("/v2/", "UNAUTHORIZED"),
+    # 翻译路：守护必须和优选问同一个问题。根路径 + 正文含 "translate" 只证明
+    # 「网页壳能开」，证明不了翻译接口能翻；守护拿它判 ok，就会把「壳还在、
+    # 翻译接口已经死了」的 IP 一直留在 hosts 里，面板显示正常、浏览器翻不出来。
+    # 实测：好 IP 真翻译接口 -> ok，死 IP -> timeout，判据可靠。
+    "gt": ("/translate_a/single?client=dict-chrome-ex&sl=en&tl=zh-CN&dt=t&q=hello", "hello"),
 }
 
 
@@ -363,8 +368,12 @@ def probe(ip, domain, route=None):
     只有探专属路径（/v2/ 等）时，正确应答才是身份证明，跳走才算假边缘。
     """
     path, expect = spec_for(domain, route)
+    # 翻译路统一打真实接口域名：gt.hosts 第一行主域名是 translate.google.com
+    # （纯 JS 壳），真正承载翻译请求的是 translate.googleapis.com。守护由此与
+    # gt_pin_refresh 用同一个域名 + 路径 + 判据，避免「两套标准互相打架」。
+    probe_domain = "translate.googleapis.com" if route == "gt" else domain
     try:
-        r = https_probe.check(ip, domain, PORT, TIMEOUT, 1, path, expect,
+        r = https_probe.check(ip, probe_domain, PORT, TIMEOUT, 1, path, expect,
                               strict_redirect=bool(path and path != "/"))
     except Exception:
         return ip, "fail", None, None
@@ -408,7 +417,10 @@ def run_once():
                 state.pop("%s|%s" % (route, ip), None)
                 keep.append(ip)          # 健康 IP 必须留在 hosts 里
                 continue
-            if st.startswith(HARD):
+            # 翻译路不做「一次异常就拉黑 6 小时」：翻译接口偶发 429 / 抖动很常见，
+            # 立即拉黑会把刚通过全接口强校验的 IP 连带从所有翻译域撤下（purge
+            # everywhere），正是「一时可用一时不可用」的放大器。改成累计 3 次再换。
+            if st.startswith(HARD) and route != "gt":
                 dropped.append((ip, st))
                 continue
             # 超时/连不上：不是确定坏，连续 3 次才换，避免网络抖动误杀

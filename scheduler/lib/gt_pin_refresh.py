@@ -47,7 +47,10 @@ PROBE_OFFSET_FILE = "/data/prefs/.gt.probe_offset"
 
 RESOLVERS = ["223.5.5.5", "119.29.29.29", "180.76.76.76"]
 TIMEOUT = 6.0
-TOP_N = 4            # 翻译反代 IP 通常不多，4 个足够冗余
+# 只留 2 个：一个域名写 4 个 IP 时，客户端会随机挑；只要其中有一个对某个
+# 翻译域不服务，用户就是「这次能翻、下次不能」。全池实测有 177 个 IP 完整
+# 支持 Chrome 内置翻译，冗余完全够，少写反而更稳。
+TOP_N = 2
 WORKERS = 16
 RETRIES = 1          # 分层短路后单 IP 只花 1 个请求，不再重试（死 IP 重试纯浪费时间）
 
@@ -60,6 +63,19 @@ RETRIES = 1          # 分层短路后单 IP 只花 1 个请求，不再重试�
 TL_DOMAIN = "translate.googleapis.com"
 TL_PATH = "/translate_a/single?client=dict-chrome-ex&sl=en&tl=zh-CN&dt=t&q=hello"
 TL_NEEDLE = b"hello"
+
+# Chrome 内置翻译（右键「翻成中文」/整页翻译）真正打的三条请求。
+# 只验 translate_a/single 会放过「只代理网页手动翻译」的半吊子节点；把这三
+# 条一起纳入核心门槛，选出来的 IP 才是浏览器里真能用的。全池实测 177 个 IP
+# 全部通过，不会把可用节点筛没了。
+CHROME_T_PATH = "/translate_a/t?client=chrome&sl=en&tl=zh-CN&q=hello"
+C5_T_PATH = "/translate_a/t?client=dict-chrome-ex&sl=en&tl=zh-CN&q=hello"
+ELEMENT_PATH = "/translate_a/element.js"
+ZH_NEEDLE = "你好".encode("utf-8")
+
+# 翻译路只负责这 5 个域；静态资源域（gstatic）由 google 路统一管。
+GT_DOMAINS = ["translate.google.com", TL_DOMAIN, "translate-pa.googleapis.com",
+              "translate.googleusercontent.com", "clients5.google.com"]
 # 浏览器真实请求走 HTTP/2，所以核心判定必须由 curl 强制 h2 完成。
 # Python 标准库只有 h1.1，容器里也没有 h2/hpack 库，故用 curl 子进程（实测支持 h2）。
 CURL = "/usr/bin/curl" if os.path.exists("/usr/bin/curl") else "curl"
@@ -274,11 +290,11 @@ def h2_check(ip, domain, path, *, expect=None, ok_codes=None, method="GET"):
 
 
 def core_ok(r):
-    """核心门槛：翻译接口真能翻 + 网页壳能开。
+    """核心门槛：网页壳 + 手动翻译接口 + Chrome 内置翻译三件套，全部真通过。
 
-    分层短路后，未通过核心①的 IP 结果里不会有 translate.google.com 这个键，
-    所以必须用 .get 判定，否则会 KeyError。"""
-    return bool(r.get(TL_DOMAIN, (False,))[0] and r.get("translate.google.com", (False,))[0])
+    分层短路后结果里可能缺键，一律用 .get 判定，否则会 KeyError。"""
+    need = (TL_DOMAIN, "translate.google.com", "_chrome_t", "_clients5_t", "_element")
+    return all(bool(r.get(k, (False,))[0]) for k in need)
 
 
 def check_ip(ip):
@@ -306,9 +322,9 @@ def check_ip(ip):
         # 资源/静态域：必须用真实资源路径（根路径 404 是正常的，不能拿来判定）
         "translate.googleusercontent.com": ("/", None, {200, 403, 404}, "GET"),
         "clients5.google.com": ("/", None, {200, 204, 403, 404}, "GET"),
-        "www.gstatic.com": ("/generate_204", None, {200, 204}, "GET"),
-        "fonts.gstatic.com": ("/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff2", None, {200}, "GET"),
-        "ssl.gstatic.com": ("/generate_204", None, {200, 204}, "GET"),
+        # gstatic 三个静态域不再由翻译路写：google 路的 PREF_EXTRA_DOMAINS 已经
+        # 管着它们。两边各写一行会让 all.hosts 里同一域名出现两条不同 IP 的记录，
+        # 客户端拿到哪条全看合并顺序——这是「时好时坏」的第二个来源。
     }
     res = {}
     # —— 分层短路（省负载，用户明确要求）：订阅池里绝大多数候选是死 IP，
@@ -320,6 +336,17 @@ def check_ip(ip):
         path, expect, codes, method = specs[dom]
         ok, ttfb = h2_check(ip, dom, path, expect=expect, method=method)
         res[dom] = (ok, ttfb)
+        if not ok:
+            return res
+    # Chrome 内置翻译三件套：必须真出译文 / 真拿到 element.js，才准进 hosts。
+    # 同样用 h2（浏览器走 h2），判据与用户实际体验一致。
+    for key, dom, path, expect, codes in (
+        ("_chrome_t", TL_DOMAIN, CHROME_T_PATH, ZH_NEEDLE, None),
+        ("_clients5_t", "clients5.google.com", C5_T_PATH, ZH_NEEDLE, None),
+        ("_element", TL_DOMAIN, ELEMENT_PATH, None, {200}),
+    ):
+        ok, ttfb = h2_check(ip, dom, path, expect=expect, ok_codes=codes)
+        res[key] = (ok, ttfb)
         if not ok:
             return res
     for dom, (path, expect, codes, method) in specs.items():
@@ -421,23 +448,40 @@ def main():
             try:
                 r = check_ip(ip)
             except Exception:
-                return ip, False
-            return ip, (core_ok(r))
+                return ip, False, None
+            ts = [t for k, (o, t) in r.items() if o and t is not None]
+            return ip, core_ok(r), (min(ts) if ts else None)
         alive = []
         with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-            for ip, ok in ex.map(quick, old_ips):
+            for ip, ok, ms in ex.map(quick, old_ips):
                 if ok:
-                    alive.append(ip)
+                    alive.append((ms if ms is not None else 99999, ip))
         if alive:
-            log("旧 IP 仍可用(%d个仍真能翻)，沿用 .gt.extra，跳过重新探测" % len(alive))
+            # 不能直接 return「沿用旧文件」：旧文件可能还带着 gstatic 三行、
+            # 每域 4 个混杂 IP。每轮都规范化重写成「5 个翻译域 + 同一组
+            # TOP_N 个 IP」，这样旧包袱一次就被清掉，之后始终保持一致。
+            alive.sort()
+            picked = [ip for _, ip in alive[:TOP_N]]
+            tmp = out_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(" ".join([d] + picked) for d in GT_DOMAINS) + "\n")
+            os.replace(tmp, out_file)
+            for d in GT_DOMAINS:
+                try:
+                    pin_exempt.update(d, picked)
+                except Exception:
+                    pass
+            log("旧 IP 全接口复核通过(%d个)，规范化为统一 2 个：%s"
+                % (len(alive), " ".join(picked)))
             return
-        log("旧 IP 已失效(均不能真翻)，重新探测候选以换 IP")
+        log("旧 IP 已失效(全接口复核未过)，重新探测候选以换 IP")
 
     cands = candidates()
     log("候选 %d 个，开始强校验（必须真能翻出译文）" % len(cands))
 
     results = {}   # domain -> [(ttfb, ip)]，只收录通过核心门槛的 IP
     core_pass = []  # 通过核心门槛的 IP 列表
+    ip_best = {}    # ip -> 最快一次 TTFB，用于选出全局统一的一组 IP
 
     # 每 IP 并发校验；核心门槛（接口能翻+网页能开）未过则至多补测一遍
     # （应对抖动/偶发 429），通过即收。绝不把半吊子反代收进任何翻译域。
@@ -459,23 +503,29 @@ def main():
             # 只有核心门槛过的 IP 才允许进入任何翻译域的映射，杜绝半吊子反代
             if core_ok(r):
                 core_pass.append(ip)
+                ttfbs = [ttfb for k, (ok, ttfb) in r.items() if ok and ttfb is not None]
+                ip_best[ip] = min(ttfbs) if ttfbs else 99999
                 for dom, (ok, ttfb) in r.items():
+                    if dom.startswith("_"):     # 内部判据键，不是域名
+                        continue
                     if ok and ttfb is not None:
                         results.setdefault(dom, []).append((ttfb, ip))
 
     log("通过核心门槛（接口能翻+网页能开）的 IP: %d" % len(core_pass))
 
-    # 期望输出的域名顺序（核心域在前）
-    domains = ["translate.google.com", TL_DOMAIN, "translate-pa.googleapis.com",
-               "translate.googleusercontent.com", "clients5.google.com",
-               "www.gstatic.com", "fonts.gstatic.com", "ssl.gstatic.com"]
+    # 只写翻译域；gstatic 静态域交给 google 路，避免 all.hosts 里出现同名两行。
+    domains = GT_DOMAINS
+
+    # 全局选最快的 TOP_N 个 IP，所有翻译域统一用这一组。以前每个域各自按自己
+    # 的 TTFB 挑，结果同一次翻译里 5 个域名落到 5 组不同节点，任一节点掉线就
+    # 整次失败——这正是「一次能翻、一次不能」的第三个来源。
+    global_ips = [ip for ip, _ in sorted(ip_best.items(), key=lambda kv: kv[1])[:TOP_N]]
 
     lines = []
     for dom in domains:
-        oks = sorted(results.get(dom, []))[:TOP_N]
-        ips = [ip for _, ip in oks]
-        # 注意：不再用旧 .gt.extra 里的半吊子填补选不出的域——宁可该域回退
-        # 上游解析，也绝不给 hosts 写没验证过/已失效的 IP（用户原话：假的别加载）。
+        ok_ips = [ip for _, ip in sorted(results.get(dom, [])) if ip in global_ips]
+        ips = ok_ips[:TOP_N] or global_ips
+        # 不拿旧 .gt.extra 里没验证过的 IP 补位（用户原话：假的别加载）。
         if ips:
             lines.append(" ".join([dom] + ips))
             try:
@@ -484,15 +534,12 @@ def main():
                 pass
 
     if not lines:
-        # 一个真能翻的 IP 都没选出来：绝不保留旧半吊子（否则会永久污染 hosts），
-        # 直接清空 .gt.extra 让翻译路由回退上游解析（打不开但不可污染），并进入
-        # 冷却期，避免无可用 IP 时每轮空转刷负载。
-        try:
-            open(out_file, "w").close()
-        except Exception:
-            pass
+        # 关键：不清空。以前一轮探测落空就把 .gt.extra 清空、整路回退上游解析
+        # （上游给的是被污染的 IP），再加 30 分钟冷却 = 翻译最长半小时不可用，
+        # 用户看到的就是「一时可用一时不可用」。上一轮结果是逐 IP 真翻验证过的，
+        # 比「回退上游」可靠得多；保留它，只记日志并冷却，等下轮再找新 IP。
         mark_cooldown()
-        log("本轮无任何翻译域选出真能翻的 IP，已清空 .gt.extra 回退上游（不写半吊子）")
+        log("本轮无 IP 通过全接口强校验，保留上一轮 .gt.extra（不清空、不回退上游）")
         return
     tmp = out_file + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

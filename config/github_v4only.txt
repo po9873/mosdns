@@ -15,3 +15,22 @@ domain:githubusercontent.com
 domain:githubassets.com
 domain:github.io
 domain:ghcr.io
+
+# ---- 翻译族 ----
+# 同 ghcr 的病，但更隐蔽：优选 hosts 只写 A 记录，而 settings.json 里 ipv6=true，
+# 客户端（Chrome / Windows / 手机）按 RFC 6724 会优先连 AAAA 拿到的 v6。
+# 日志里 translate.googleapis.com / clients5.google.com / translate-pa 的 qtype 28
+# 都返回 rcode 0（真的拿到了 v6），这些 v6 在国内连不通；Happy Eyeballs 有时回退
+# v4 成功、有时不回退，表现就是「翻译一时能用一时不能用」，而守护只探 IPv4 的
+# 优选 IP，永远报「一切正常」。和 ghcr 一样：在 DNS 层直接把 AAAA 判成 NODATA。
+# 静态资源域一并列入：它们同样被优选 pin 成 IPv4，漏 AAAA 会拖垮整页翻译脚本加载。
+domain:translate.google.com
+domain:translate.googleapis.com
+domain:translate.googleusercontent.com
+domain:translate-pa.googleapis.com
+domain:translation.googleapis.com
+domain:clients5.google.com
+domain:clients6.google.com
+domain:www.gstatic.com
+domain:fonts.gstatic.com
+domain:ssl.gstatic.com
