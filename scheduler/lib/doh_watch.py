@@ -605,6 +605,8 @@ def _scan_locked(force=False):
     cfg_text = dc.read_cfg()
     act = dc.active(cfg_text)
     manual = dc.is_manual()
+    side_manual = {"local": dc.is_manual_side("local"),
+                   "remote": dc.is_manual_side("remote")}
 
     plan, dead, new = {}, [], []
     for k in ("local", "remote"):
@@ -614,14 +616,15 @@ def _scan_locked(force=False):
             if alive_urls and _url(x) not in alive_urls:
                 dead.append(x)
         for r in alive[k]:
-            if _url(r["line"]) not in act_urls and not manual:
+            if _url(r["line"]) not in act_urls and not side_manual[k]:
                 new.append({"side": k, "line": r["line"], "ms": r["ms"], "ip": r["ip"]})
         # 上一轮刚换进来的那条，这一轮先别急着再换走（防测量噪声来回抖）
-        plan[k] = plan_side(k, alive[k], act[k], keep,
-                            protect=(prev.get("swapped") or {}).get(k) or ())
+        if not side_manual[k]:
+            plan[k] = plan_side(k, alive[k], act[k], keep,
+                                protect=(prev.get("swapped") or {}).get(k) or ())
 
     applied, changed_sides = False, []
-    if not manual:
+    if any(plan.values()):
         loc = plan.get("local") or []
         rem = plan.get("remote") or []
         if loc or rem:

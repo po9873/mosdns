@@ -1876,6 +1876,8 @@ def upstreams_payload():
     """概况/配置页共用：当前生效 + 是否手动指定 + 候选池数量。"""
     up = read_upstreams()
     up["mode"] = "manual" if (os.path.exists(DOH_LOCAL_CUSTOM) or os.path.exists(DOH_REMOTE_CUSTOM)) else "auto"
+    up["mode_local"] = "manual" if os.path.exists(DOH_LOCAL_CUSTOM) else "auto"
+    up["mode_remote"] = "manual" if os.path.exists(DOH_REMOTE_CUSTOM) else "auto"
     try:
         for key, name in (("local", "doh_local_candidates.txt"), ("remote", "doh_remote_candidates.txt")):
             with open(os.path.join(DATA_DIR, name), encoding="utf-8") as f:

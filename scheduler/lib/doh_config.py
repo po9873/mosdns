@@ -164,6 +164,11 @@ def is_manual():
     return os.path.exists(LOCAL_CUSTOM) or os.path.exists(REMOTE_CUSTOM)
 
 
+def is_manual_side(side):
+    """按侧判定：只手动指定了一侧时，另一侧仍应自动优选。"""
+    return os.path.exists(LOCAL_CUSTOM if side == "local" else REMOTE_CUSTOM)
+
+
 def reload_engine(timeout=25):
     try:
         subprocess.run([SCHEDULER, "reload"], capture_output=True, timeout=timeout)
