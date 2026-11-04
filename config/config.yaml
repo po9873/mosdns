@@ -15,11 +15,17 @@ api:
   http: "127.0.0.1:__API_PORT__"
 
 plugins:
+  # ---- 静态 hosts：本地服务地址，不参与优选/看门狗，重启也不会被 merge_hosts 覆盖 ----
+  # registry.linkease.net 是家里内网 Docker Hub 镜像服务(192.168.6.34:5443)。
+  # 上游解析会把它答成 127.0.0.1，导致任何把 DNS 指向 mosdns 的设备都连不上；
+  # 这里直接钉死，HA / docker 配 registry-mirrors 时才能正常解析。
   # ---- 优选 hosts：scheduler 运行时生成的覆盖记录（entrypoint 保证文件存在）----
+  # 静态放在前面：hosts 插件按顺序命中，静态条目优先于优选结果。
   - tag: pref_hosts
     type: hosts
     args:
       files:
+        - /data/static.hosts
         - /data/prefs/all.hosts
 
   # ---- DNS 缓存（条数上限由 PREF_CACHE_SIZE 注入；控制台可一键清空）----

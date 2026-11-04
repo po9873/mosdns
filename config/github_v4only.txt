@@ -34,3 +34,9 @@ domain:clients6.google.com
 domain:www.gstatic.com
 domain:fonts.gstatic.com
 domain:ssl.gstatic.com
+
+# ---- Docker Hub 族 ----
+# 上游给 docker.io 的 AAAA 是随机投毒段(2a03:2880::/32 等)，客户端按 RFC 6724
+# 会优先连 v6 然后超时/重置；和 ghcr 一样，DNS 层直接判 NODATA 强制走 v4。
+domain:docker.io
+domain:docker.com
