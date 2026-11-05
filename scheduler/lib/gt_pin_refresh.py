@@ -374,7 +374,11 @@ def check_ip(ip):
     for key, dom, path, expect, codes in (
         ("_chrome_t", TL_DOMAIN, CHROME_T_PATH, ZH_NEEDLE, None),
         ("_clients5_t", "clients5.google.com", C5_T_PATH, ZH_NEEDLE, None),
-        ("_element", TL_DOMAIN, ELEMENT_PATH, None, {200, 302}),
+        # element.js 必须真 200 且响应体是翻译运行时（含 googleTranslate），
+        # 不能只认状态码：共享前端 IP 对 element.js 常返回 302 跳到 Google
+        # "sorry" 限流页，状态码非 200 才算不服务本域名；个别 IP 即便回 200
+        # 也可能是错误页，故再用 googleTranslate 关键字确认是真 JS 运行时。
+        ("_element", TL_DOMAIN, ELEMENT_PATH, b"googleTranslate", {200}),
     ):
         ok, ttfb = h2_check(ip, dom, path, expect=expect, ok_codes=codes)
         res[key] = (ok, ttfb)
