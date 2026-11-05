@@ -30,7 +30,7 @@ import struct
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pin_exempt  # noqa: E402
@@ -76,6 +76,37 @@ ZH_NEEDLE = "你好".encode("utf-8")
 # 翻译路只负责这 5 个域；静态资源域（gstatic）由 google 路统一管。
 GT_DOMAINS = ["translate.google.com", TL_DOMAIN, "translate-pa.googleapis.com",
               "translate.googleusercontent.com", "clients5.google.com"]
+
+# Chrome 内置翻译还会拉这三个域上的脚本 / 字体 / CSP 上报。它们原先被手写死在
+# /data/static.hosts —— 而 static.hosts 在 pref_hosts 里排在 all.hosts 前面、
+# 优先命中，于是「主域优选换了节点、依赖域还钉着老 IP」，一次翻译跨两组节点，
+# 任一不稳就报「无法翻译此网页」。现在由翻译路用同一组通过全接口强校验的 IP
+# 同步维护这几个域，主域与依赖域永远同组。
+STATIC_SYNC_DOMAINS = ["apis.google.com", "csp.withgoogle.com",
+                       "fonts.googleapis.com"]
+
+
+def sync_static_hosts(picked):
+    """把翻译依赖域写进 /data/static.hosts，与 gt 主域共用同一组已校验 IP。
+
+    只改这三个域名的行，其余行（例如 HA 拉镜像要用的 registry.linkease.net）
+    原样保留。就地原子替换，不建备份、不留中间文件。
+    """
+    if not picked:
+        return
+    path = os.path.join(DATA_DIR, "static.hosts")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = [l.rstrip("\n") for l in f]
+    except Exception:
+        lines = []
+    keep = [l for l in lines
+            if l.strip() and l.split()[0] not in STATIC_SYNC_DOMAINS]
+    keep += ["%s %s" % (d, " ".join(picked)) for d in STATIC_SYNC_DOMAINS]
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(keep) + "\n")
+    os.replace(tmp, path)
 # 浏览器真实请求走 HTTP/2，所以核心判定必须由 curl 强制 h2 完成。
 # Python 标准库只有 h1.1，容器里也没有 h2/hpack 库，故用 curl 子进程（实测支持 h2）。
 CURL = "/usr/bin/curl" if os.path.exists("/usr/bin/curl") else "curl"
@@ -318,7 +349,7 @@ def check_ip(ip):
         # 核心②：网页壳能开（纯 JS 壳，但至少得含 translate 字样）
         "translate.google.com": ("/", b"translate", None, "GET"),
         # Chrome 右键翻译接口：只认 POST，无 key 时真接口回 403（存在即证明承载）
-        "translate-pa.googleapis.com": ("/v1/translateHtml", None, {400, 403, 200}, "POST"),
+        "translate-pa.googleapis.com": ("/v1/translateHtml", None, {400, 403, 200, 404}, "POST"),
         # 资源/静态域：必须用真实资源路径（根路径 404 是正常的，不能拿来判定）
         "translate.googleusercontent.com": ("/", None, {200, 403, 404}, "GET"),
         "clients5.google.com": ("/", None, {200, 204, 403, 404}, "GET"),
@@ -343,7 +374,7 @@ def check_ip(ip):
     for key, dom, path, expect, codes in (
         ("_chrome_t", TL_DOMAIN, CHROME_T_PATH, ZH_NEEDLE, None),
         ("_clients5_t", "clients5.google.com", C5_T_PATH, ZH_NEEDLE, None),
-        ("_element", TL_DOMAIN, ELEMENT_PATH, None, {200}),
+        ("_element", TL_DOMAIN, ELEMENT_PATH, None, {200, 302}),
     ):
         ok, ttfb = h2_check(ip, dom, path, expect=expect, ok_codes=codes)
         res[key] = (ok, ttfb)
@@ -462,10 +493,38 @@ def main():
             # TOP_N 个 IP」，这样旧包袱一次就被清掉，之后始终保持一致。
             alive.sort()
             picked = [ip for _, ip in alive[:TOP_N]]
+            # 冗余绝不能退化成单点：旧文件若只剩 1 个 IP（上一轮只选中一个，
+            # 或守护把它换掉），必须从订阅池补测到 TOP_N 个真能翻的。否则这
+            # 一个节点一抖动，全屋翻译就是「昨晚能用、今天又不行」。
+            if len(picked) < TOP_N:
+                need = TOP_N - len(picked)
+                extra = [ip for ip in candidates() if ip not in picked][:80]
+
+                def _probe(ip):
+                    try:
+                        return ip, core_ok(check_ip(ip))
+                    except Exception:
+                        return ip, False
+
+                ex = ThreadPoolExecutor(max_workers=WORKERS)
+                try:
+                    futs = [ex.submit(_probe, ip) for ip in extra]
+                    for fut in as_completed(futs):
+                        ip, good = fut.result()
+                        if good and ip not in picked:
+                            picked.append(ip)
+                            need -= 1
+                            if need <= 0:
+                                break
+                finally:
+                    ex.shutdown(wait=False, cancel_futures=True)
+                log("旧 IP 只剩 %d 个，补测后统一为 %d 个：%s"
+                    % (len(alive), len(picked), " ".join(picked)))
             tmp = out_file + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write("\n".join(" ".join([d] + picked) for d in GT_DOMAINS) + "\n")
             os.replace(tmp, out_file)
+            sync_static_hosts(picked)
             for d in GT_DOMAINS:
                 try:
                     pin_exempt.update(d, picked)
@@ -545,6 +604,7 @@ def main():
     with open(tmp, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     os.replace(tmp, out_file)
+    sync_static_hosts(global_ips)
     print(json.dumps({"domains": len(lines),
                       "core_ips": len(core_pass)}, ensure_ascii=False))
 

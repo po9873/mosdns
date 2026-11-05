@@ -17,6 +17,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -39,6 +40,11 @@ TIMEOUT = float(os.environ.get("PREF_WATCHDOG_TIMEOUT", "6"))
 MAX_STRIKES = int(os.environ.get("PREF_WATCHDOG_STRIKES", "3"))
 PORT = int(os.environ.get("PREF_WATCHDOG_PORT", "443"))
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+GT_GUARD_STATE = os.path.join(DATA_DIR, "gt_guard_state.json")
+GT_GUARD_FLAG = os.path.join(DATA_DIR, ".gt_need_refresh")
+GT_CURL = "/usr/bin/curl" if os.path.exists("/usr/bin/curl") else "curl"
+GT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 
 def runtime_cfg():
@@ -383,9 +389,73 @@ def probe(ip, domain, route=None):
     return r[0], r[1], r[2], r[3]
 
 
+def gt_guard():
+    """用浏览器真实请求验证「现在到底能不能翻」。
+
+    h2 + Chrome UA + client=chrome，正文必须真出「你好」。不用 https_probe
+    的 h1.1、也不只看 HTTP 通不通——那正是「面板全绿、浏览器翻不出来」的来源。
+    检测只读、不改 hosts；连续两次失败才打标记，等锁空闲由 run_once 触发重选，
+    避免偶发 429 / 抖动把好 IP 换掉。
+    """
+    try:
+        rows = read_lines(os.path.join(PREF_DIR, "gt.hosts"))
+        ip = rows[0][1][0] if rows and rows[0][1] else ""
+    except Exception:
+        ip = ""
+    if not ip:
+        return
+    ok = False
+    try:
+        p = subprocess.run(
+            [GT_CURL, "-sS", "--http2", "--compressed",
+             "-A", GT_UA, "--connect-timeout", "3", "--max-time", "8",
+             "--resolve", "translate.googleapis.com:443:%s" % ip,
+             "-o", "-", "-w", "\n__META__%{http_code}",
+             "https://translate.googleapis.com/translate_a/t?client=chrome"
+             "&sl=en&tl=zh-CN&q=hello"],
+            capture_output=True, timeout=12)
+        out = p.stdout or b""
+        ok = b"__META__200" in out and "你好".encode("utf-8") in out
+    except Exception:
+        ok = False
+    st = jload(GT_GUARD_STATE, {})
+    if ok:
+        if st.get("fails"):
+            log("翻译真翻自检恢复正常")
+        st["fails"] = 0
+        jsave(GT_GUARD_STATE, st)
+        return
+    st["fails"] = int(st.get("fails", 0)) + 1
+    jsave(GT_GUARD_STATE, st)
+    log("翻译真翻自检失败(%d 次) ip=%s" % (st["fails"], ip))
+    if st["fails"] >= 2:
+        try:
+            with open(GT_GUARD_FLAG, "w") as f:
+                f.write(str(int(time.time())))
+        except Exception:
+            pass
+
+
 def run_once():
+    # 翻译自检不占锁、不写 hosts，锁在不在都要做：auto 路一轮能跑十几分钟，
+    # 老逻辑一碰锁就把整轮巡检跳过，这段时间翻译挂了完全没人管
+    # （实测 12:54~13:03 连续 4 轮被跳过）。
+    gt_guard()
     if os.path.isdir(LOCK_DIR):
         log("优选任务正在跑，这轮巡检先跳过（避免两边同时改写 hosts 打架）")
+        return 0
+    # 上一轮（可能在锁期间）记下的「翻译翻不出来」，锁一释放立刻重选 gt 路。
+    if os.path.exists(GT_GUARD_FLAG):
+        try:
+            os.remove(GT_GUARD_FLAG)
+        except Exception:
+            pass
+        log("翻译真翻自检连续失败，立即触发 gt 路重选")
+        threading.Thread(
+            target=lambda: subprocess.run(
+                ["/app/scheduler/scheduler.sh", "once", "gt"],
+                capture_output=True, timeout=240),
+            daemon=True).start()
         return 0
 
     state = jload(STATE_FILE, {})
