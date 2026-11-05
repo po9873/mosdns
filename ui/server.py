@@ -1114,6 +1114,27 @@ def tcp_latency(ip, port=443, timeout=3.0):
     return best
 
 
+def normalize_domain_input(raw):
+    """把用户输入的域名/完整网址统一成纯主机名。
+
+    支持直接粘贴完整网址：剥掉协议前缀、用户信息、路径、查询串、端口，
+    只留主机名。https://www.sehuatang.org/ 与 www.sehuatang.org 等价。
+    所有解析类接口共用这一份，避免只有某个输入框能粘 URL。
+    """
+    domain = str(raw or "").strip()
+    m = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", domain)
+    if m:
+        domain = domain[m.end():]
+    domain = domain.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if "@" in domain:
+        domain = domain.rsplit("@", 1)[-1]
+    if domain.startswith("["):          # [v6字面量]:端口
+        domain = domain[1:domain.index("]")] if "]" in domain else domain.strip("[]")
+    elif domain.count(":") == 1:        # host:port
+        domain = domain.rsplit(":", 1)[0]
+    return domain.strip(".").strip("[]")
+
+
 def dns_lookup(domain, port=None, timeout=3):
     """同时查 A 与 AAAA，返回 [(ip, family), ...]"""
     port = port or DNS_PORT
@@ -2456,21 +2477,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/resolve":
             data = self._body()
-            domain = str(data.get("domain", "")).strip()
-            # 支持直接粘贴完整网址：剥掉协议前缀 / 路径 / 查询串 / 端口 /
-            # 用户信息，只留主机名。https://www.sehuatang.org/ 和
-            # www.sehuatang.org 效果一样，不用手动删前缀。
-            m = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", domain)
-            if m:
-                domain = domain[m.end():]
-            domain = domain.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
-            if "@" in domain:
-                domain = domain.rsplit("@", 1)[-1]
-            if domain.startswith("["):          # [v6字面量]:端口
-                domain = domain[1:domain.index("]")] if "]" in domain else domain.strip("[]")
-            elif domain.count(":") == 1:        # host:port
-                domain = domain.rsplit(":", 1)[0]
-            domain = domain.strip(".").strip("[]")
+            domain = normalize_domain_input(data.get("domain", ""))
             if not re.match(r"^[A-Za-z0-9_.-]{1,253}$", domain):
                 return self._send(400, {"error": "非法域名"})
             pairs = dns_lookup(domain)
@@ -2531,7 +2538,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/diag/domain":
             data = self._body()
-            domain = str(data.get("domain", "")).strip()
+            domain = normalize_domain_input(data.get("domain", ""))
             if not re.match(r"^[A-Za-z0-9_.-]{1,253}$", domain):
                 return self._send(400, {"error": "非法域名"})
             # 解析只问 127.0.0.1（mosdns 自己），随后逐个 IP 发真实 HTTPS 请求，
