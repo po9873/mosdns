@@ -726,13 +726,19 @@ def window_strike(state, key, ok, st):
                             and bad >= WINDOW_BAD)
 
 
-def heal_once():
-    """全量巡检 + 精确补位（不含真翻自检与锁检查）。
+# 冗余自愈：每个主域记住「应该有几个在用 IP」。链路整体抖动时坏 IP 被撤下、
+# 候选又全部测不过，hosts 会退化成单 IP；旧逻辑下一轮 need = len(ips)-len(keep)
+# = 0，就算链路恢复了也永远不会自己补回冗余（必须人工介入）。现在把目标数
+# 持久化，只要还缺，每轮都由 101 自己从候选池实测补，直到补够为止。
+NO_REFILL_ROUTES = {"gt", "google", "auto"}  # 这几路天然单 IP，不补
+REFILL_MIN = int(os.environ.get("PREF_REFILL_MIN", "3"))
+REFILL_RETRY_SEC = int(os.environ.get("PREF_REFILL_RETRY_SEC", "300"))
+HEAL_LOCK = os.path.join(DATA_DIR, ".wd_heal.lock")
+HEAL_LOCK_STALE = 900
 
-    常驻守护 run_once() 与定时优选粘滞守卫共用同一套逻辑：
-    健康的一律不动；明确坏掉（1034/证书）立刻撤，间歇性抖动的按最近几轮
-    失败率撤，都从候选池实测补位。gt 路仍按连续失败判据整组处理。
-    """
+
+def _heal_once_impl():
+    """全量巡检 + 精确补位 + 冗余自愈（不含真翻自检与互斥锁）。"""
     state = jload(STATE_FILE, {})
     files = {}
     for name in sorted(os.listdir(PREF_DIR)):
@@ -765,8 +771,17 @@ def heal_once():
 
     for route, (rows, scan) in files.items():
         new_rows = []
-        for dom, ips in scan:
+        for idx, (dom, ips) in enumerate(scan):
             keep, dropped = [], []
+            is_main = (idx == 0)
+            tkey = "target|%s|%s" % (route, dom)
+            rec = state.get(tkey) or {}
+            if is_main and route not in NO_REFILL_ROUTES:
+                target = max(len(ips), int(rec.get("n", 0) or REFILL_MIN))
+                state[tkey] = {"n": target, "ts": int(time.time()),
+                               "try_ts": int(rec.get("try_ts", 0) or 0)}
+            else:
+                target = len(ips)
             for ip in ips:
                 ok, st, ms, sp = results.get((route, dom, ip),
                                              (False, "fail", None, None))
@@ -797,7 +812,16 @@ def heal_once():
                 else:
                     keep.append(ip)
                     state.pop("%s|%s" % (route, ip), None)
-            if not dropped:
+            need = max(0, target - len(keep))
+            # 「纯冗余补齐」（本轮一个坏 IP 都没有）才限频：撤下坏 IP 时
+            # 必须立刻尝试补位，不能因为限频把该换的漏掉。
+            if need and not dropped and is_main and route not in NO_REFILL_ROUTES:
+                now = int(time.time())
+                if now - int((state.get(tkey) or {}).get("try_ts", 0) or 0) < REFILL_RETRY_SEC:
+                    need = 0
+                else:
+                    state[tkey]["try_ts"] = now
+            if not dropped and not need:
                 new_rows.append((dom, keep))
                 continue
             for ip, why in dropped:
@@ -807,7 +831,6 @@ def heal_once():
                     % (route, dom, ip, why_label(why), subs.BAD_TTL_H))
                 subs.add_event("swap", route, ip, why, dom)
             dropped_all += [ip for ip, _ in dropped]
-            need = max(0, len(ips) - len(keep))
             added = []
             if need:
                 cands = candidates(route, dom, set(ips) | {d[0] for d in dropped})[:12]
@@ -825,16 +848,23 @@ def heal_once():
             final = keep + added
             new_rows.append((dom, final))
             swapped += len(dropped)
-            changed = True
-            if added:
+            if final != ips:
+                changed = True
+            if added and dropped:
                 log("%s 路：%s 打不开，换成 %s（新 IP 已实测通过）"
                     % (route, dom, ",".join(added)))
-            elif final:
+            elif added:
+                log("%s 路：%s 冗余 %d/%d，101 自己实测补回 %s"
+                    % (route, dom, len(keep), target, ",".join(added)))
+            elif final and dropped:
                 log("%s 路：%s 撤下打不开的，保留 %d 个仍可用"
                     % (route, dom, len(final)))
-            else:
+            elif not final:
                 log("%s 路：%s 全打不开、也没有可换的，已撤下这一行"
                     % (route, dom))
+            elif len(final) < target:
+                log("%s 路：%s 候选暂不可用，仍缺 %d 个冗余，101 下轮继续自己补"
+                    % (route, dom, target - len(final)))
         if not new_rows:
             continue
         if new_rows != rows:
@@ -856,6 +886,36 @@ def heal_once():
     log("这轮巡检结束：检查 %d 个 IP（含静态钉子 %d 个），换掉 %d 个（其余都能正常打开）"
         % (checked + len(static_items), len(static_items), swapped))
     return swapped
+
+
+def heal_once():
+    """对外入口：同一时间只允许一轮巡检跑完，避免常驻守护、粘滞守卫、
+    手动验收三方并发改写 hosts（日志出现重复「换掉 N 个」就是这么来的）。
+    容器被强杀可能留下陈旧锁，超过 15 分钟自动清掉再跑一轮。
+    """
+    try:
+        fd = os.open(HEAL_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            if time.time() - os.path.getmtime(HEAL_LOCK) > HEAL_LOCK_STALE:
+                os.remove(HEAL_LOCK)
+                return heal_once()
+        except OSError:
+            pass
+        log("已有巡检正在跑，本轮跳过（让那一轮自己完整跑完）")
+        return 0
+    try:
+        os.write(fd, str(os.getpid()).encode())
+        return _heal_once_impl()
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.remove(HEAL_LOCK)
+        except OSError:
+            pass
 
 
 def run_once():
