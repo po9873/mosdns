@@ -141,6 +141,45 @@ jobs:
               || { echo "::error::升级脚本未固化进镜像"; docker rm -f mtest >/dev/null 2>&1; return 1; }
             docker exec mtest sh -c 'test -s /data/config.yaml && test -f /data/prefs/all.hosts' \
               || { echo "配置/hosts 未生成"; docker rm -f mtest >/dev/null 2>&1; return 1; }
+            # static.hosts 必须存在：config.yaml 的 pref_hosts 引用它，冷启动空卷
+            # 里缺了会让 mosdns 启动即 FATAL（历史踩过的死锁），所以把它也纳入断言。
+            docker exec mtest sh -c 'test -f /data/static.hosts' \
+              || { echo "::error::/data/static.hosts 未创建（冷启动会致 mosdns 崩）"; docker rm -f mtest >/dev/null 2>&1; return 1; }
+            # 冷启动空卷门禁：之前只断言「配置文件存在」，漏掉了 mosdns 因引用不存在的
+            # 文件而启动即崩、DNS 53 没起来、各路优选 hosts 全空的死锁。这里强制真正冷启动可用：
+            #   ① DNS 监听(:53)必须真正起来 —— 抓「配置引用了不存在的文件」这类启动即崩的死锁
+            #      （与出口网络无关，纯本地判定，不依赖上游可达）；
+            #   ② 优选 hosts 必须真正生成（/data/prefs/all.hosts 非空）—— 抓「DNS 起了但优选
+            #      流水线没跑通」这类更深的问题。
+            dns_up() {
+              docker exec mtest sh -c 'grep -qi ":0035 " /proc/net/udp 2>/dev/null || grep -qi ":0035 " /proc/net/udp6 2>/dev/null'
+            }
+            echo "== 冷启动：等待 DNS 监听(:53) =="
+            dup=0
+            for i in $(seq 1 30); do
+              if dns_up; then dup=1; break; fi
+              sleep 2
+            done
+            if [ "$dup" != "1" ]; then
+              echo "::error::冷启动失败：60s 内 DNS 监听(:53)未起来（mosdns 可能启动即崩）"
+              docker exec mtest sh -c 'tail -20 /data/mosdns.out' || true
+              docker rm -f mtest >/dev/null 2>&1 || true
+              return 1
+            fi
+            echo "DNS 监听已起，端口 53 OK"
+            echo "== 冷启动：等待优选 hosts 生成（/data/prefs/all.hosts 非空）=="
+            gen=0
+            for i in $(seq 1 60); do
+              if docker exec mtest sh -c '[ -s /data/prefs/all.hosts ]'; then gen=1; break; fi
+              sleep 4
+            done
+            if [ "$gen" != "1" ]; then
+              echo "::error::冷启动失败：240s 内优选 hosts 未生成（/data/prefs/all.hosts 仍空）"
+              docker exec mtest sh -c 'echo "-- pref.log --"; tail -15 /data/pref.log; echo "-- mosdns.out --"; tail -15 /data/mosdns.out' || true
+              docker rm -f mtest >/dev/null 2>&1 || true
+              return 1
+            fi
+            echo "优选 hosts 已生成: $(docker exec mtest sh -c 'wc -l < /data/prefs/all.hosts') 行"
             docker rm -f mtest >/dev/null 2>&1 || true
             echo "自检通过"
             return 0

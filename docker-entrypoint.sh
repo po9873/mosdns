@@ -32,6 +32,38 @@ fi
 # ---------- 初始化运行数据（只在不存在时创建，绝不覆盖用户数据）----------
 [ -f "$DATA_DIR/prefs/all.hosts" ] || : > "$DATA_DIR/prefs/all.hosts"
 
+# static.hosts：翻译/静态钉子（registry.linkease.net 等本地服务地址、翻译依赖域
+# 钉死 IP），由 gt_pin_refresh / watchdog 运行时写入 /data/static.hosts。但它被
+# config.yaml 的 pref_hosts 引用，冷启动空卷里它还不存在 → mosdns 直接 FATAL
+# 起不来 → DNS 53 下 → 优选脚本无法解析种子（实测空卷启动各路 hosts 全空的死锁）。
+# 先建占位（空文件对 hosts 插件合法），运行时代码随后会填翻译钉子和本地地址。
+[ -f "$DATA_DIR/static.hosts" ] || : > "$DATA_DIR/static.hosts"
+
+# static.hosts 运行时自检：hosts 插件逐行要求「域名 + 全是 IP」，一行不合法就整文件
+# FATAL、DNS 全断。若发现坏行，重置为空占位（运行时代码会重新钉入正确内容），避免
+# 一个被污染的 static.hosts 把整台 DNS 锁死、还得人工进容器修。
+if [ -f "$DATA_DIR/static.hosts" ] && ! python3 - "$DATA_DIR/static.hosts" <<'PY' 2>/dev/null
+import ipaddress, re, sys
+DOM = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z]{2,}$", re.I)
+def ok(line):
+    p = line.split()
+    if len(p) < 2 or not DOM.match(p[0]):
+        return False
+    for x in p[1:]:
+        try:
+            ipaddress.ip_address(x)
+        except ValueError:
+            return False
+    return True
+for ln in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    if ln.strip() and not ok(ln):
+        sys.exit(1)
+PY
+then
+  : > "$DATA_DIR/static.hosts"
+  elog "static.hosts 含非法行，已重置为占位（运行时代码会重新写入）"
+fi
+
 # hosts 自检：每一行必须是「域名 + 全是 IP」。只要有一行不是，mosdns 会以
 # "invalid ip addr" 直接 FATAL，起来就死、DNS 全断。历史上有过一句日志被
 # 重定向写进 hosts 的先例，所以每次启动都过一遍，坏行丢掉、all.hosts 重算。
