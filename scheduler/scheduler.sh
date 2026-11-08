@@ -116,9 +116,11 @@ maybe_scan_doh() {
 
 # 各路串行跑一遍，全部跑完只判断一次是否需要重载引擎
 run_all() {
-  local r en fp ok=0 bad=0 names="" rc
+  local r en fp ok=0 bad=0 names="" rc after changed
   maybe_discover_domains
   fp=$(file_sig "$PREF_DIR/all.hosts")
+  # 本轮开始时的快照（只在 /tmp，用完即删），用来判断「是否真的换了 IP」
+  cp "$PREF_DIR/all.hosts" /tmp/all_hosts.before 2>/dev/null || : > /tmp/all_hosts.before
   for r in $ROUTES; do
     en=$(setting "routes.$r")
     # 只有明确关掉才跳过：老版本的 settings.json 里没有后加的几路键，
@@ -143,10 +145,36 @@ run_all() {
   done
   # 全部跑完，只在这里判断一次是否需要重载
   reload_if_changed "$fp"
-  # 推送正文带上每路当前生效的域名和 IP：只报「几路成功」看不出到底用了什么
-  local brief
-  brief=$(route_brief)
-  notify "round" "优选完成" "成功 ${ok} 路（${names# }），失败 ${bad} 路。${brief:+$'\n'}${brief}"
+  # 推送要能在手机上一眼看完：平时只报「没换 IP」这一行；
+  # 真换了才附变更域名（不铺一长串 IP 清单，细节去控制台看）。
+  after=$(file_sig "$PREF_DIR/all.hosts")
+  if [ "$fp" = "$after" ]; then
+    notify "round" "巡检完成" "${ok} 路正常，失败 ${bad} 路；全部沿用，未换 IP，DNS 无中断。"
+  else
+    changed=$(python3 - /tmp/all_hosts.before "$PREF_DIR/all.hosts" <<'PY'
+import sys
+
+def doms(p):
+    out = {}
+    try:
+        for line in open(p, errors="ignore"):
+            if line.startswith("#"):
+                continue
+            q = line.split()
+            if q:
+                out[q[0]] = " ".join(q[1:])
+    except OSError:
+        pass
+    return out
+
+a, b = doms(sys.argv[1]), doms(sys.argv[2])
+names = [d for d in b if a.get(d) != b[d]]
+print("、".join(names[:8]) + ("…" if len(names) > 8 else ""))
+PY
+)
+    notify "round" "IP 已更新" "${ok} 路正常，失败 ${bad} 路；101 实测补位。${changed:+变更：$changed}"
+  fi
+  rm -f /tmp/all_hosts.before
 }
 
 # UI 的「立即测试」走这里：once 单路 或 once all

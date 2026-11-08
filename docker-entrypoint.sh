@@ -21,6 +21,14 @@ elog() { echo "[entrypoint] $*"; }
 
 mkdir -p "$DATA_DIR/prefs"
 
+# cfst 双保险：镜像里带了就用镜像的；万一哪次构建没带上，从 /data/bin/cfst
+# 补齐（数据卷持久化，容器重建不会丢）。缺了它 cf 等 7 路会退化成纯脚本，
+# 所以每次启动都必须确认工具在位。
+if [ ! -x /app/bin/cft/cfst ] && [ -f "$DATA_DIR/bin/cfst" ]; then
+  cp "$DATA_DIR/bin/cfst" /app/bin/cft/cfst && chmod +x /app/bin/cft/cfst
+  elog "cfst 已从 /data/bin 补齐（镜像内缺失）"
+fi
+
 # ---------- 初始化运行数据（只在不存在时创建，绝不覆盖用户数据）----------
 [ -f "$DATA_DIR/prefs/all.hosts" ] || : > "$DATA_DIR/prefs/all.hosts"
 

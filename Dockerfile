@@ -34,14 +34,26 @@ RUN apk add --no-cache curl tar ca-certificates
 # GoogleTranslateIpCheck 自 1.9 起只发 Windows 包，1.8 之后没有 linux 构建，
 # 不再固化；gt 路本来就用它的社区 IP 清单，不依赖二进制。
 # 包里带一层目录（cfst_linux_amd64/），--strip-components=1 才能把
-# 可执行文件直接落到 /opt/cft/cfst；少了这层，解压后 chmod 找不到文件，
-# 整条命令失败、又只留下一句 warn。
+# 可执行文件直接落到 /opt/cft/cfst；少了这层，解压后 chmod 找不到文件。
+#
+# 2026-11-08 复发修复：GitHub release 在国内 CI 上经常 504（release CDN 被挡），
+# 旧写法用「|| echo warn」把失败吞掉，构建照样 success，镜像里却只有 .keep，
+# 控制台一直显示「缺工具」。现在三道保障：在线下载 → API 直取 asset →
+# 仓库内随版本固化的安装包；最后 test -x 硬失败，缺工具就不许出包。
+COPY assets/cfst_linux_amd64.tar.gz /tmp/cft_fallback.tgz
 RUN mkdir -p /opt/cft && \
-    ( curl -fsSL --show-error --retry 3 "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${CFT_VERSION}/cfst_linux_amd64.tar.gz" -o /tmp/cft.tgz \
-      && tar -xzf /tmp/cft.tgz -C /opt/cft --strip-components=1 \
-      && chmod +x /opt/cft/cfst \
-      && test -x /opt/cft/cfst ) \
-    || echo "warn: CloudflareSpeedTest 未固化，将使用纯脚本探测"
+    { curl -fsSL --show-error --retry 2 --max-time 90 \
+        "https://github.com/XIU2/CloudflareSpeedTest/releases/download/${CFT_VERSION}/cfst_linux_amd64.tar.gz" -o /tmp/cft.tgz \
+      || curl -fsSL --show-error --retry 2 --max-time 90 \
+        -H "Accept: application/octet-stream" \
+        "https://api.github.com/repos/XIU2/CloudflareSpeedTest/releases/assets/491252222" -o /tmp/cft.tgz ; } \
+    || cp /tmp/cft_fallback.tgz /tmp/cft.tgz
+# 491252222 是 v2.3.5 的 linux_amd64 asset；CFT_VERSION 变更时上面第一条
+# 会取新版，兜底包仍是 v2.3.5（保证「至少有工具」，不保证版本跟随）。
+RUN tar -xzf /tmp/cft.tgz -C /opt/cft --strip-components=1 \
+    && chmod +x /opt/cft/cfst \
+    && test -x /opt/cft/cfst \
+    && rm -f /tmp/cft.tgz /tmp/cft_fallback.tgz
 RUN touch /opt/cft/.keep
 # 中国 IP 段完整列表（构建时下载并固化；多源兜底 + 条目数校验，失败则用仓库内置精简种子）
 RUN mkdir -p /opt/seed && \
