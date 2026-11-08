@@ -39,6 +39,14 @@ SEED_DIR = "/app/config/seeds"
 INTERVAL = int(os.environ.get("PREF_WATCHDOG_SEC", "180"))
 TIMEOUT = float(os.environ.get("PREF_WATCHDOG_TIMEOUT", "6"))
 MAX_STRIKES = int(os.environ.get("PREF_WATCHDOG_STRIKES", "3"))
+# 「连续失败」对间歇性坏节点无效：它好一轮就把计数清零，永远攒不到阈值，
+# 于是一直留在 hosts 里，浏览器随机撞上就是「时好时坏」（GitHub 这类跨境
+# 节点最常见）。除 gt 外改按最近若干轮的失败率判定：偶发单次抖动不误换，
+# 好一轮坏一轮的抖动节点一定换掉。
+WINDOW_N = int(os.environ.get("PREF_WD_WINDOW", "6"))
+WINDOW_BAD = int(os.environ.get("PREF_WD_BAD", "2"))
+WINDOW_MIN = int(os.environ.get("PREF_WD_MIN", "3"))
+WINDOW_SEC = int(os.environ.get("PREF_WD_WINDOW_SEC", "1800"))
 PORT = int(os.environ.get("PREF_WATCHDOG_PORT", "443"))
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 GT_GUARD_STATE = os.path.join(DATA_DIR, "gt_guard_state.json")
@@ -685,11 +693,31 @@ def _batch_health(items):
     return out
 
 
+def window_strike(state, key, ok, st):
+    """记一轮 101 实测结果，返回 (失败次数, 样本数, 是否该撤下)。
+
+    成功轮不再清空历史：抖动 IP 正是靠「偶尔成功一次」把连续失败计数
+    清零，才长期赖在 hosts 里。窗口内至少 WINDOW_MIN 个样本、其中
+    >= WINDOW_BAD 次失败才撤下；偶发一次抖动（1/6）不会误换好 IP。
+    """
+    now = int(time.time())
+    rec = state.get(key) or {}
+    hist = [(t, s) for t, s in rec.get("hist", [])
+            if isinstance(t, int) and now - t < WINDOW_SEC]
+    hist.append((now, "ok" if ok else (st or "fail")))
+    hist = hist[-WINDOW_N:]
+    bad = sum(1 for _t, s in hist if s != "ok")
+    state[key] = {"hist": hist, "fails": bad, "ts": now,
+                  "reason": "ok" if ok else (st or "fail")}
+    return bad, len(hist), (len(hist) >= WINDOW_MIN and bad >= WINDOW_BAD)
+
+
 def heal_once():
     """全量巡检 + 精确补位（不含真翻自检与锁检查）。
 
     常驻守护 run_once() 与定时优选粘滞守卫共用同一套逻辑：
-    健康的一律不动，只有连续失败的 IP 才撤下并从候选池实测补位。
+    健康的一律不动；明确坏掉（1034/证书）立刻撤，间歇性抖动的按最近几轮
+    失败率撤，都从候选池实测补位。gt 路仍按连续失败判据整组处理。
     """
     state = jload(STATE_FILE, {})
     files = {}
@@ -729,20 +757,32 @@ def heal_once():
                 ok, st, ms, sp = results.get((route, dom, ip),
                                              (False, "fail", None, None))
                 key = "%s|%s|%s" % (route, dom, ip)
-                if ok:
-                    state.pop(key, None)
-                    state.pop("%s|%s" % (route, ip), None)
-                    keep.append(ip)
+                if route == "gt":
+                    # 翻译组 5 个域必须钉同一组 IP。单域偶发抖动不能按失败率
+                    # 单独换掉，否则依赖域和主域会被拆到不同组，整页翻译又坏。
+                    # gt 沿用「连续失败」+ gt_guard 真翻自检统一整组重选。
+                    if ok:
+                        state.pop(key, None)
+                        state.pop("%s|%s" % (route, ip), None)
+                        keep.append(ip)
+                        continue
+                    n = int((state.get(key) or {}).get("fails", 0)) + 1
+                    state[key] = {"fails": n, "ts": int(time.time()), "reason": st}
+                    if n >= MAX_STRIKES:
+                        dropped.append((ip, st + "x%d" % n))
+                    else:
+                        keep.append(ip)
                     continue
-                if st.startswith(HARD) and route != "gt":
+                if st.startswith(HARD):
+                    state.pop(key, None)
                     dropped.append((ip, st))
                     continue
-                n = int((state.get(key) or {}).get("fails", 0)) + 1
-                state[key] = {"fails": n, "ts": int(time.time()), "reason": st}
-                if n >= MAX_STRIKES:
-                    dropped.append((ip, st + "x%d" % n))
+                bad, total, drop = window_strike(state, key, ok, st)
+                if drop:
+                    dropped.append((ip, "%s %d/%d" % (st, bad, total)))
                 else:
                     keep.append(ip)
+                    state.pop("%s|%s" % (route, ip), None)
             if not dropped:
                 new_rows.append((dom, keep))
                 continue
@@ -851,8 +891,10 @@ def main():
     once = "--once" in sys.argv
     sec, on = runtime_cfg()
     log("启动：每 %d 秒把每路在用的 IP 各打开一次（单个超时 %.0fs），"
-        "打不开（1034/证书/5xx/连不上）就换 IP；同一 IP 连续 %d 次不行才换%s"
-        % (sec, TIMEOUT, MAX_STRIKES, "（当前巡检已关闭）" if not on else ""))
+        "明确打不开（1034/证书）立刻换；抖动的按最近 %d 轮里 >=%d 次失败才换；"
+        "翻译组仍要连续 %d 次失败才整组重选%s"
+        % (sec, TIMEOUT, WINDOW_N, WINDOW_BAD, MAX_STRIKES,
+           "（当前巡检已关闭）" if not on else ""))
     if once:
         run_once()
         return 0
