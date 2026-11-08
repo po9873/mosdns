@@ -735,6 +735,17 @@ REFILL_MIN = int(os.environ.get("PREF_REFILL_MIN", "3"))
 REFILL_RETRY_SEC = int(os.environ.get("PREF_REFILL_RETRY_SEC", "300"))
 HEAL_LOCK = os.path.join(DATA_DIR, ".wd_heal.lock")
 HEAL_LOCK_STALE = 900
+# 主域整行被撤空后，files 里就没这行了，守护永远不会自己把它加回来。
+# 记住每路的主域，缺了就从候选池由 101 实测重建（auto 路主域动态，不重建）。
+MAIN_DOMAINS = {
+    "cf": "cloudflare.com",
+    "google": "www.google.com",
+    "gt": "translate.google.com",
+    "github": "github.com",
+    "ghcr": "ghcr.io",
+    "tmdb": "www.themoviedb.org",
+    "imdb": "www.imdb.com",
+}
 
 
 def _heal_once_impl():
@@ -768,6 +779,41 @@ def _heal_once_impl():
     swapped = 0
     changed = False
     dropped_all = []
+
+    # ---- 主域整行缺失：101 自己从候选池实测重建 ----
+    # 链路整体抖动时旧逻辑会「全打不开、也没有可换的，已撤下这一行」，
+    # 之后 files 里再没有这个域，守护永远不会把它加回来，只能人工重选。
+    now = int(time.time())
+    for route, dom in MAIN_DOMAINS.items():
+        if route not in files:
+            continue
+        rows, scan = files[route]
+        if any(d == dom for d, _ in scan):
+            continue
+        rkey = "rebuild|%s|%s" % (route, dom)
+        if now - int((state.get(rkey) or {}).get("ts", 0) or 0) < REFILL_RETRY_SEC:
+            continue
+        state[rkey] = {"ts": now}
+        cands = candidates(route, dom, set())[:12]
+        cr = _batch_health([(route, dom, c) for c in cands])
+        good = [c for c in cands
+                if cr.get((route, dom, c), (False, "fail", None, None))[0]]
+        if not good:
+            log("%s 路：%s 主域整行缺失、候选暂不可用，101 下轮继续自己重建"
+                % (route, dom))
+            continue
+        tkey = "target|%s|%s" % (route, dom)
+        target = max(int((state.get(tkey) or {}).get("n", 0) or 0), REFILL_MIN)
+        state[tkey] = {"n": target, "ts": now, "try_ts": 0}
+        picked = good[:target]
+        for c in picked:
+            results[(route, dom, c)] = (True, "ok", None, None)
+        rebuilt = [(dom, picked)] + rows
+        write_hosts(route, dom, picked, rows)
+        files[route] = (rebuilt, rebuilt)
+        changed = True
+        log("%s 路：%s 主域整行缺失，101 自己实测重建 %d 个 IP"
+            % (route, dom, len(picked)))
 
     for route, (rows, scan) in files.items():
         new_rows = []
@@ -824,13 +870,6 @@ def _heal_once_impl():
             if not dropped and not need:
                 new_rows.append((dom, keep))
                 continue
-            for ip, why in dropped:
-                subs.mark_bad(ip, why, route)
-                state.pop("%s|%s|%s" % (route, dom, ip), None)
-                log("%s 路：%s 的 %s 打不开（%s），已加入黑名单，%d 小时内不再用"
-                    % (route, dom, ip, why_label(why), subs.BAD_TTL_H))
-                subs.add_event("swap", route, ip, why, dom)
-            dropped_all += [ip for ip, _ in dropped]
             added = []
             if need:
                 cands = candidates(route, dom, set(ips) | {d[0] for d in dropped})[:12]
@@ -846,22 +885,42 @@ def _heal_once_impl():
                     elif st2.startswith(HARD):
                         subs.mark_bad(c, st2, route)
             final = keep + added
+            if not final:
+                # 一个能用的都没有、候选也全测不过 = 链路整体抖动，不是 IP 坏。
+                # 绝不把整行删成空行（那样 DNS 会走上游真 IP，往往更糟），
+                # 也不把这些 IP 写进黑名单。保留原行，等 101 下轮自己再判。
+                final = list(ips)
+                removed = []
+                log("%s 路：%s 本轮全测不通、候选也不可用，保留原行等 101 下轮自己判"
+                    % (route, dom))
+            else:
+                removed = [ip for ip, _ in dropped if ip not in final]
+            for ip, why in dropped:
+                if ip not in removed:
+                    continue
+                subs.mark_bad(ip, why, route)
+                state.pop("%s|%s|%s" % (route, dom, ip), None)
+                log("%s 路：%s 的 %s 打不开（%s），已加入黑名单，%d 小时内不再用"
+                    % (route, dom, ip, why_label(why), subs.BAD_TTL_H))
+                subs.add_event("swap", route, ip, why, dom)
+            dropped_all += removed
             new_rows.append((dom, final))
-            swapped += len(dropped)
+            swapped += len(removed)
             if final != ips:
                 changed = True
-            if added and dropped:
+            if added and removed:
                 log("%s 路：%s 打不开，换成 %s（新 IP 已实测通过）"
                     % (route, dom, ",".join(added)))
             elif added:
                 log("%s 路：%s 冗余 %d/%d，101 自己实测补回 %s"
                     % (route, dom, len(keep), target, ",".join(added)))
-            elif final and dropped:
-                log("%s 路：%s 撤下打不开的，保留 %d 个仍可用"
-                    % (route, dom, len(final)))
-            elif not final:
-                log("%s 路：%s 全打不开、也没有可换的，已撤下这一行"
-                    % (route, dom))
+            elif removed:
+                if len(final) < target:
+                    log("%s 路：%s 撤下打不开的保留 %d 个，仍缺 %d 个冗余，101 下轮继续自己补"
+                        % (route, dom, len(final), target - len(final)))
+                else:
+                    log("%s 路：%s 撤下打不开的，保留 %d 个仍可用"
+                        % (route, dom, len(final)))
             elif len(final) < target:
                 log("%s 路：%s 候选暂不可用，仍缺 %d 个冗余，101 下轮继续自己补"
                     % (route, dom, target - len(final)))
