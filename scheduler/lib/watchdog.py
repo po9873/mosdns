@@ -117,6 +117,15 @@ def spec_for(domain, route=None):
     """
     if route and route in _ROUTE_SPEC:
         return _ROUTE_SPEC[route]
+    if domain == "github.com":
+        # 2026-11-08 实测：140.82.113.21 / 140.82.114.21 / 140.82.112.22 这类节点
+        # TCP、TLS、证书、HTTP 200 全对，但正文只有 4 字节 "OK"（浏览器整页就显示
+        # 一个 OK）。旧判据 expect=None 只看状态码，把它们当成健康，于是 hosts 里
+        # 一行 4 个 IP 有 3 个是假节点，浏览器随机命中 → 面板全绿、用户时好时坏。
+        # 主站首页必须返回真正的 HTML；_attempt 找不到 needle 会返回 "wrong"，
+        # 属于 HARD，守护当轮立即拉黑并由 101 实测补位，不用等 3 次连续失败。
+        # www.github.com 正常回 301 且 body 为空，不能加这个校验，否则误杀。
+        return "/", "<!DOCTYPE html"
     if domain in _TRANS_DOMS:
         return "/", "translate"
     if domain in _GOOGLE_DOMS:

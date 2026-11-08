@@ -197,6 +197,13 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None, strict_redirect=T
         if needle and not hit:
             return "wrong", ttfb, None, False
 
+        # 2026-11-08：有些节点 TCP/TLS/证书全对、HTTP 200，但不管请求什么路径，
+        # 正文都只有 "OK" 几个字节（浏览器整页就是一个白底 OK）。这类假节点以前
+        # 被判 ok，于是面板全绿、用户时好时坏。只精确匹配极短的纯 OK 文本：
+        # ghcr 的 401 空 body、Cloudflare 的 178B 首页等正常小响应都不受影响。
+        if got <= 8 and bytes(body).strip().lower() == b"ok":
+            return "wrong", ttfb, None, False
+
         speed = None
         est = False
         if got >= BODY_MIN and span > 0.001:
