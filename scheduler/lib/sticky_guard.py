@@ -26,7 +26,7 @@ import watchdog as wd  # noqa: E402
 DATA_DIR = os.environ.get("PREF_DATA_DIR", "/data")
 PREF_DIR = os.path.join(DATA_DIR, "prefs")
 HEAL_TS = os.path.join(DATA_DIR, ".sticky_heal_ts")
-HEAL_GAP = 60
+HEAL_GAP = 20  # 单路补位已经很便宜，别把后面几路的坏 IP 压到下一轮
 SNAP_FILE = os.path.join(DATA_DIR, "health_snapshot.json")
 SNAP_TTL = 90
 
@@ -80,17 +80,28 @@ def heal_if_due(route, nbad):
     if now - last < HEAL_GAP:
         return
     old = sys.stdout
+    devnull = None
     try:
         with open(HEAL_TS, "w", encoding="utf-8") as f:
             f.write(str(now))
-        sys.stdout = sys.stderr
-        n = wd.heal_once()
+        # wd.log 自己就写 pref.log；把 stdout 丢进 devnull，避免同一行日志
+        # 被 shell 的 stderr 重定向再写一遍（日志成对重复的元凶）。
+        devnull = open(os.devnull, "w")
+        sys.stdout = devnull
+        # 只修这一路：以前这里调的是全量 heal_once()，131 个跨境检查点
+        # 每路都重跑一遍，优选一轮能拖到 5 分钟以上。
+        n = wd.heal_once(route)
         wd.log("粘滞守卫：%s 路发现 %d 个打不开的 IP，101 已精确补位 %d 个；"
                "其余在用 IP 一律不动" % (route, nbad, n))
     except Exception as e:
         wd.log("粘滞守卫补位异常：%s（常驻守护下一轮会自行处理）" % e)
     finally:
         sys.stdout = old
+        if devnull:
+            try:
+                devnull.close()
+            except Exception:
+                pass
 
 
 def main():

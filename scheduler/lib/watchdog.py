@@ -37,7 +37,9 @@ SNAP_FILE = os.path.join(DATA_DIR, "health_snapshot.json")
 LOG_FILE = os.path.join(DATA_DIR, "pref.log")
 SEED_DIR = "/app/config/seeds"
 INTERVAL = int(os.environ.get("PREF_WATCHDOG_SEC", "180"))
-TIMEOUT = float(os.environ.get("PREF_WATCHDOG_TIMEOUT", "6"))
+# 单个探测超时：正常跨境首屏 <1s，3s 连不上就判这次不可用。
+# 以前 6s × 131 个点 / 8 并发 ≈ 100 秒一轮，链路抖动时要 5 分钟以上。
+TIMEOUT = float(os.environ.get("PREF_WATCHDOG_TIMEOUT", "3"))
 MAX_STRIKES = int(os.environ.get("PREF_WATCHDOG_STRIKES", "3"))
 # 「连续失败」对间歇性坏节点无效：它好一轮就把计数清零，永远攒不到阈值，
 # 于是一直留在 hosts 里，浏览器随机撞上就是「时好时坏」（GitHub 这类跨境
@@ -625,7 +627,7 @@ def gt_guard():
 # 「面板全绿、浏览器打不开」。现在所有行、所有在用 IP 都进巡检。
 SLOW_TTFB_MS = float(os.environ.get("PREF_SLOW_TTFB_MS", "3500"))
 SLOW_SPEED_KBPS = float(os.environ.get("PREF_SLOW_SPEED_KBPS", "20"))
-WD_CONC = int(os.environ.get("PREF_WD_CONC", "8"))
+WD_CONC = int(os.environ.get("PREF_WD_CONC", "12"))
 from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: E402
 
 
@@ -748,14 +750,21 @@ MAIN_DOMAINS = {
 }
 
 
-def _heal_once_impl():
-    """全量巡检 + 精确补位 + 冗余自愈（不含真翻自检与互斥锁）。"""
+def _heal_once_impl(only_route=None):
+    """巡检 + 精确补位 + 冗余自愈（不含真翻自检与互斥锁）。
+
+    only_route：粘滞守卫只需要修自己那一路，传路名就只巡检这一路的 hosts，
+    不再把全量 131 个检查点重跑一遍（这是优选一轮要 5 分钟的主因）。
+    静态钉子和主域重建只在全量轮（常驻守护）里做。
+    """
     state = jload(STATE_FILE, {})
     files = {}
     for name in sorted(os.listdir(PREF_DIR)):
         if not name.endswith(".hosts") or name == "all.hosts":
             continue
         route = name[:-6]
+        if only_route and route != only_route:
+            continue
         rows = read_lines(os.path.join(PREF_DIR, name))
         if rows:
             # 所有路（含 gt）逐行全量巡检；gt 主域由 health() 内部改打真翻接口，
@@ -765,7 +774,11 @@ def _heal_once_impl():
     items = [(route, dom, ip) for route, (_rows, scan) in files.items()
              for dom, ips in scan for ip in ips]
     # 静态钉子一起并发巡检：它在 hosts 插件里优先于 all.hosts，必须同样受守护。
-    static_rows, static_items = static_targets()
+    # 单路补位轮跳过它（由常驻守护的全量轮负责），省掉一大半跨境探测。
+    if only_route:
+        static_rows, static_items = [], []
+    else:
+        static_rows, static_items = static_targets()
     results = _batch_health(items + static_items)
     # 把这一轮 101 实测结果留档：定时优选粘滞守卫在 90 秒内直接复用，
     # 不再把同一批在用 IP 重复探一遍（省跨境连接，也不挤占其它设备带宽）。
@@ -947,9 +960,10 @@ def _heal_once_impl():
     return swapped
 
 
-def heal_once():
+def heal_once(only_route=None):
     """对外入口：同一时间只允许一轮巡检跑完，避免常驻守护、粘滞守卫、
     手动验收三方并发改写 hosts（日志出现重复「换掉 N 个」就是这么来的）。
+    only_route 非空时只巡检这一路，供粘滞守卫做精确补位，不再全量重扫。
     容器被强杀可能留下陈旧锁，超过 15 分钟自动清掉再跑一轮。
     """
     try:
@@ -958,14 +972,14 @@ def heal_once():
         try:
             if time.time() - os.path.getmtime(HEAL_LOCK) > HEAL_LOCK_STALE:
                 os.remove(HEAL_LOCK)
-                return heal_once()
+                return heal_once(only_route)
         except OSError:
             pass
         log("已有巡检正在跑，本轮跳过（让那一轮自己完整跑完）")
         return 0
     try:
         os.write(fd, str(os.getpid()).encode())
-        return _heal_once_impl()
+        return _heal_once_impl(only_route)
     finally:
         try:
             os.close(fd)
@@ -978,11 +992,18 @@ def heal_once():
 
 
 def run_once():
-    """常驻守护入口：真翻自检 → 让出优选锁 → 全量巡检补位。"""
+    """常驻守护入口：真翻自检 → 等优选锁释放 → 全量巡检补位。"""
     gt_guard()
     if os.path.isdir(LOCK_DIR):
-        log("优选任务正在跑，这轮巡检先跳过（避免两边同时改写 hosts 打架）")
-        return 0
+        # 以前一遇到优选锁就整轮跳过；优化前优选一轮要 5 分钟，守护会连跳
+        # 两轮、自愈被饿死。改成最多等 45 秒，锁一放立刻跑自己那一轮。
+        for _ in range(3):
+            time.sleep(15)
+            if not os.path.isdir(LOCK_DIR):
+                break
+        if os.path.isdir(LOCK_DIR):
+            log("优选任务仍在跑，这轮巡检先跳过（下一轮会补上）")
+            return 0
     if os.path.exists(GT_GUARD_FLAG):
         try:
             os.remove(GT_GUARD_FLAG)
