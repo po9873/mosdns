@@ -730,6 +730,23 @@ run_route() {
     return 1
   fi
 
+  # ---- 粘滞守卫：定时优选开着也必须「能用就不换」----------------------
+  # 由 101 容器按浏览器判据复核本路所有在用 IP：全能用就沿用、hosts 一字不改；
+  # 有打不开的也只做精确补位，绝不因为定时器到点或「有更快的 IP」全量重选。
+  # 历史上反复「本来能用却被换坏」就是这个入口造成的。
+  # PREF_RESELECT=1 是手工强制重选的唯一逃生口，面板不会设置它。
+  if [ "${PREF_RESELECT:-0}" != "1" ]; then
+    local sgout sgrc
+    sgout=$(python3 "$SELF_DIR/lib/sticky_guard.py" "$route" 2>>"${PREF_LOG:-$DATA_DIR/pref.log}")
+    sgrc=$?
+    if [ "$sgrc" -eq 0 ]; then
+      log "$route: 粘滞守卫，${sgout#STICKY_OK } 个在用 IP 全部能用 → 沿用不换（不重写 hosts）"
+    else
+      log "$route: 粘滞守卫发现打不开的 IP（${sgout#STICKY_BAD }）→ 101 精确补位，本轮不做全量重探"
+    fi
+    return 0
+  fi
+
   # ---- 这一路「怎么算能用」----
   # 默认请求 / 看 HTTP 正常即可；但有的服务根路径本来就返回 404（Google 前端节点
   # 全是这样），用 GET / 判断会把真能用的 IP 全判成不可用。所以允许按路指定：

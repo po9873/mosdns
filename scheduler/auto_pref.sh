@@ -67,6 +67,14 @@ for row in $rows; do
     continue
   fi
 
+  # 粘滞守卫：当前 IP 在 101 判据下还打得开就保持原样，
+  # 不因为「有更快的 IP」换掉正在用的（能用就不换，所有路一致）。
+  if [ -n "$cur_ip" ] && \
+     python3 "$SELF_DIR/lib/sticky_guard.py" one "$dom" "$cur_ip" auto >/dev/null 2>&1; then
+    log "auto: $dom 当前 IP $cur_ip 还能用（$why），保持原样"
+    continue
+  fi
+
   # 候选：现在的 IP + DNS 其它记录 + 同 CDN 其它网段
   cand=$(resolve_ips "$dom" "" A | tr '\n' ' ')
   cand="$cur_ip $cand"

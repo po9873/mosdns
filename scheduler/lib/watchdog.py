@@ -502,25 +502,12 @@ def _batch_health(items):
     return out
 
 
-def run_once():
-    # 翻译真翻自检不占锁、不写 hosts，锁在不在都要做
-    gt_guard()
-    if os.path.isdir(LOCK_DIR):
-        log("优选任务正在跑，这轮巡检先跳过（避免两边同时改写 hosts 打架）")
-        return 0
-    if os.path.exists(GT_GUARD_FLAG):
-        try:
-            os.remove(GT_GUARD_FLAG)
-        except Exception:
-            pass
-        log("翻译真翻自检连续失败，立即触发 gt 路重选")
-        threading.Thread(
-            target=lambda: subprocess.run(
-                ["/app/scheduler/scheduler.sh", "once", "gt"],
-                capture_output=True, timeout=240),
-            daemon=True).start()
-        return 0
+def heal_once():
+    """全量巡检 + 精确补位（不含真翻自检与锁检查）。
 
+    常驻守护 run_once() 与定时优选粘滞守卫共用同一套逻辑：
+    健康的一律不动，只有连续失败的 IP 才撤下并从候选池实测补位。
+    """
     state = jload(STATE_FILE, {})
     files = {}
     for name in sorted(os.listdir(PREF_DIR)):
@@ -619,6 +606,31 @@ def run_once():
     log("这轮巡检结束：检查 %d 个 IP，换掉 %d 个（其余都能正常打开）"
         % (checked, swapped))
     return swapped
+
+
+def run_once():
+    """常驻守护入口：真翻自检 → 让出优选锁 → 全量巡检补位。"""
+    gt_guard()
+    if os.path.isdir(LOCK_DIR):
+        log("优选任务正在跑，这轮巡检先跳过（避免两边同时改写 hosts 打架）")
+        return 0
+    if os.path.exists(GT_GUARD_FLAG):
+        try:
+            os.remove(GT_GUARD_FLAG)
+        except Exception:
+            pass
+        log("翻译真翻自检连续失败，立即触发 gt 路重选")
+        # 真翻自检失败必须能真正重选；给这一条链路放行粘滞守卫，
+        # 否则守卫用 HTTPS 判据判「还能开」却把整页翻译的退化挡在门外。
+        env = dict(os.environ)
+        env["PREF_RESELECT"] = "1"
+        threading.Thread(
+            target=lambda: subprocess.run(
+                ["/app/scheduler/scheduler.sh", "once", "gt"],
+                capture_output=True, timeout=240, env=env),
+            daemon=True).start()
+        return 0
+    return heal_once()
 
 
 def _doh_scan_async():

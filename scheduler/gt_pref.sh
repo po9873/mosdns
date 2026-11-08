@@ -32,6 +32,13 @@ acquire_lock || exit 1
 pref_log="${PREF_LOG:-$DATA_DIR/pref.log}"
 gt_extra="$PREF_DIR/.gt.extra"
 
+# 粘滞守卫：主用 IP 全能用就整路沿用，连 .gt.extra 都不重跑
+if [ "${PREF_RESELECT:-0}" != "1" ] && \
+   python3 "$SELF_DIR/lib/sticky_guard.py" gt 2>>"$pref_log" >/dev/null; then
+  log "gt: 粘滞守卫，主用 IP 全部能用 → 沿用不换（不重跑 gt_pin_refresh）"
+  exit 0
+fi
+
 # 翻译路真能力验证（接口能翻出译文才算数），结果供主优选合并注入
 if ! python3 /app/scheduler/lib/gt_pin_refresh.py "$gt_extra" 2>>"$pref_log" \
    || [ ! -s "$gt_extra" ]; then
