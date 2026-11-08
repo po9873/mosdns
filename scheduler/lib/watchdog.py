@@ -784,13 +784,26 @@ def reconcile_blacklist(files, static_rows, results, state):
         if not bad:
             return 0
         used = selfheal.build_used(files, static_rows)
-        freed = selfheal.plan_unban(bad, used, results)
+        now = int(time.time())
+        # 解除历史存 state（不写 blacklist，过期后自然失效）；30 分钟内
+        # 不重复解除同一个 IP，避免补位探测把它再打黑后又立刻放出来。
+        recent = {}
+        for k, v in state.items():
+            if k.startswith("unban|"):
+                try:
+                    recent[k.split("|", 1)[1]] = float(v)
+                except (TypeError, ValueError):
+                    pass
+        freed = selfheal.plan_unban(bad, used, results,
+                                    recent_unbans=recent)
         if not freed:
             return 0
         for ip in freed:
             bad.pop(ip, None)
-            for k in [k for k in state if k.endswith("|" + ip)]:
+            for k in [k for k in state if k.endswith("|" + ip)
+                      and not k.startswith("unban|")]:
                 state.pop(k, None)
+            state["unban|" + ip] = now
         subs.jsave(subs.BLACK_FILE, bad)
         log("黑名单复核：%d 个在用 IP 本轮 101 实测全通过，自动解除（%s）"
             % (len(freed), ",".join(freed[:6])))

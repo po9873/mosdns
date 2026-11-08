@@ -24,6 +24,8 @@ import urllib.request
 SOFT_PREFIXES = ("http5", "timeout", "fail", "blocked", "slow", "ok ")
 SOFT_RETRY_SEC = 1800
 SOFT_RETRY_MAX = 4
+# 同一 IP 解除后 30 分钟内不再重复解除，避免「解除→补位再判死→再解除」抖动
+UNBAN_COOLDOWN_SEC = 1800
 
 _ACC = ("application/vnd.docker.distribution.manifest.v2+json, "
         "application/vnd.oci.image.manifest.v1+json")
@@ -47,14 +49,20 @@ def build_used(files, static_rows, static_route="static"):
     return used
 
 
-def plan_unban(bad, used, results, now=None):
+def plan_unban(bad, used, results, now=None, recent_unbans=None):
     """返回本轮应由 101 自动解除拉黑的 IP 列表。
 
     证据只来自 results（本轮 101 容器自己发出的探测），且必须是该 IP 在
-    hosts 里真正在用的每一个域；未测过 / 已过期 / 不在用 / 任一域判 BAD
-    的一律不动。
+    hosts 里真正在用的**每一个**域都有实测；未测过 / 已过期 / 不在用 /
+    任一域判 BAD 的一律不动。
+
+    2026-11-08 复发修复：只复核「外部抖动类」拉黑。cert / 1034 / wrong
+    是节点与域名不匹配的确定性结论（例如 GitHub Pages 段对 github.com
+    主域证书不对），解除后同一轮补位会立刻再次判死，形成每 7 分钟
+    「解除→拉黑→解除」的循环；解除后 30 分钟内也不重复放同一 IP。
     """
     t = time.time() if now is None else now
+    recent = recent_unbans or {}
     freed = []
     for ip, rec in (bad or {}).items():
         try:
@@ -62,13 +70,20 @@ def plan_unban(bad, used, results, now=None):
                 continue
         except (TypeError, ValueError):
             continue
+        if not str(rec.get("reason") or "").startswith(SOFT_PREFIXES):
+            continue
+        try:
+            if t - float(recent.get(ip) or 0) < UNBAN_COOLDOWN_SEC:
+                continue
+        except (TypeError, ValueError):
+            pass
         keys = used.get(ip)
         if not keys:
             continue
-        judged = [results[k] for k in keys if k in results]
-        if not judged:
+        if not all(k in results for k in keys):
             continue
-        if all(bool(v and v[0]) for v in judged):
+        judged = [results[k] for k in keys]
+        if judged and all(bool(v and v[0]) for v in judged):
             freed.append(ip)
     return freed
 

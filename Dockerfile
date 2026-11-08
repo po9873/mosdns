@@ -128,10 +128,13 @@ RUN if [ -s /tmp/china_ip_full.txt ]; then cp /tmp/china_ip_full.txt /app/config
     && if [ -s /tmp/cdn_ranges_full.txt ]; then cp /tmp/cdn_ranges_full.txt /app/config/cdn_ranges.txt; fi \
     && rm -f /tmp/china_ip_full.txt /tmp/cdn_ranges_full.txt
 COPY scheduler/   /app/scheduler/
+# 升级/校验脚本随镜像固化：宿主机那份丢了可直接从镜像取回，
+#   docker run --rm --entrypoint cat po9873/mosdns:latest /app/scripts/verify_image.sh
+COPY scripts/     /app/scripts/
 COPY ui/          /app/ui/
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh \
-    && chmod +x /app/scheduler/*.sh 2>/dev/null || true
+    && chmod +x /app/scheduler/*.sh /app/scripts/*.sh 2>/dev/null || true
 
 # ---------- 环境变量（全部可在 run 时覆盖，均不写死）----------
 # DoH 上游刻意用 IP 形式：避免 mosdns 启动时解析上游域名造成"自己解析自己"的循环。
