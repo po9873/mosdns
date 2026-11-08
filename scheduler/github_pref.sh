@@ -38,6 +38,14 @@ set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1
 
+# CloudflareSpeedTest：101 内按 github.com 实测排序候选；工具只挑 IP，
+# 写不写 hosts 仍由 101 严格复核 + 粘滞守卫「能用不换」决定。
+# 位置刻意放在粘滞守卫之前：正常轮次全健康时会跳过测速（TTL），
+# 有 IP 打不开时工具立刻重排，补位优先用它的排序结果。
+python3 "$SELF_DIR/lib/cfst_pref.py" github 2>>"${PREF_LOG:-$DATA_DIR/pref.log}" >/dev/null || true
+github_seed="$DATA_DIR/cfst_github_seed.txt"
+[ -s "$github_seed" ] || github_seed="/app/config/seeds/github.txt"
+
 # 固定映射行（须在 source common.sh 之后，PREF_DIR 才有定义）：
 # 每行「域名 ip1 ip2 ...」，每个域名配自己的那批 IP，写入 .github.extra。
 # 刷新失败则沿用旧结果；连旧结果都没有才用内置兜底。
@@ -70,4 +78,4 @@ fi
 : > "$PREF_EXTRA_LINES"
 cat "$api_f" "$fastly_f" >> "$PREF_EXTRA_LINES"
 
-run_route "github" "/app/config/seeds/github.txt" 443
+run_route "github" "$github_seed" 443

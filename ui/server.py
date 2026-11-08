@@ -2210,29 +2210,38 @@ def read_versions():
     # 先把这条写清楚，免得以为跑了一堆外部工具。
     items.append({"label": "优选探测", "ver": "内置脚本", "note": "各路共用，101 真实 HTTPS 复核 + 粘滞守卫"})
     if cft_v:
-        # CloudflareSpeedTest 已接入 cf 路：显示 101 里最近一次实测的真实结果，
-        # 不再只写「已固化，备用测速器」这种让人以为没用上的话。
-        note = "已接入 cf 路，等待首次测速"
+        # 同一个工具按各路自己的域名实测：cf / github / ghcr / gt / google / tmdb / imdb。
+        # 显示 101 里真实测过几路 + cf 路最近一次实测结果。
+        cfst_routes = ("cf", "github", "ghcr", "gt", "google", "tmdb", "imdb")
+        done = 0
+        for r in cfst_routes:
+            p = "/data/cfst_status.json" if r == "cf" else "/data/cfst_%s_status.json" % r
+            try:
+                with open(p, encoding="utf-8") as f:
+                    if json.load(f).get("ok"):
+                        done += 1
+            except Exception:
+                pass
+        note = "已接入 %d 路（%d 路已实测）" % (len(cfst_routes), done)
         try:
             with open("/data/cfst_status.json", encoding="utf-8") as f:
                 st = json.load(f)
             if st.get("ok"):
-                note = "已接入 cf 路 · 101 实测 %s · %d/%d 候选 · %ss" % (
+                note += " · cf 101 实测 %s · %d/%d 候选 · %ss" % (
                     time.strftime("%m-%d %H:%M", time.localtime(int(st.get("ts", 0)))),
                     int(st.get("ranked", 0)), int(st.get("input", 0)), st.get("cost", 0))
-            else:
-                note = "已接入 cf 路 · 最近一次：" + str(st.get("why", ""))[:20]
         except Exception:
             pass
         items.append({"label": "CloudflareSpeedTest", "ver": cft_v, "note": note})
     else:
-        items.append({"label": "CloudflareSpeedTest", "ver": "缺工具", "note": "镜像内缺失，cf 路回退脚本探测"})
-    # GT 只跟踪版本：上游 1.9 起不发 linux 包，gt 路用的是它的社区 IP 清单
+        items.append({"label": "CloudflareSpeedTest", "ver": "缺工具", "note": "镜像内缺失，各路回退脚本探测"})
+    # GT 只跟踪版本：上游 1.9 起不发 linux 包，容器里跑不了它的扫描器；
+    # 它的社区 IP 清单是 gt / google 两路喂给 CloudflareSpeedTest 的候选来源。
     gt_v = build.get("gt") or ""
     if gt_v in ("", "latest"):
         gt_v = "跟随上游"
     items.append({"label": "GoogleTranslateIpCheck", "ver": gt_v,
-                  "note": "仅用社区 IP 清单，跟随上游 master"})
+                  "note": "gt/google 路的候选 IP 清单，交由 cfst 实测排序（跟随上游 master）"})
     data = {
         "items": items,
         # 项目自身版本与引擎版本分开报：mosdns 是内置的 DNS 引擎，不是这个项目的版本号。

@@ -24,4 +24,10 @@ export PREF_EXTRA_DOMAINS="google.com gmail.com mail.google.com accounts.google.
 
 source /app/scheduler/common.sh
 acquire_lock || exit 1
-run_route "google" "/app/config/seeds/google.txt" 443
+
+# CloudflareSpeedTest：101 内按 www.google.com 实测排序候选；工具只挑 IP，
+# 写不写 hosts 仍由 101 严格复核 + 粘滞守卫「能用不换」决定。
+python3 "$SELF_DIR/lib/cfst_pref.py" google 2>>"${PREF_LOG:-$DATA_DIR/pref.log}" >/dev/null || true
+google_seed="$DATA_DIR/cfst_google_seed.txt"
+[ -s "$google_seed" ] || google_seed="/app/config/seeds/google.txt"
+run_route "google" "$google_seed" 443

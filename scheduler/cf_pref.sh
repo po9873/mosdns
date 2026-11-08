@@ -28,9 +28,11 @@ acquire_lock || exit 1
 # 延迟实测排序 → 结果灌进 cf 候选池。它只负责「找候选」，最终写不写 hosts
 # 仍由 101 严格复核 + 粘滞守卫决定：在用 IP 全能用就一个字不改。
 # 每轮定时优选跑一次，并发/次数/输入量都有限，不常驻、不洗牌。
+# 同一个工具同时接了 github / ghcr / gt / google / tmdb / imdb 六路，
+# 各自按自己的域名测速（见 lib/cfst_pref.py 的 ROUTES 表）。
 CFST_SEED="/app/config/seeds/cloudflare.txt"
 if [ -x /app/bin/cft/cfst ] && [ "${CFST_SKIP:-0}" != "1" ]; then
-  cfst_out=$(python3 "$SELF_DIR/lib/cfst_pref.py" 2>>"${PREF_LOG:-$DATA_DIR/pref.log}")
+  cfst_out=$(python3 "$SELF_DIR/lib/cfst_pref.py" cf 2>>"${PREF_LOG:-$DATA_DIR/pref.log}")
   log "cf: CloudflareSpeedTest 101 实测 → $cfst_out"
   if [ -s "$DATA_DIR/cfst_seed.txt" ]; then
     CFST_SEED="$DATA_DIR/cfst_seed.txt"

@@ -18,6 +18,12 @@ set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1
 
+# CloudflareSpeedTest：101 内按 www.imdb.com 实测排序候选；工具只挑 IP，
+# 写不写 hosts 仍由 101 严格复核 + 粘滞守卫「能用不换」决定。
+python3 "$SELF_DIR/lib/cfst_pref.py" imdb 2>>"${PREF_LOG:-$DATA_DIR/pref.log}" >/dev/null || true
+imdb_seed="$DATA_DIR/cfst_imdb_seed.txt"
+[ -s "$imdb_seed" ] || imdb_seed="/app/config/seeds/imdb.txt"
+
 export PREF_PROBE_TARGET=www.imdb.com
 export PREF_PROBE_PATH='/'
 export PREF_PROBE_EXPECT=''
@@ -28,4 +34,4 @@ export PREF_EXTRA_DOMAINS="m.imdb.com s.media-imdb.com ia.media-imdb.com images-
 # 拿一张海报（约 270KB）测，走的是同一批 CloudFront 边缘。
 export PREF_SPEED_URL='https://m.media-amazon.com/images/M/MV5BMDFkYTc0MGEtZmNhMC00ZDIzLWFmNTEtODM1ZmRlYWMwMWFmXkEyXkFqcGdeQXVyMTMxODk2OTU@._V1_.jpg'
 
-run_route "imdb" "/app/config/seeds/imdb.txt" 443
+run_route "imdb" "$imdb_seed" 443

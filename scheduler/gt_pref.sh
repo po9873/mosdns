@@ -29,6 +29,13 @@ export PREF_EXTRA_DOMAINS=""
 source /app/scheduler/common.sh
 acquire_lock || exit 1
 
+# CloudflareSpeedTest：101 内按 translate.googleapis.com 实测排序候选；
+# 工具只挑 IP，写不写 hosts 仍由 101 严格复核 + 粘滞守卫「能用不换」决定。
+# GoogleTranslateIpCheck 的社区 IP 清单就是这里喂给工具的候选来源。
+python3 "$SELF_DIR/lib/cfst_pref.py" gt 2>>"${PREF_LOG:-$DATA_DIR/pref.log}" >/dev/null || true
+gt_seed="$DATA_DIR/cfst_gt_seed.txt"
+[ -s "$gt_seed" ] || gt_seed="/app/config/seeds/ghtranslate.txt"
+
 pref_log="${PREF_LOG:-$DATA_DIR/pref.log}"
 gt_extra="$PREF_DIR/.gt.extra"
 
@@ -48,7 +55,7 @@ if ! python3 /app/scheduler/lib/gt_pin_refresh.py "$gt_extra" 2>>"$pref_log" \
 fi
 export PREF_EXTRA_LINES="$gt_extra"
 
-run_route "gt" "/app/config/seeds/ghtranslate.txt" 443
+run_route "gt" "$gt_seed" 443
 
 # 兜底：若主优选因整层不通撤下了 gt.hosts，但 .gt.extra 有强校验过的可用 IP，
 # 仍把它写进去，避免「明明有真能翻的 IP 却整路回退」

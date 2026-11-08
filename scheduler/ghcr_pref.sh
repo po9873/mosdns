@@ -18,6 +18,12 @@ set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1
 
+# CloudflareSpeedTest：101 内按 ghcr.io 实测排序候选；工具只挑 IP，
+# 写不写 hosts 仍由 101 严格复核 + 粘滞守卫「能用不换」决定。
+python3 "$SELF_DIR/lib/cfst_pref.py" ghcr 2>>"${PREF_LOG:-$DATA_DIR/pref.log}" >/dev/null || true
+ghcr_seed="$DATA_DIR/cfst_ghcr_seed.txt"
+[ -s "$ghcr_seed" ] || ghcr_seed="/app/config/seeds/ghcr.txt"
+
 export PREF_PROBE_TARGET=ghcr.io
 # 验「Docker registry 真实能力」而不是「首页任意响应」：真 ghcr 对 /v2/ 返回
 # 401 且 body 含 UNAUTHORIZED（Bearer token 缺失的标准应答）。证书对 + 这个
@@ -29,5 +35,5 @@ export PREF_PROBE_EXPECT='UNAUTHORIZED'
 export PREF_EXTRA_LINES="$PREF_DIR/.ghcr.extra"
 : > "$PREF_EXTRA_LINES"
 
-run_route "ghcr" "/app/config/seeds/ghcr.txt" 443
+run_route "ghcr" "$ghcr_seed" 443
 exit $?

@@ -16,6 +16,12 @@ set -u
 source /app/scheduler/common.sh
 acquire_lock || exit 1
 
+# CloudflareSpeedTest：101 内按 www.themoviedb.org 实测排序候选；工具只挑 IP，
+# 写不写 hosts 仍由 101 严格复核 + 粘滞守卫「能用不换」决定。
+python3 "$SELF_DIR/lib/cfst_pref.py" tmdb 2>>"${PREF_LOG:-$DATA_DIR/pref.log}" >/dev/null || true
+tmdb_seed="$DATA_DIR/cfst_tmdb_seed.txt"
+[ -s "$tmdb_seed" ] || tmdb_seed="/app/config/seeds/tmdb.txt"
+
 export PREF_PROBE_TARGET=www.themoviedb.org
 export PREF_PROBE_PATH='/'
 export PREF_PROBE_EXPECT=''
@@ -32,4 +38,4 @@ export PREF_EXTRA_DOMAINS="themoviedb.org api.tmdb.org api.themoviedb.org image.
 # 路径长期有效；哪天挂了也不影响优选，只是这一行没有速度数字。
 export PREF_SPEED_URL='https://image.tmdb.org/t/p/w500/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg'
 
-run_route "tmdb" "/app/config/seeds/tmdb.txt" 443
+run_route "tmdb" "$tmdb_seed" 443
