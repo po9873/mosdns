@@ -697,19 +697,33 @@ def window_strike(state, key, ok, st):
     """记一轮 101 实测结果，返回 (失败次数, 样本数, 是否该撤下)。
 
     成功轮不再清空历史：抖动 IP 正是靠「偶尔成功一次」把连续失败计数
-    清零，才长期赖在 hosts 里。窗口内至少 WINDOW_MIN 个样本、其中
-    >= WINDOW_BAD 次失败才撤下；偶发一次抖动（1/6）不会误换好 IP。
+    清零，才长期赖在 hosts 里。但「本轮能用」必须一律不换 —— 否则
+    窗口里攒了旧失败，会在 IP 明明能开的这一轮把它撤下，变成洗牌。
+
+    慢（slowttfb / slowspeed）不计入失败：一轮 157 个检查点并发探测时
+    会把自己那条跨境链路挤爆，出现 5~15 秒的假慢；拿它当失败，就会把
+    整批本来能用的 Google 域一起换掉。只有真连不上/超时/证书错才算。
     """
     now = int(time.time())
     rec = state.get(key) or {}
     hist = [(t, s) for t, s in rec.get("hist", [])
             if isinstance(t, int) and now - t < WINDOW_SEC]
-    hist.append((now, "ok" if ok else (st or "fail")))
+    status = st or "fail"
+    usable = bool(ok) or status.startswith("slow")
+    if hist and now - hist[-1][0] < 60:
+        # 同一轮里常驻守护和定时优选可能各跑一次；同一次拥塞不能记成两票，
+        # 且这一轮只要有任何一次实测能用，就按「能用」记账。
+        if hist[-1][1] != "ok":
+            hist[-1] = (now, "ok" if usable else status)
+    else:
+        hist.append((now, "ok" if usable else status))
     hist = hist[-WINDOW_N:]
     bad = sum(1 for _t, s in hist if s != "ok")
     state[key] = {"hist": hist, "fails": bad, "ts": now,
-                  "reason": "ok" if ok else (st or "fail")}
-    return bad, len(hist), (len(hist) >= WINDOW_MIN and bad >= WINDOW_BAD)
+                  "reason": "ok" if usable else status}
+    # 本轮能用就不换；只有本轮确实打不开、且历史上也不稳定才撤下。
+    return bad, len(hist), (not usable and len(hist) >= WINDOW_MIN
+                            and bad >= WINDOW_BAD)
 
 
 def heal_once():
@@ -891,7 +905,8 @@ def main():
     once = "--once" in sys.argv
     sec, on = runtime_cfg()
     log("启动：每 %d 秒把每路在用的 IP 各打开一次（单个超时 %.0fs），"
-        "明确打不开（1034/证书）立刻换；抖动的按最近 %d 轮里 >=%d 次失败才换；"
+        "本轮能用就沿用；明确打不开（1034/证书）立刻换，"
+        "本轮打不开且最近 %d 轮里 >=%d 次失败才换（慢不算失败）；"
         "翻译组仍要连续 %d 次失败才整组重选%s"
         % (sec, TIMEOUT, WINDOW_N, WINDOW_BAD, MAX_STRIKES,
            "（当前巡检已关闭）" if not on else ""))
