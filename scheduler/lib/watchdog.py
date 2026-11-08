@@ -436,15 +436,78 @@ def gt_guard():
             pass
 
 
+# ---- 全链路巡检：能用就不换，坏了才由 101 自己发现并补位 ------------------
+# 旧逻辑只巡检每路 hosts 的第一行（github 路第一行是 api.github.com），
+# 用户真正打开的 github.com 被钉在 static.hosts 里，守护根本没看 →
+# 「面板全绿、浏览器打不开」。现在所有行、所有在用 IP 都进巡检。
+SLOW_TTFB_MS = float(os.environ.get("PREF_SLOW_TTFB_MS", "3500"))
+SLOW_SPEED_KBPS = float(os.environ.get("PREF_SLOW_SPEED_KBPS", "20"))
+WD_CONC = int(os.environ.get("PREF_WD_CONC", "16"))
+from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: E402
+
+
+def health(ip, domain, route):
+    """101 容器内按真实浏览器判据探一次。
+
+    https_probe 对 <4KB 的响应不算速度、<32KB 的样本标 est=True（不可信），
+    所以只拿可信样本判「慢到打不开」，不会误杀 API / 401 这类小页面。
+    """
+    path, expect = spec_for(domain, route)
+    probe_domain = "translate.googleapis.com" if route == "gt" else domain
+    try:
+        r = tuple(https_probe.check(ip, probe_domain, PORT, TIMEOUT, 1, path, expect,
+                                    strict_redirect=bool(path and path != "/")))
+    except Exception:
+        r = (ip, "fail", None, None, False)
+    if len(r) < 5:
+        r = r + (None,) * (5 - len(r))
+    _ip, st, ms, sp, est = r[:5]
+    if st != "ok":
+        return False, st, ms, sp
+    if ms is not None and ms > SLOW_TTFB_MS:
+        return False, "slowttfb%.0f" % ms, ms, sp
+    if not est and sp is not None and 0 < sp < SLOW_SPEED_KBPS:
+        return False, "slowspeed%.0f" % sp, ms, sp
+    return True, st, ms, sp
+
+
+def _batch_health(items):
+    """并发巡检。第一次判不行的再补探 2 次，任一次能开就算健康
+    （能用就不换：别被一次跨境抖动误杀好 IP）。"""
+    out = {}
+    if not items:
+        return out
+    with ThreadPoolExecutor(max_workers=WD_CONC) as ex:
+        futs = {ex.submit(health, ip, dom, route): (route, dom, ip)
+                for route, dom, ip in items}
+        for f in as_completed(futs):
+            k = futs[f]
+            try:
+                out[k] = f.result()
+            except Exception:
+                out[k] = (False, "fail", None, None)
+    retry = [k for k, v in out.items() if not v[0]]
+    if retry:
+        with ThreadPoolExecutor(max_workers=WD_CONC) as ex:
+            futs = {ex.submit(health, k[2], k[1], k[0]): k
+                    for k in retry for _ in range(2)}
+            for f in as_completed(futs):
+                k = futs[f]
+                try:
+                    r = f.result()
+                    if r[0]:
+                        out[k] = r
+                except Exception:
+                    pass
+    return out
+
+
 def run_once():
-    # 翻译自检不占锁、不写 hosts，锁在不在都要做：auto 路一轮能跑十几分钟，
-    # 老逻辑一碰锁就把整轮巡检跳过，这段时间翻译挂了完全没人管
-    # （实测 12:54~13:03 连续 4 轮被跳过）。
+    # 翻译真翻自检不占锁、不写 hosts，锁在不在都要做
     gt_guard()
     if os.path.isdir(LOCK_DIR):
         log("优选任务正在跑，这轮巡检先跳过（避免两边同时改写 hosts 打架）")
         return 0
-    # 上一轮（可能在锁期间）记下的「翻译翻不出来」，锁一释放立刻重选 gt 路。
     if os.path.exists(GT_GUARD_FLAG):
         try:
             os.remove(GT_GUARD_FLAG)
@@ -459,100 +522,102 @@ def run_once():
         return 0
 
     state = jload(STATE_FILE, {})
-    changed = False
-    checked = 0
-    swapped = 0
-
+    files = {}
     for name in sorted(os.listdir(PREF_DIR)):
         if not name.endswith(".hosts") or name == "all.hosts":
-            # all.hosts 是各路合并出来的产物，不是一路优选结果；
-            # 把它当一路来巡检会反过来把合并文件写坏。
             continue
         route = name[:-6]
         rows = read_lines(os.path.join(PREF_DIR, name))
-        if not rows:
-            continue
-        # 第一行是主域名（优选脚本按「主域名 + 附加域名」顺序写），
-        # 其余行原样保留：巡检只对主域名这部分负责换 IP。
-        domain, ips = rows[0]
-        extra = rows[1:]
-        if not domain or not ips:
-            continue
+        if rows:
+            # gt 路有专门的真翻自检，仍只巡检主域名；其余路逐行全量巡检
+            files[route] = (rows, rows[:1] if route == "gt" else rows)
 
-        keep, dropped = [], []
-        for ip in ips:
-            _ip, st, ms, _sp = probe(ip, domain, route)  # check() 返回 (ip, 状态, TTFB, 吞吐)
-            checked += 1
-            if st == "ok":
-                state.pop("%s|%s" % (route, ip), None)
-                keep.append(ip)          # 健康 IP 必须留在 hosts 里
+    items = [(route, dom, ip) for route, (_rows, scan) in files.items()
+             for dom, ips in scan for ip in ips]
+    results = _batch_health(items)
+    checked = len(items)
+    swapped = 0
+    changed = False
+    dropped_all = []
+
+    for route, (rows, scan) in files.items():
+        new_rows = []
+        for dom, ips in scan:
+            keep, dropped = [], []
+            for ip in ips:
+                ok, st, ms, sp = results.get((route, dom, ip),
+                                             (False, "fail", None, None))
+                key = "%s|%s|%s" % (route, dom, ip)
+                if ok:
+                    state.pop(key, None)
+                    state.pop("%s|%s" % (route, ip), None)
+                    keep.append(ip)
+                    continue
+                if st.startswith(HARD) and route != "gt":
+                    dropped.append((ip, st))
+                    continue
+                n = int((state.get(key) or {}).get("fails", 0)) + 1
+                state[key] = {"fails": n, "ts": int(time.time()), "reason": st}
+                if n >= MAX_STRIKES:
+                    dropped.append((ip, st + "x%d" % n))
+                else:
+                    keep.append(ip)
+            if not dropped:
+                new_rows.append((dom, keep))
                 continue
-            # 翻译路不做「一次异常就拉黑 6 小时」：翻译接口偶发 429 / 抖动很常见，
-            # 立即拉黑会把刚通过全接口强校验的 IP 连带从所有翻译域撤下（purge
-            # everywhere），正是「一时可用一时不可用」的放大器。改成累计 3 次再换。
-            if st.startswith(HARD) and route != "gt":
-                dropped.append((ip, st))
-                continue
-            # 超时/连不上：不是确定坏，连续 3 次才换，避免网络抖动误杀
-            key = "%s|%s" % (route, ip)
-            n = int((state.get(key) or {}).get("fails", 0)) + 1
-            state[key] = {"fails": n, "ts": int(time.time()), "reason": st}
-            if n >= MAX_STRIKES:
-                dropped.append((ip, st + "x%d" % n))
+            for ip, why in dropped:
+                subs.mark_bad(ip, why, route)
+                state.pop("%s|%s|%s" % (route, dom, ip), None)
+                log("%s 路：%s 的 %s 打不开（%s），已加入黑名单，%d 小时内不再用"
+                    % (route, dom, ip, why_label(why), subs.BAD_TTL_H))
+                subs.add_event("swap", route, ip, why, dom)
+            dropped_all += [ip for ip, _ in dropped]
+            need = max(0, len(ips) - len(keep))
+            added = []
+            if need:
+                cands = candidates(route, dom, set(ips) | {d[0] for d in dropped})[:12]
+                cr = _batch_health([(route, dom, c) for c in cands])
+                for c in cands:
+                    if len(added) >= need:
+                        break
+                    o, st2, _m, _s = cr.get((route, dom, c),
+                                            (False, "fail", None, None))
+                    if o:
+                        added.append(c)
+                        subs.cmd_bump(route, c, "ok")
+                    elif st2.startswith(HARD):
+                        subs.mark_bad(c, st2, route)
+            final = keep + added
+            new_rows.append((dom, final))
+            swapped += len(dropped)
+            changed = True
+            if added:
+                log("%s 路：%s 打不开，换成 %s（新 IP 已实测通过）"
+                    % (route, dom, ",".join(added)))
+            elif final:
+                log("%s 路：%s 撤下打不开的，保留 %d 个仍可用"
+                    % (route, dom, len(final)))
             else:
-                keep.append(ip)
-
-        if not dropped:
+                log("%s 路：%s 全打不开、也没有可换的，已撤下这一行"
+                    % (route, dom))
+        if route == "gt":
+            new_rows += rows[1:]
+        if not new_rows:
             continue
+        if new_rows != rows:
+            write_hosts(route, new_rows[0][0], new_rows[0][1], new_rows[1:])
+            changed = True
 
-        for ip, why in dropped:
-            subs.mark_bad(ip, why, route)
-            state.pop("%s|%s" % (route, ip), None)
-            log("%s 路：%s 打不开（%s），已加入黑名单，%d 小时内不再用"
-                % (route, ip, why_label(why), subs.BAD_TTL_H))
-        # 联动清理：刚拉黑的 IP 从所有路的 hosts 立即撤下（别处还 pin 着的话）
-        purge_ips_everywhere([ip for ip, _ in dropped])
-
-        # 剩下的继续留着；缺的从池子里补
-        need = max(0, len(ips) - len(keep))
-        added = []
-        if need:
-            for cand in candidates(route, domain, set(ips) | {d[0] for d in dropped}):
-                if len(added) >= need:
-                    break
-                _ip2, st2, _ms2, _sp2 = probe(cand, domain, route)
-                checked += 1
-                if st2 == "ok":
-                    added.append(cand)
-                    subs.cmd_bump(route, cand, "ok")
-                elif st2.startswith(HARD):
-                    subs.mark_bad(cand, st2, route)
-
-        final = keep + added
-        write_hosts(route, domain, final, extra)
-        changed = True
-        swapped += len(dropped)
-
-        for ip, why in dropped:
-            subs.add_event("swap", route, ip, why, " ".join(added) or "(撤下，回退上游)")
-        if added:
-            log("%s 路：%s 打不开，换成 %s（新 IP 已实测通过）"
-                % (route, ",".join(d[0] for d in dropped), ",".join(added)))
-        elif final:
-            log("%s 路：撤下打不开的 %s，保留 %d 个仍可用"
-                % (route, ",".join(d[0] for d in dropped), len(final)))
-        else:
-            log("%s 路：%s 全打不开、也没有可换的，已撤下这一路（该域名改走上游解析）"
-                % (route, ",".join(d[0] for d in dropped)))
-
+    if dropped_all:
+        purge_ips_everywhere(dropped_all)
     try:
         jsave(STATE_FILE, state)
     except Exception:
         pass
-
     if changed:
         reload_mosdns()
-    log("这轮巡检结束：检查 %d 个 IP，换掉 %d 个（其余都能正常打开）" % (checked, swapped))
+    log("这轮巡检结束：检查 %d 个 IP，换掉 %d 个（其余都能正常打开）"
+        % (checked, swapped))
     return swapped
 
 
