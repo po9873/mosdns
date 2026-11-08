@@ -17,6 +17,8 @@ import json
 import os
 import re
 import signal
+import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -371,6 +373,132 @@ def sanitize_hosts(rebuild=True):
     if removed and rebuild:
         _rebuild_all_hosts()
     return removed, details
+
+
+# ---- 固定 IP 缺口自愈 ------------------------------------------------------
+# sanitize_hosts 会剔掉「纯 IPv6 无 IPv4」的废行，但剔完若没人补，这个域名就
+# 裸奔到上游解析（本机实测 raw.githubusercontent.com 上游给的 185.199.x 只有
+# 2/5~3/5 能打开，而固定映射里的 151.101.x 是 3/3）。
+# 而 github 路一旦判定「在用 IP 全能用」就由粘滞守卫提前返回，不会再走
+# write_route 把 *.fastly / *.extra 的固定映射追加回 hosts——于是被剔掉的域名
+# 永远回不来。这里补上这一环：pin 文件里有、hosts 里没有的域名，按 pin 顺序
+# 逐个做真实 HTTPS 校验（证书 + 状态码都过），第一个通过的就写回该路 hosts。
+PIN_SUFFIXES = (".extra", ".fastly", ".api")
+PIN_HEAL_INTERVAL = 600          # 秒；正常没有缺口时几乎不耗时间
+PIN_HEAL_MAX_DOMAINS = 4         # 单轮最多补几个域名，避免一次探太久
+PIN_HEAL_MAX_IPS = 6             # 每个域名最多试几个候选
+_PIN_HEAL_STAMP = os.path.join(DATA_DIR, "pin_gap.stamp")
+
+
+def _pin_spec(domain):
+    """这个固定 IP 域名该请求什么路径、认哪些状态码。"""
+    try:
+        import fastly_pin_refresh as fpr
+        spec = fpr.DOMAIN_SPECS.get(domain)
+        if spec:
+            return spec[0], set(spec[1])
+    except Exception:
+        pass
+    path, _expect = spec_for(domain)
+    return path or "/", {200}
+
+
+def _probe_pin_ip(ip, domain, path, codes, timeout=6.0):
+    """真连一次：TLS 校验证书（必须覆盖该域名）+ 看状态码是否在允许集合里。"""
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((ip, 443), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=domain) as ss:
+                req = ("GET %s HTTP/1.1\r\nHost: %s\r\n"
+                       "User-Agent: mosdns-watchdog\r\nConnection: close\r\n\r\n"
+                       % (path, domain))
+                ss.sendall(req.encode())
+                buf = b""
+                while b"\r\n" not in buf and len(buf) < 2048:
+                    chunk = ss.recv(1024)
+                    if not chunk:
+                        break
+                    buf += chunk
+        line = buf.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].startswith("HTTP/"):
+            return int(parts[1]) in codes
+    except Exception:
+        return False
+    return False
+
+
+def heal_pin_gaps(force=False):
+    """把「pin 里有、hosts 里没有」的域名用已验证的固定 IP 补回去。
+
+    返回 (补回个数, 明细)。有改动时已重建 all.hosts 并重载 mosdns。
+    """
+    now = time.time()
+    if not force:
+        try:
+            last = float(open(_PIN_HEAL_STAMP, encoding="utf-8").read().strip() or 0)
+        except Exception:
+            last = 0.0
+        if now - last < PIN_HEAL_INTERVAL:
+            return 0, []
+    try:
+        names = sorted(os.listdir(PREF_DIR))
+    except Exception:
+        return 0, []
+
+    have = set()
+    for name in names:
+        if name.endswith(".hosts"):
+            for dom, _ips in read_lines(os.path.join(PREF_DIR, name)):
+                have.add(dom)
+
+    healed = []
+    for name in names:
+        if not name.startswith(".") or not any(name.endswith(s) for s in PIN_SUFFIXES):
+            continue
+        route = name[1:].split(".")[0]
+        if not route or route == "all":
+            continue
+        for dom, ips in read_lines(os.path.join(PREF_DIR, name)):
+            if len(healed) >= PIN_HEAL_MAX_DOMAINS:
+                break
+            if dom in have:
+                continue
+            v4 = [x for x in ips if is_ip(x) and ":" not in x]
+            if not v4:
+                continue
+            path, codes = _pin_spec(dom)
+            for ip in v4[:PIN_HEAL_MAX_IPS]:
+                if _probe_pin_ip(ip, dom, path, codes):
+                    healed.append((route, dom, ip))
+                    have.add(dom)
+                    break
+
+    for route, dom, ip in healed:
+        path = os.path.join(PREF_DIR, "%s.hosts" % route)
+        try:
+            rows = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        except Exception:
+            rows = []
+        rows = [ln for ln in rows if (ln.split()[:1] or [""])[0] != dom]
+        rows.append("%s %s" % (dom, ip))
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(rows) + "\n")
+            os.replace(tmp, path)
+        except Exception:
+            continue
+
+    if healed:
+        _rebuild_all_hosts()
+        reload_mosdns()
+    try:
+        with open(_PIN_HEAL_STAMP, "w", encoding="utf-8") as f:
+            f.write(str(int(now)))
+    except Exception:
+        pass
+    return len(healed), ["%s: %s <- %s" % (r, d, i) for r, d, i in healed]
 
 
 def _rebuild_all_hosts():
@@ -1245,6 +1373,16 @@ def run_once():
             reload_mosdns()
     except Exception as e:
         log("hosts 自愈异常：%s" % e)
+    # 剔完还得补：pin 文件里有、hosts 里没有的域名，用已验证的固定 IP 写回，
+    # 否则它就一直走上游解析（而固定 IP 才是真正稳定的那条）。
+    try:
+        n_fix, fix_det = heal_pin_gaps()
+        if n_fix:
+            for d in fix_det[:PIN_HEAL_MAX_DOMAINS]:
+                log("固定 IP 自愈：补回 %s" % d)
+            log("固定 IP 自愈：本轮补回 %d 个域名（已重载 mosdns）" % n_fix)
+    except Exception as e:
+        log("固定 IP 自愈异常：%s" % e)
     gt_guard()
     if os.path.isdir(LOCK_DIR):
         # 以前一遇到优选锁就整轮跳过；优化前优选一轮要 5 分钟，守护会连跳
