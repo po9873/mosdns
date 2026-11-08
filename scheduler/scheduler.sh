@@ -16,7 +16,7 @@ IKUAI_SYNC="/app/scheduler/ikuai_sync.py"
 
 # 把 pin 的 IP 同步进爱快「DNS加速」规则（未配置 IKUAI_TOKEN 时静默跳过）
 sync_ikuai() {
-  if [ -n "$IKUAI_TOKEN" ]; then
+  if [ -n "${IKUAI_TOKEN:-}" ]; then
     python3 "$IKUAI_SYNC" || true
   fi
 }

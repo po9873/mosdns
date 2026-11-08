@@ -47,6 +47,14 @@ fastly_f="$PREF_DIR/.github.fastly"
 # set -u 下引用未定义变量会直接炸掉脚本（之前 PREF_LOG 就这样把两个刷新全弄失败）
 pref_log="${PREF_LOG:-$DATA_DIR/pref.log}"
 
+# 粘滞守卫：整路先看在用 IP，能用就沿用、有坏的由 101 精确补位；
+# 不再每轮白跑 api/fastly 两个全量刷新（实测单这一项要 60 秒跨境探测）。
+if [ "${PREF_RESELECT:-0}" != "1" ]; then
+  python3 "$SELF_DIR/lib/sticky_guard.py" github 2>>"$pref_log" >/dev/null
+  log "github: 粘滞守卫已处理（全能用就沿用，有坏的由 101 精确补位），跳过 api/fastly 全量刷新"
+  exit 0
+fi
+
 if python3 /app/scheduler/lib/api_pin_refresh.py "$api_f" 2>>"$pref_log" \
    && [ -s "$api_f" ]; then
   :

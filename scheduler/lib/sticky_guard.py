@@ -15,6 +15,7 @@
   1 = 有打不开的 IP（已由 101 精确补位，调用方同样不做全量重选）
   2 = 参数错误
 """
+import json
 import os
 import sys
 import time
@@ -26,6 +27,8 @@ DATA_DIR = os.environ.get("PREF_DATA_DIR", "/data")
 PREF_DIR = os.path.join(DATA_DIR, "prefs")
 HEAL_TS = os.path.join(DATA_DIR, ".sticky_heal_ts")
 HEAL_GAP = 60
+SNAP_FILE = os.path.join(DATA_DIR, "health_snapshot.json")
+SNAP_TTL = 90
 
 
 def read_rows(route):
@@ -40,6 +43,24 @@ def read_rows(route):
     except Exception:
         pass
     return out
+
+
+def cached(items):
+    """复用常驻守护最近一轮的 101 实测结果，定时优选不再重复探测同一批 IP。"""
+    try:
+        d = json.load(open(SNAP_FILE, encoding="utf-8"))
+        if time.time() - int(d.get("ts", 0)) > SNAP_TTL:
+            return None
+        raw = d.get("results") or {}
+        out = {}
+        for k in items:
+            v = raw.get("%s|%s|%s" % k)
+            if not isinstance(v, list) or len(v) < 4:
+                return None
+            out[k] = tuple(v[:4])
+        return out
+    except Exception:
+        return None
 
 
 def check_one(dom, ip, route="auto"):
@@ -93,7 +114,7 @@ def main():
         print("STICKY_BAD no-active-ip", end="")
         return 1
 
-    res = wd._batch_health(items)
+    res = cached(items) or wd._batch_health(items)
     bad = []
     for key in items:
         ok, st, _ms, _sp = res.get(key, (False, "fail", None, None))

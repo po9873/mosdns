@@ -33,6 +33,7 @@ PREF_DIR = os.path.join(DATA_DIR, "prefs")
 PID_FILE = os.path.join(DATA_DIR, "mosdns.pid")
 LOCK_DIR = os.path.join(DATA_DIR, ".pref.lock")
 STATE_FILE = os.path.join(DATA_DIR, "watchdog_state.json")
+SNAP_FILE = os.path.join(DATA_DIR, "health_snapshot.json")
 LOG_FILE = os.path.join(DATA_DIR, "pref.log")
 SEED_DIR = "/app/config/seeds"
 INTERVAL = int(os.environ.get("PREF_WATCHDOG_SEC", "180"))
@@ -442,7 +443,7 @@ def gt_guard():
 # 「面板全绿、浏览器打不开」。现在所有行、所有在用 IP 都进巡检。
 SLOW_TTFB_MS = float(os.environ.get("PREF_SLOW_TTFB_MS", "3500"))
 SLOW_SPEED_KBPS = float(os.environ.get("PREF_SLOW_SPEED_KBPS", "20"))
-WD_CONC = int(os.environ.get("PREF_WD_CONC", "16"))
+WD_CONC = int(os.environ.get("PREF_WD_CONC", "8"))
 from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: E402
 
 
@@ -522,6 +523,14 @@ def heal_once():
     items = [(route, dom, ip) for route, (_rows, scan) in files.items()
              for dom, ips in scan for ip in ips]
     results = _batch_health(items)
+    # 把这一轮 101 实测结果留档：定时优选粘滞守卫在 90 秒内直接复用，
+    # 不再把同一批在用 IP 重复探一遍（省跨境连接，也不挤占其它设备带宽）。
+    try:
+        jsave(SNAP_FILE, {"ts": int(time.time()),
+                          "results": {"%s|%s|%s" % k: list(v)
+                                      for k, v in results.items()}})
+    except Exception:
+        pass
     checked = len(items)
     swapped = 0
     changed = False
