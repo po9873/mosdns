@@ -82,6 +82,16 @@ GT_MAIN_DOMAINS = ("translate.google.com", "translate.googleapis.com")
 GT_STATIC_DEPS = ("translate.gstatic.com", "apis.google.com",
                   "csp.withgoogle.com", "fonts.googleapis.com")
 
+# 定时优选每轮都「沿用不换」时，会在 write_route 之前就退出，于是
+# PREF_EXTRA_DOMAINS / 自动发现里那些漏网域名永远补不进 hosts。实测：
+# www.gstatic.com（Chrome 整页翻译的 CSS 域）就是这样漏掉的——没钉住就走
+# 上游真实解析，三层 DNS 各缓存不同答案，101 上那些真实 IP 还连不上。
+# 由守护每轮用「本路当前在用的 IP」自己实测补上，不改任何在用 IP。
+# 值 = (域名, 真实资源路径)：静态资源域根路径 404/204 都属正常，必须打真实路径。
+NEEDED_DEPS = {
+    "google": (("www.gstatic.com", "/generate_204"),),
+}
+
 # hosts 行的合法性判定：域名 + 后面全是 IP。写文件前必须过这一关，
 # 否则一句日志、一段残留文本就能把 all.hosts 写坏，mosdns 直接起不来。
 RE_DOM = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z]{2,}$", re.I)
@@ -943,6 +953,9 @@ def _heal_once_impl(only_route=None):
             write_hosts(route, new_rows[0][0], new_rows[0][1], new_rows[1:])
             changed = True
 
+    # 粘滞守卫「沿用不换」不会跑 write_route，漏网依赖域只能由守护补。
+    if fill_missing_deps(only_route):
+        changed = True
     if dropped_all:
         purge_ips_everywhere(dropped_all)
     static_changed, static_swapped = heal_static(state, static_rows, results)
@@ -958,6 +971,54 @@ def _heal_once_impl(only_route=None):
     log("这轮巡检结束：检查 %d 个 IP（含静态钉子 %d 个），换掉 %d 个（其余都能正常打开）"
         % (checked + len(static_items), len(static_items), swapped))
     return swapped
+
+
+def fill_missing_deps(only_route=None):
+    """漏网依赖域由 101 自己发现并实测补上（沿用现有 IP，能用就不换）。
+
+    写 hosts 的 write_route 里本来就会补 PREF_EXTRA_DOMAINS 和自动发现的
+    域名，但粘滞守卫「全健康沿用」会在写之前退出，那些逻辑一次都不跑。
+    这里不依赖定时优选：只取本路当前在用的 IP，用该域真实资源路径逐个
+    实测（generate_204 而不是根路径），通过才追加一行。
+    """
+    changed = False
+    for route, specs in NEEDED_DEPS.items():
+        if only_route and only_route != route:
+            continue
+        path = os.path.join(PREF_DIR, "%s.hosts" % route)
+        rows = read_lines(path)
+        if not rows:
+            continue
+        have = {d for d, _ in rows}
+        todo = [(d, p) for d, p in specs if d not in have]
+        if not todo:
+            continue
+        ips = rows[0][1][:3]
+        extra = list(rows[1:])
+        touched = False
+        for dom, probe_path in todo:
+            good = []
+            for ip in ips:
+                try:
+                    r = tuple(https_probe.check(ip, dom, PORT, TIMEOUT, 1,
+                                                probe_path, None,
+                                                strict_redirect=False))
+                    if len(r) > 1 and r[1] == "ok":
+                        good.append(ip)
+                except Exception:
+                    pass
+            if not good:
+                log("%s 路：依赖域 %s 实测没 IP 能服务，101 下轮继续自己补"
+                    % (route, dom))
+                continue
+            extra.append((dom, good))
+            log("%s 路：漏网依赖域 %s 由 101 实测补上（沿用 %s，未换任何在用 IP）"
+                % (route, dom, ",".join(good)))
+            touched = True
+        if touched:
+            write_hosts(route, rows[0][0], rows[0][1], extra)
+            changed = True
+    return changed
 
 
 def heal_once(only_route=None):
