@@ -307,6 +307,72 @@ def write_hosts(route, domain, ips, extra=None):
     _rebuild_all_hosts()
 
 
+def _has_ipv4(ips):
+    """这一组 IP 里是否至少有一个 IPv4（A 记录）。"""
+    for x in ips:
+        try:
+            if ipaddress.ip_address(x).version == 4:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+def sanitize_hosts(rebuild=True):
+    """剔除「纯 IPv6、无 IPv4」的 hosts 行——这是结构性废行，101 每轮自动清。
+
+    背景：pref hosts 只写 A 记录（config 里 github_v4only 更把 AAAA 判 NODATA）。
+    一旦某域名在 hosts 里只剩 IPv6，mosdns 的 hosts 插件对 A 查询会返回 NODATA，
+    而 AAAA 又被 github_v4only 拒成空——该域名彻底解析不出来；更糟的是
+    pref_hosts 排在 cache/上游之前，has_resp 成立直接 accept，永远走不到
+    forward_remote 去拿正确的 IPv4。真实案例：raw.githubusercontent.com 被写成
+    2606:50c0:8000::154，导致整站打不开。
+
+    只删这类废行（本身有任何 IPv4 的行原样保留字段与顺序），是幂等且安全的。
+    返回 (被剔除行数, 明细列表)；有改动时 rebuild 会同步重建 all.hosts，
+    调用方负责重载 mosdns。
+    """
+    removed = 0
+    details = []
+    try:
+        names = [n for n in os.listdir(PREF_DIR) if n.endswith(".hosts")]
+    except Exception:
+        return 0, []
+    for name in names:
+        path = os.path.join(PREF_DIR, name)
+        try:
+            raw = open(path, encoding="utf-8", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        keep, dropped = [], []
+        for ln in raw:
+            p = ln.split()
+            if len(p) < 2 or not RE_DOM.match(p[0]):
+                continue
+            ips = []
+            for x in p[1:]:
+                try:
+                    ips.append(str(ipaddress.ip_address(x)))
+                except ValueError:
+                    pass
+            if not ips:
+                continue
+            if not _has_ipv4(ips):
+                dropped.append(ln.strip())
+                continue
+            keep.append(" ".join([p[0]] + ips))
+        if dropped:
+            removed += len(dropped)
+            details.extend("%s: %s" % (name, d) for d in dropped)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(keep) + ("\n" if keep else ""))
+            os.replace(tmp, path)
+    if removed and rebuild:
+        _rebuild_all_hosts()
+    return removed, details
+
+
 def _rebuild_all_hosts():
     """把各路 *.hosts 合并成 mosdns 实际读取的 all.hosts"""
     out = []
@@ -316,7 +382,9 @@ def _rebuild_all_hosts():
                 continue
             for ln in open(os.path.join(PREF_DIR, name), encoding="utf-8", errors="replace"):
                 p = ln.split()
-                if len(p) >= 2 and RE_DOM.match(p[0]) and all(is_ip(x) for x in p[1:]):
+                # 必须含至少一个 IPv4：纯 IPv6 行会让 A 查询 NODATA、域名彻底解析失败。
+                if (len(p) >= 2 and RE_DOM.match(p[0])
+                        and all(is_ip(x) for x in p[1:]) and _has_ipv4(p[1:])):
                     out.append(ln.strip())
     except Exception:
         pass
@@ -1164,7 +1232,19 @@ def heal_once(only_route=None):
 
 
 def run_once():
-    """常驻守护入口：真翻自检 → 等优选锁释放 → 全量巡检补位。"""
+    """常驻守护入口：先清废行 → 真翻自检 → 等优选锁释放 → 全量巡检补位。"""
+    # hosts 废行自愈优先于一切：纯 IPv6 的行会把某域名钉成 NODATA，
+    # 且因 pref_hosts 早于 cache/上游，这类域名永远解析不出来。放在最前面，
+    # 保证即便本轮因优选锁/真翻自检提前 return，废行也照样被清掉。
+    try:
+        n_rm, det = sanitize_hosts()
+        if n_rm:
+            for d in det[:10]:
+                log("hosts 自愈：剔除纯 IPv6 废行 %s" % d)
+            log("hosts 自愈：本轮剔除 %d 条纯 IPv6 废行（这些域名回落上游解析 IPv4）" % n_rm)
+            reload_mosdns()
+    except Exception as e:
+        log("hosts 自愈异常：%s" % e)
     gt_guard()
     if os.path.isdir(LOCK_DIR):
         # 以前一遇到优选锁就整轮跳过；优化前优选一轮要 5 分钟，守护会连跳

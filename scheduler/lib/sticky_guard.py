@@ -38,8 +38,15 @@ def read_rows(route):
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 parts = line.split()
-                if len(parts) >= 2 and not parts[0].startswith("#"):
-                    out.append((parts[0], parts[1:]))
+                if len(parts) < 2 or parts[0].startswith("#"):
+                    continue
+                ips = parts[1:]
+                # 纯 IPv6 行不算「在用 IP」：它会让 A 查询 NODATA、域名解析不出来。
+                # 若这里还把它当成在用的好 IP 沿用，粘滞守卫会一直「保住」这条废行，
+                # 导致 merge_hosts 永不重跑、坏记录永远留在 all.hosts 里。
+                if not any(":" not in x for x in ips):
+                    continue
+                out.append((parts[0], ips))
     except Exception:
         pass
     return out

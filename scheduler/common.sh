@@ -472,6 +472,11 @@ for ln in open(src, encoding="utf-8", errors="replace"):
         ips.append(k)
     if bad or not ips:
         continue
+    # 纯 IPv6 行必须丢掉：pref hosts 只写 A 记录，AA AA 又被 github_v4only 判 NODATA。
+    # 若让这种行进 all.hosts，mosdns 对 A 查询会返回 NODATA 并直接 accept，
+    # 该域名就彻底解析不出来（raw.githubusercontent.com 曾因此整站打不开）。
+    if not any(":" not in k for k in ips):
+        continue
     cur = best.get(dom)
     if cur is None or len(ips) > len(cur):
         best[dom] = ips
