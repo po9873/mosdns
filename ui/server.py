@@ -2209,6 +2209,18 @@ def read_versions():
     # 优选实际都走 common.sh + probe.py 的内置探测，
     # 先把这条写清楚，免得以为跑了一堆外部工具。
     items.append({"label": "优选探测", "ver": "内置脚本", "note": "各路共用，101 真实 HTTPS 复核 + 粘滞守卫"})
+    # 静态钉子（Chrome 商店后端 / Windy / 翻译依赖域）也已纳入 101 逐行巡检：
+    # 显示本轮快照里实际检查了几个，别再让人以为 static.hosts 那批没人管。
+    try:
+        with open("/data/health_snapshot.json", encoding="utf-8") as f:
+            snap = json.load(f)
+        n_static = sum(1 for k in (snap.get("results") or {})
+                       if str(k).startswith("static|"))
+        if n_static:
+            items.append({"label": "静态钉子巡检", "ver": "%d 个在用 IP" % n_static,
+                          "note": "101 逐行实测，能用不换、坏了才补位"})
+    except Exception:
+        pass
     if cft_v:
         # 同一个工具按各路自己的域名实测：cf / github / ghcr / gt / google / tmdb / imdb。
         # 显示 101 里真实测过几路 + cf 路最近一次实测结果。

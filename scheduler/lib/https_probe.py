@@ -201,8 +201,15 @@ def _attempt(ip, domain, port, timeout, path="/", expect=None, strict_redirect=T
         # 正文都只有 "OK" 几个字节（浏览器整页就是一个白底 OK）。这类假节点以前
         # 被判 ok，于是面板全绿、用户时好时坏。只精确匹配极短的纯 OK 文本：
         # ghcr 的 401 空 body、Cloudflare 的 178B 首页等正常小响应都不受影响。
-        if got <= 8 and bytes(body).strip().lower() == b"ok":
-            return "wrong", ttfb, None, False
+        # 只精确匹配「HTTP 200 + 1~8 字节、不含任何 HTML 标记的纯文本」：
+        # OK / ok / error / null / denied 这类假节点一律判死，覆盖没有专属
+        # 正文校验的 cf / tmdb / imdb / auto 四路（以前只认字面 "OK" 一种）。
+        # 不受影响：ghcr 的 401 空 body、imdb 的 202 空 body（got=0）、
+        # 301/302/404 重定向与错误页、Cloudflare 的 178B 首页（含 '<'）。
+        if status == 200 and 0 < got <= 8:
+            head = bytes(body).strip()
+            if head and b"<" not in head and all(32 <= c < 127 for c in head):
+                return "wrong", ttfb, None, False
 
         speed = None
         est = False

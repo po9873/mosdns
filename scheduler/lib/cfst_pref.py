@@ -250,6 +250,29 @@ def run(route):
         ranked, cost2, mode = measure(route, cfg, ips, False)
         cost = round(cost + cost2, 1)
     ranked = ranked[:int(os.environ.get("CFST_TOP", cfg["top"]))]
+    # 工具对某些路的 HTTPing 判据太严（imdb 202 空响应、TMDB 403 挑战页），
+    # 排序结果可能只剩 2 个，坏一个就没得补。不足 6 个时从本路候选池再取
+    # 一批，用 101 同一套严格判据实测，通过的追加到后面；工具排出来的仍
+    # 排在最前，兜底只补弹药，不改变「由工具选 IP」。
+    if len(ranked) < 6:
+        try:
+            import watchdog as wd
+            try:
+                bad = subs._bad_set()
+            except Exception:
+                bad = set()
+            for ip in subs.cmd_pool(route, 40, smart=True):
+                if len(ranked) >= 12:
+                    break
+                if ip in ranked or ip in bad or "." not in ip:
+                    continue
+                try:
+                    if wd.health(ip, cfg["dom"], route)[0]:
+                        ranked.append(ip)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     if not ranked:
         return {"ok": False, "route": route, "why": "cfst 本轮没测出可用 IP",
                 "cost": cost, "input": len(ips)}

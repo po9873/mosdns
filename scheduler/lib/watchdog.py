@@ -64,6 +64,14 @@ def runtime_cfg():
 
 HARD = ("cf", "cert", "wrong")   # 状态名以这些开头 = 明确不可用
 
+# static.hosts 在 mosdns 的 hosts 插件里排在 all.hosts 前面、优先命中，
+# 以前完全不在守护视野里：那里的 IP 坏了 101 发现不了。现在逐行纳入巡检。
+STATIC_FILE = os.path.join(DATA_DIR, "static.hosts")
+STATIC_STRIKES = int(os.environ.get("PREF_STATIC_STRIKES", "3"))
+GT_MAIN_DOMAINS = ("translate.google.com", "translate.googleapis.com")
+GT_STATIC_DEPS = ("translate.gstatic.com", "apis.google.com",
+                  "csp.withgoogle.com", "fonts.googleapis.com")
+
 # hosts 行的合法性判定：域名 + 后面全是 IP。写文件前必须过这一关，
 # 否则一句日志、一段残留文本就能把 all.hosts 写坏，mosdns 直接起不来。
 RE_DOM = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]*[a-z0-9])?\.)+[a-z]{2,}$", re.I)
@@ -419,6 +427,140 @@ def probe(ip, domain, route=None):
     return r[0], r[1], r[2], r[3]
 
 
+# ---- 静态钉子（/data/static.hosts）纳入 101 巡检 --------------------------
+# 这个文件在 mosdns 的 hosts 插件里排在 all.hosts 之前、优先命中，里面的
+# IP 坏了以前守护看不见（Chrome 商店后端 / Windy / 翻译依赖域都钉在这里）。
+def static_route(dom):
+    """静态钉子坏了去哪一路的候选池找替补。"""
+    if dom in GT_STATIC_DEPS or dom.startswith("translate"):
+        return "gt"
+    if "google" in dom or "gstatic" in dom or "withgoogle" in dom:
+        return "google"
+    if dom == "windy.com" or dom.endswith(".windy.com"):
+        return "windy"          # 没有候选池：只监控，不删手工钉子
+    return "auto"
+
+
+def _private(ip):
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return True
+
+
+def static_targets():
+    """读静态钉子，返回 ([(域名, [IP...])...], [(route, 域名, IP)...])。
+
+    内网地址（registry.linkease.net 192.168.6.34）不探也不换；注释行原样
+    留在文件里。巡检时按该行自己的域名做 SNI，不套任何一路的专属判据。
+    """
+    rows, items = [], []
+    try:
+        raw = open(STATIC_FILE, encoding="utf-8", errors="replace").read().splitlines()
+    except Exception:
+        return rows, items
+    for ln in raw:
+        p = ln.split("#", 1)[0].split()
+        if len(p) < 2 or not RE_DOM.match(p[0]):
+            continue
+        ips = [x for x in p[1:] if is_ip(x) and not _private(x)]
+        if not ips:
+            continue
+        rows.append((p[0], ips))
+        items += [("static", p[0], ip) for ip in ips]
+    return rows, items
+
+
+def _write_static(new_ips):
+    """就地替换 IP 列表，注释与其它行原样保留；不建备份、不留中间文件。"""
+    try:
+        raw = open(STATIC_FILE, encoding="utf-8", errors="replace").read().splitlines()
+    except Exception:
+        return False
+    out, hit = [], False
+    for ln in raw:
+        p = ln.split()
+        if len(p) >= 2 and p[0] in new_ips and new_ips[p[0]]:
+            nl = " ".join([p[0]] + new_ips[p[0]])
+            out.append(nl)
+            hit = hit or nl != ln.strip()
+        else:
+            out.append(ln)
+    if not hit:
+        return False
+    tmp = STATIC_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    os.replace(tmp, STATIC_FILE)
+    return True
+
+
+def heal_static(state, rows, results):
+    """静态钉子：能用就一字不改；连续打不开才撤下并 101 实测补位。
+
+    刻意不调 subs.mark_bad()：翻译依赖域和 gt 主用组共用同一批 IP，一次
+    偶发抖动不该把整组翻译节点拉进 6 小时黑名单。没有可用替补时原行保留
+    不动（不删手工钉子），只记日志 —— 避免把 Windy 这类没有候选池的静态
+    映射越修越空、把用户实测可达的入口弄丢。
+    """
+    if not rows:
+        return False, 0
+    try:
+        bad = subs._bad_set()
+    except Exception:
+        bad = set()
+    new_ips, swapped = {}, 0
+    for dom, ips in rows:
+        keep, dropped = [], []
+        for ip in ips:
+            ok, st, _ms, _sp = results.get(("static", dom, ip),
+                                           (False, "fail", None, None))
+            key = "static|%s|%s" % (dom, ip)
+            if ok and ip not in bad:
+                state.pop(key, None)
+                keep.append(ip)
+                continue
+            why = "blacklist" if ip in bad else st
+            n = int((state.get(key) or {}).get("fails", 0)) + 1
+            state[key] = {"fails": n, "ts": int(time.time()), "reason": why}
+            if n >= STATIC_STRIKES:
+                dropped.append((ip, why))
+            else:
+                keep.append(ip)
+        if not dropped:
+            continue
+        log("静态钉子 %s：%s 连续 %d 轮打不开（%s），开始 101 实测补位"
+            % (dom, ",".join(d[0] for d in dropped), STATIC_STRIKES,
+               why_label(dropped[0][1])))
+        subs.add_event("swap", "static", dropped[0][0], str(dropped[0][1]), dom)
+        need = max(0, len(ips) - len(keep))
+        added = []
+        if need:
+            try:
+                cands = candidates(static_route(dom), dom,
+                                   set(ips) | {d[0] for d in dropped})[:12]
+            except Exception:
+                cands = []
+            cr = _batch_health([("static", dom, c) for c in cands])
+            for c in cands:
+                if len(added) >= need:
+                    break
+                if cr.get(("static", dom, c), (False,))[0] and c not in bad:
+                    added.append(c)
+        final = keep + added
+        if not final:
+            log("静态钉子 %s：没有 101 实测通过的替补，原行保留不动" % dom)
+            continue
+        new_ips[dom] = final
+        swapped += len(dropped)
+        log("静态钉子 %s：撤下 %s，%s" % (
+            dom, ",".join(d[0] for d in dropped),
+            ("换成 " + ",".join(added)) if added else ("保留 %d 个可用" % len(keep))))
+    if not new_ips:
+        return False, 0
+    return _write_static(new_ips), swapped
+
+
 def gt_guard():
     """用浏览器真实请求验证「现在到底能不能翻」。
 
@@ -482,8 +624,16 @@ def health(ip, domain, route):
     https_probe 对 <4KB 的响应不算速度、<32KB 的样本标 est=True（不可信），
     所以只拿可信样本判「慢到打不开」，不会误杀 API / 401 这类小页面。
     """
-    path, expect = spec_for(domain, route)
-    probe_domain = "translate.googleapis.com" if route == "gt" else domain
+    # gt 路现在逐行巡检：只有主域（translate.google.com / translate.googleapis.com）
+    # 打真翻接口，这是「真能翻」的唯一证明；其余附加域（googleusercontent /
+    # clients5 / translate-pa…）用各自 SNI + 宽松判据。不能拿真翻接口去问静态
+    # 资源域（会 404 判死），也不能套 "translate" / <title>Google 这类网页
+    # 特征 —— 实测这些域根路径本来就是 404 纯错误页，套上会把在用 IP 全误杀。
+    if route == "gt" and domain not in GT_MAIN_DOMAINS:
+        path, expect, probe_domain = "/", None, domain
+    else:
+        path, expect = spec_for(domain, route)
+        probe_domain = "translate.googleapis.com" if route == "gt" else domain
     try:
         r = tuple(https_probe.check(ip, probe_domain, PORT, TIMEOUT, 1, path, expect,
                                     strict_redirect=bool(path and path != "/")))
@@ -546,12 +696,15 @@ def heal_once():
         route = name[:-6]
         rows = read_lines(os.path.join(PREF_DIR, name))
         if rows:
-            # gt 路有专门的真翻自检，仍只巡检主域名；其余路逐行全量巡检
-            files[route] = (rows, rows[:1] if route == "gt" else rows)
+            # 所有路（含 gt）逐行全量巡检；gt 主域由 health() 内部改打真翻接口，
+            # 附加域用各自 SNI，避免「只查第一行」漏掉整批在用 IP。
+            files[route] = (rows, rows)
 
     items = [(route, dom, ip) for route, (_rows, scan) in files.items()
              for dom, ips in scan for ip in ips]
-    results = _batch_health(items)
+    # 静态钉子一起并发巡检：它在 hosts 插件里优先于 all.hosts，必须同样受守护。
+    static_rows, static_items = static_targets()
+    results = _batch_health(items + static_items)
     # 把这一轮 101 实测结果留档：定时优选粘滞守卫在 90 秒内直接复用，
     # 不再把同一批在用 IP 重复探一遍（省跨境连接，也不挤占其它设备带宽）。
     try:
@@ -625,8 +778,6 @@ def heal_once():
             else:
                 log("%s 路：%s 全打不开、也没有可换的，已撤下这一行"
                     % (route, dom))
-        if route == "gt":
-            new_rows += rows[1:]
         if not new_rows:
             continue
         if new_rows != rows:
@@ -635,14 +786,18 @@ def heal_once():
 
     if dropped_all:
         purge_ips_everywhere(dropped_all)
+    static_changed, static_swapped = heal_static(state, static_rows, results)
+    if static_changed:
+        changed = True
+        swapped += static_swapped
     try:
         jsave(STATE_FILE, state)
     except Exception:
         pass
     if changed:
         reload_mosdns()
-    log("这轮巡检结束：检查 %d 个 IP，换掉 %d 个（其余都能正常打开）"
-        % (checked, swapped))
+    log("这轮巡检结束：检查 %d 个 IP（含静态钉子 %d 个），换掉 %d 个（其余都能正常打开）"
+        % (checked + len(static_items), len(static_items), swapped))
     return swapped
 
 
