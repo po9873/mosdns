@@ -505,26 +505,29 @@ def heal_static(state, rows, results):
     """
     if not rows:
         return False, 0
-    try:
-        bad = subs._bad_set()
-    except Exception:
-        bad = set()
     new_ips, swapped = {}, 0
     for dom, ips in rows:
+        # 翻译依赖域由 gt 路真翻自检 + gt_pin_refresh 统一同步：主域和依赖域
+        # 必须永远同组。这里只把 101 实测结果留在快照里供查看，不单独改写，
+        # 否则一次偶发抖动就能把整组翻译节点拆开，跟 gt 路自愈互相打架。
+        if dom in GT_STATIC_DEPS:
+            continue
         keep, dropped = [], []
         for ip in ips:
             ok, st, _ms, _sp = results.get(("static", dom, ip),
                                            (False, "fail", None, None))
             key = "static|%s|%s" % (dom, ip)
-            if ok and ip not in bad:
+            if ok:
                 state.pop(key, None)
                 keep.append(ip)
                 continue
-            why = "blacklist" if ip in bad else st
+            # 只按「这一行自己的域名 + 这个 IP」的真实请求判定。刻意不看
+            # 全局黑名单：那是「对某个域名不服务」的结论，换个域名可能完全
+            # 正常（翻译主组就常被别路标过），拿它撤静态行会误伤。
             n = int((state.get(key) or {}).get("fails", 0)) + 1
-            state[key] = {"fails": n, "ts": int(time.time()), "reason": why}
+            state[key] = {"fails": n, "ts": int(time.time()), "reason": st}
             if n >= STATIC_STRIKES:
-                dropped.append((ip, why))
+                dropped.append((ip, st))
             else:
                 keep.append(ip)
         if not dropped:
@@ -545,7 +548,7 @@ def heal_static(state, rows, results):
             for c in cands:
                 if len(added) >= need:
                     break
-                if cr.get(("static", dom, c), (False,))[0] and c not in bad:
+                if cr.get(("static", dom, c), (False,))[0]:
                     added.append(c)
         final = keep + added
         if not final:
