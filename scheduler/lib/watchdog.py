@@ -353,11 +353,29 @@ def seed_ips(route):
 
 
 def candidates(route, domain, skip):
-    """补位候选：订阅池 + 种子，去掉已在用的和已拉黑的。"""
+    """补位候选：cfst 实测排序 > 订阅池 > 种子，去掉已在用的和已拉黑的。"""
     bad = subs._bad_set()
     out = []
+    # CloudflareSpeedTest 在 101 容器内实测排序出来的 cf 候选优先补位：
+    # 工具真的决定「坏了换哪个 IP」，但仍要过下面同一套 101 严格复核，
+    # 全健康时粘滞守卫根本不会走到这里，不会因为「有更快的」就换。
+    if route == "cf":
+        try:
+            with open(os.path.join(DATA_DIR, "cfst_seed.txt"), encoding="utf-8") as f:
+                for line in f:
+                    ip = line.split("#", 1)[0].strip()
+                    parts = ip.split(".")
+                    # 种子首行是目标域名 cloudflare.com，别把它当 IP 收进去
+                    if len(parts) != 4 or not all(p.isdigit() for p in parts):
+                        continue
+                    if ip not in skip and ip not in bad and ip not in out:
+                        out.append(ip)
+                        if len(out) >= 6:
+                            break
+        except Exception:
+            pass
     for ip in subs.cmd_pool(route, 12, smart=True):
-        if ip not in skip and ip not in bad:
+        if ip not in skip and ip not in bad and ip not in out:
             out.append(ip)
     for ip in seed_ips(route):
         if ip not in skip and ip not in bad and ip not in out:

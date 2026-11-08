@@ -2208,9 +2208,23 @@ def read_versions():
               "note": "官方源码编译，DNS 引擎与分流"}]
     # 优选实际都走 common.sh + probe.py 的内置探测，
     # 先把这条写清楚，免得以为跑了一堆外部工具。
-    items.append({"label": "优选探测", "ver": "内置脚本", "note": "各路共用，TCP 延迟 + HTTPS 实测"})
+    items.append({"label": "优选探测", "ver": "内置脚本", "note": "各路共用，101 真实 HTTPS 复核 + 粘滞守卫"})
     if cft_v:
-        items.append({"label": "CloudflareSpeedTest", "ver": cft_v, "note": "已固化，备用测速器"})
+        # CloudflareSpeedTest 已接入 cf 路：显示 101 里最近一次实测的真实结果，
+        # 不再只写「已固化，备用测速器」这种让人以为没用上的话。
+        note = "已接入 cf 路，等待首次测速"
+        try:
+            with open("/data/cfst_status.json", encoding="utf-8") as f:
+                st = json.load(f)
+            if st.get("ok"):
+                note = "已接入 cf 路 · 101 实测 %s · %d/%d 候选 · %ss" % (
+                    time.strftime("%m-%d %H:%M", time.localtime(int(st.get("ts", 0)))),
+                    int(st.get("ranked", 0)), int(st.get("input", 0)), st.get("cost", 0))
+            else:
+                note = "已接入 cf 路 · 最近一次：" + str(st.get("why", ""))[:20]
+        except Exception:
+            pass
+        items.append({"label": "CloudflareSpeedTest", "ver": cft_v, "note": note})
     else:
         items.append({"label": "CloudflareSpeedTest", "ver": "缺工具", "note": "镜像内缺失，cf 路回退脚本探测"})
     # GT 只跟踪版本：上游 1.9 起不发 linux 包，gt 路用的是它的社区 IP 清单

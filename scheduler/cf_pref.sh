@@ -22,4 +22,18 @@ export PREF_EXTRA_DOMAINS="theaudiodb.com www.theaudiodb.com lrclib.net anilist.
 
 source /app/scheduler/common.sh
 acquire_lock || exit 1
-run_route "cf" "/app/config/seeds/cloudflare.txt" 443
+
+# ---- CloudflareSpeedTest 真的参与 cf 路优选 --------------------------------
+# 工具就在本容器里（/app/bin/cft/cfst），由 101 自己跑：收集 cf 候选 → TCP
+# 延迟实测排序 → 结果灌进 cf 候选池。它只负责「找候选」，最终写不写 hosts
+# 仍由 101 严格复核 + 粘滞守卫决定：在用 IP 全能用就一个字不改。
+# 每轮定时优选跑一次，并发/次数/输入量都有限，不常驻、不洗牌。
+CFST_SEED="/app/config/seeds/cloudflare.txt"
+if [ -x /app/bin/cft/cfst ] && [ "${CFST_SKIP:-0}" != "1" ]; then
+  cfst_out=$(python3 "$SELF_DIR/lib/cfst_pref.py" 2>>"${PREF_LOG:-$DATA_DIR/pref.log}")
+  log "cf: CloudflareSpeedTest 101 实测 → $cfst_out"
+  if [ -s "$DATA_DIR/cfst_seed.txt" ]; then
+    CFST_SEED="$DATA_DIR/cfst_seed.txt"
+  fi
+fi
+run_route "cf" "$CFST_SEED" 443
