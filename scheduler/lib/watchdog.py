@@ -26,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import https_probe          # noqa: E402
+import selfheal             # noqa: E402
 import subs                 # noqa: E402
 
 DATA_DIR = os.environ.get("PREF_DATA_DIR", "/data")
@@ -56,6 +57,10 @@ GT_GUARD_FLAG = os.path.join(DATA_DIR, ".gt_need_refresh")
 GT_CURL = "/usr/bin/curl" if os.path.exists("/usr/bin/curl") else "curl"
 GT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+# 镜像自愈巡检：每天一次，由 101 自己核对仓库状态，不依赖有人记得跑校验脚本。
+IMG_GUARD_SEC = int(os.environ.get("PREF_IMG_GUARD_SEC", "86400"))
+IMG_GUARD_STATE = os.path.join(DATA_DIR, "image_guard_state.json")
+VERSIONS_FILE = "/app/VERSIONS"
 
 
 def runtime_cfg():
@@ -390,7 +395,8 @@ def seed_ips(route):
 
 
 def candidates(route, domain, skip):
-    """补位候选：cfst 实测排序 > 订阅池 > 种子，去掉已在用的和已拉黑的。"""
+    """补位候选：cfst 实测排序 > 抖动回血 > 订阅池 > 种子，去掉已在用的和已拉黑的。"""
+    bad_all = subs.load_bad()
     bad = subs._bad_set()
     out = []
     # CloudflareSpeedTest 在 101 容器内实测排序出来的 cf 候选优先补位：
@@ -413,6 +419,12 @@ def candidates(route, domain, skip):
                         break
     except Exception:
         pass
+    # 候选池被跨境网关抖动整批打黑时，给「拉黑已满冷却的抖动类 IP」一次
+    # 重新实测的机会。这不是解禁：补位仍要过 101 同一套 HTTPS 校验，
+    # 通过才写 hosts，写进去后下一轮黑名单复核会自动把误判解除。
+    for ip in selfheal.soft_retry_ips(bad_all):
+        if ip not in skip and ip not in out:
+            out.append(ip)
     for ip in subs.cmd_pool(route, 12, smart=True):
         if ip not in skip and ip not in bad and ip not in out:
             out.append(ip)
@@ -760,6 +772,88 @@ MAIN_DOMAINS = {
 }
 
 
+def reconcile_blacklist(files, static_rows, results, state):
+    """101 每轮自己复核黑名单：把「误拉黑的在用 IP」自动解除，不用等人、不等 6h。
+
+    只认本轮 101 自己发出的分域实测（results）；任一在用域判 BAD 就保留
+    （例如某节点对 csp 域证书不匹配）。解除后同步清掉该 IP 的失败窗口，
+    避免下一轮又按旧账重新拉黑。
+    """
+    try:
+        bad = subs.load_bad()
+        if not bad:
+            return 0
+        used = selfheal.build_used(files, static_rows)
+        freed = selfheal.plan_unban(bad, used, results)
+        if not freed:
+            return 0
+        for ip in freed:
+            bad.pop(ip, None)
+            for k in [k for k in state if k.endswith("|" + ip)]:
+                state.pop(k, None)
+        subs.jsave(subs.BLACK_FILE, bad)
+        log("黑名单复核：%d 个在用 IP 本轮 101 实测全通过，自动解除（%s）"
+            % (len(freed), ",".join(freed[:6])))
+        return len(freed)
+    except Exception as e:
+        log("黑名单复核异常：%s" % e)
+        return 0
+
+
+def _local_rev():
+    try:
+        with open(VERSIONS_FILE, encoding="utf-8") as f:
+            for ln in f:
+                if ln.startswith("build_rev="):
+                    return ln.strip().split("=", 1)[1]
+    except Exception:
+        pass
+    return ""
+
+
+def _push_warn(msg):
+    """异常告警只发两行，同一状态只发一次（不刷屏）。"""
+    try:
+        cfg = (jload(SETTINGS_FILE, {}) or {}).get("push") or {}
+        if not cfg.get("enabled") or not cfg.get("url"):
+            return
+        subprocess.run([sys.executable, os.path.join(HERE, "push.py"),
+                        cfg["url"], "镜像异常", msg],
+                       timeout=10, capture_output=True)
+    except Exception:
+        pass
+
+
+def image_guard_async():
+    """每天一次：101 自己核对镜像仓库状态，异常自动告警（无需人工跑脚本）。"""
+    st = jload(IMG_GUARD_STATE, {})
+    now = int(time.time())
+    if now - int(st.get("ts", 0) or 0) < IMG_GUARD_SEC:
+        return
+    st["ts"] = now
+    jsave(IMG_GUARD_STATE, st)
+
+    def _run():
+        try:
+            s = selfheal.fetch_registry_state()
+            level, msg = selfheal.image_status(s.get("ghcr"), s.get("mirror"),
+                                               _local_rev(), s.get("rev"))
+            key = "%s|%s|%s|%s" % (level, s.get("ghcr"), s.get("mirror"), s.get("rev"))
+            cur = jload(IMG_GUARD_STATE, {})
+            if level == "warn":
+                log("镜像复核：%s" % msg)
+                if cur.get("last") != key:
+                    cur["last"] = key
+                    jsave(IMG_GUARD_STATE, cur)
+                    _push_warn(msg)
+            elif cur.get("last"):
+                cur["last"] = ""
+                jsave(IMG_GUARD_STATE, cur)
+        except Exception as e:
+            log("镜像复核异常：%s" % e)
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def _heal_once_impl(only_route=None):
     """巡检 + 精确补位 + 冗余自愈（不含真翻自检与互斥锁）。
 
@@ -790,6 +884,10 @@ def _heal_once_impl(only_route=None):
     else:
         static_rows, static_items = static_targets()
     results = _batch_health(items + static_items)
+    # 只用本轮 101 自己的实测结果复核黑名单，且只在全量轮做（证据最全）：
+    # 误拉黑的在用 IP 当场自动解除，本轮补位就能重新把它算进候选。
+    if not only_route:
+        reconcile_blacklist(files, static_rows, results, state)
     # 把这一轮 101 实测结果留档：定时优选粘滞守卫在 90 秒内直接复用，
     # 不再把同一批在用 IP 重复探一遍（省跨境连接，也不挤占其它设备带宽）。
     try:
@@ -1122,6 +1220,7 @@ def main():
             except Exception as e:
                 log("异常：%s" % e)
         _doh_scan_async()
+        image_guard_async()
         time.sleep(max(30, sec))
 
 
