@@ -49,6 +49,18 @@ DOMAIN_SPECS = {
     "collector.github.com": ("/xyz-notexist-abc", {404}, set()),
 }
 
+# ghcr 层文件实测（2026-11-09）：151.101.x 资源段对 ghcrblobs02/14 等各分片
+# 都能完整且约 0.5s 下完 2MB；185.199.x 段虽然根路径同样回 400（专属判据
+# 分不出真假），下大层却会截断或 18s 超时，docker 表现为 unknown blob。
+# 所以这个域只收 151.101.x 资源段，避免「看着能用、实际拉不了」的 IP 混进来。
+BLOB_DOMAIN = "pkg-containers.githubusercontent.com"
+BLOB_ONLY_PREFIXES = ("151.101.",)
+
+
+def allow_blob_ip(dom, ip):
+    return not (dom == BLOB_DOMAIN and not ip.startswith(BLOB_ONLY_PREFIXES))
+
+
 # Fastly 给 github 资源域的已知 anycast 变体（.133=Pages/raw 段，.217=资源段）
 SAMPLE_IPS = [
     "151.101.%d.%d" % (octet, last)
@@ -239,8 +251,14 @@ def main():
         # 旧结果里混着 v6 就不许复用：v6 在容器侧能通、下游客户端侧会被 reset，
         # 复用等于把「看着正常其实打不开」的状态一直固化下去（ghcr pull 卡死
         # 的残留就是这么留下来的），必须重扫一遍把它洗干净。
+        blob_stale = any(
+            not allow_blob_ip(dom, ip)
+            for dom, ips in old_all.items() for ip in ips[:1]
+        )
         if any(":" in ip for ips in old_all.values() for ip in ips):
             log("旧固定映射含 IPv6，跳过复用，直接全量重扫")
+        elif blob_stale:
+            log("旧固定映射里 ghcr 层域名不是 151.101 资源段，跳过复用并重扫")
         else:
             def _probe_old(dom):
                 path, codes, jumps = DOMAIN_SPECS[dom]
@@ -258,8 +276,9 @@ def main():
     log("候选 %d 个，开始逐域名校验" % len(cands))
     results = {}   # domain -> [(ttfb, ip)]
     for dom, (path, codes, jumps) in DOMAIN_SPECS.items():
+        dom_cands = [c for c in cands if allow_blob_ip(dom, c)]
         with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-            rs = list(ex.map(lambda c: check_retry(c, dom, path, codes, jumps), cands))
+            rs = list(ex.map(lambda c: check_retry(c, dom, path, codes, jumps), dom_cands))
         oks = sorted(((t, ip) for ip, ok, t in rs if ok and t is not None))
         results[dom] = [ip for _, ip in oks[:TOP_N]]
         log("%s: %d/%d 通过 -> %s" % (dom, len(results[dom]), len(cands), results[dom]))
@@ -274,7 +293,10 @@ def main():
         pass
     lines = []
     for dom in DOMAIN_SPECS:
-        ips = results.get(dom) or [ip for ip in old.get(dom, []) if ":" not in ip] or []
+        ips = (results.get(dom)
+               or [ip for ip in old.get(dom, [])
+                   if ":" not in ip and allow_blob_ip(dom, ip)]
+               or [])
         if ips:
             lines.append(" ".join([dom] + ips))
             # 登记黑名单豁免（专属探针刚验证过才登记；沿用旧结果时保留旧豁免）

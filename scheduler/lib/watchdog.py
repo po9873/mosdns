@@ -565,6 +565,10 @@ def heal_bad_fastly_pins(force=False):
     def _ok(item):
         dom, ip = item
         path, codes, jumps = specs[dom]
+        # ghcr 层域名只认 151.101.x 资源段：185.199.x 根路径同样回 400，
+        # 但下大层会截断/超时（docker 报 unknown blob），专属判据分不出。
+        if not fpr.allow_blob_ip(dom, ip):
+            return dom, False
         # 与 fastly_pin_refresh 用同一套判定：真边缘回专属状态码，
         # 主站边缘 301 跳 github.com 一律判假（含带合法跳转的 gist）。
         return dom, fpr.check(ip, dom, path, set(codes), set(jumps))[1]
@@ -579,7 +583,8 @@ def heal_bad_fastly_pins(force=False):
         route, first, _cur = located[dom]
         path, codes, jumps = specs[dom]
         good = None
-        for ip in list(dict.fromkeys(pin_ips[dom]))[:PIN_HEAL_MAX_IPS]:
+        for ip in [x for x in dict.fromkeys(pin_ips[dom])
+                   if fpr.allow_blob_ip(dom, x)][:PIN_HEAL_MAX_IPS]:
             if fpr.check(ip, dom, path, set(codes), set(jumps))[1]:
                 good = ip
                 break
