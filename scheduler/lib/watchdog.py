@@ -501,6 +501,113 @@ def heal_pin_gaps(force=False):
     return len(healed), ["%s: %s <- %s" % (r, d, i) for r, d, i in healed]
 
 
+# ---- 资源域错钉自愈 ------------------------------------------------------
+# 粘滞守卫只认「TLS 握手成功 + 有 HTTP 应答」。GitHub 主站边缘 140.82.112.x
+# 的证书同样覆盖部分 *.githubusercontent.com，对资源域却一律 301 踢回
+# github.com——根路径看着「能用」，真实 blob 路径却 404。docker pull ghcr
+# 就死在这里：manifest 拿到了，config/layer blob 报 unknown blob。
+# heal_pin_gaps 只补「hosts 里没有的域名」，纠不了「域名在、IP 是错的」；
+# 这里按 fastly_pin_refresh 的每域专属判据复核在用 IP，错钉自动换回
+# 已验证的 Fastly 边缘，保证 ghcr 这类链路不用人工介入。
+FASTLY_HEAL_INTERVAL = 600
+_FASTLY_HEAL_STAMP = os.path.join(DATA_DIR, "fastly_pin_heal.stamp")
+
+
+def heal_bad_fastly_pins(force=False):
+    """校验资源域在用 IP 是不是真边缘；错钉换回 pin 里已验证的 IP。
+
+    返回 (修正域名数, 明细)。有改动时重建 all.hosts 并重载 mosdns。
+    """
+    now = time.time()
+    if not force:
+        try:
+            last = float(open(_FASTLY_HEAL_STAMP, encoding="utf-8").read().strip() or 0)
+        except Exception:
+            last = 0.0
+        if now - last < FASTLY_HEAL_INTERVAL:
+            return 0, []
+    try:
+        import fastly_pin_refresh as fpr
+        specs = dict(fpr.DOMAIN_SPECS)
+    except Exception:
+        return 0, []
+
+    pin_ips = {}
+    try:
+        for name in sorted(os.listdir(PREF_DIR)):
+            if not name.startswith(".") or not name.endswith(PIN_SUFFIXES):
+                continue
+            for dom, ips in read_lines(os.path.join(PREF_DIR, name)):
+                if dom not in specs:
+                    continue
+                v4 = [x for x in ips if is_ip(x) and ":" not in x]
+                if v4:
+                    pin_ips.setdefault(dom, []).extend(v4)
+    except Exception:
+        return 0, []
+    if not pin_ips:
+        return 0, []
+
+    located = {}   # dom -> (route, first_ip, all_v4)
+    for name in sorted(os.listdir(PREF_DIR)):
+        if not name.endswith(".hosts") or name == "all.hosts":
+            continue
+        for dom, ips in read_lines(os.path.join(PREF_DIR, name)):
+            if dom in specs and dom not in located:
+                v4 = [x for x in ips if is_ip(x) and ":" not in x]
+                if v4:
+                    located[dom] = (name[:-6], v4[0], v4)
+    if not located:
+        return 0, []
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _ok(item):
+        dom, ip = item
+        path, codes, jumps = specs[dom]
+        # 与 fastly_pin_refresh 用同一套判定：真边缘回专属状态码，
+        # 主站边缘 301 跳 github.com 一律判假（含带合法跳转的 gist）。
+        return dom, fpr.check(ip, dom, path, set(codes), set(jumps))[1]
+
+    items = [(d, v[1]) for d, v in located.items()]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        rs = list(ex.map(_ok, items))
+    bad = [d for d, ok in rs if not ok]
+
+    fixed = []
+    for dom in bad:
+        route, first, _cur = located[dom]
+        path, codes, jumps = specs[dom]
+        good = None
+        for ip in list(dict.fromkeys(pin_ips[dom]))[:PIN_HEAL_MAX_IPS]:
+            if fpr.check(ip, dom, path, set(codes), set(jumps))[1]:
+                good = ip
+                break
+        if not good or good == first:
+            continue
+        host_path = os.path.join(PREF_DIR, route + ".hosts")
+        try:
+            rows = open(host_path, encoding="utf-8", errors="replace").read().splitlines()
+        except Exception:
+            continue
+        rows = [ln for ln in rows if (ln.split()[:1] or [""])[0] != dom]
+        rows.append("%s %s" % (dom, good))
+        tmp = host_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(rows) + "\n")
+        os.replace(tmp, host_path)
+        fixed.append("%s: %s %s -> %s" % (route, dom, first, good))
+    if fixed:
+        _rebuild_all_hosts()
+        reload_mosdns()
+    try:
+        with open(_FASTLY_HEAL_STAMP, "w", encoding="utf-8") as f:
+            f.write(str(int(now)))
+    except Exception:
+        pass
+    return len(fixed), fixed
+
+
 def _rebuild_all_hosts():
     """把各路 *.hosts 合并成 mosdns 实际读取的 all.hosts"""
     out = []
@@ -1383,6 +1490,16 @@ def run_once():
             log("固定 IP 自愈：本轮补回 %d 个域名（已重载 mosdns）" % n_fix)
     except Exception as e:
         log("固定 IP 自愈异常：%s" % e)
+    # 域名在、IP 是错的（主站边缘 301 踢走）也要纠：否则 ghcr 层文件 404，
+    # docker pull 报 unknown blob，而粘滞守卫会一直「保住」这条看着能用的错钉。
+    try:
+        n_bad, bad_det = heal_bad_fastly_pins()
+        if n_bad:
+            for d in bad_det[:PIN_HEAL_MAX_DOMAINS]:
+                log("资源域自愈：纠正错钉 %s" % d)
+            log("资源域自愈：本轮纠正 %d 个域名（已重载 mosdns）" % n_bad)
+    except Exception as e:
+        log("资源域自愈异常：%s" % e)
     gt_guard()
     if os.path.isdir(LOCK_DIR):
         # 以前一遇到优选锁就整轮跳过；优化前优选一轮要 5 分钟，守护会连跳
