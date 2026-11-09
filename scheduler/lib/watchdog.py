@@ -513,6 +513,29 @@ FASTLY_HEAL_INTERVAL = 600
 _FASTLY_HEAL_STAMP = os.path.join(DATA_DIR, "fastly_pin_heal.stamp")
 
 
+def _clear_resource_false_blacklist(verified):
+    """通用巡检曾把资源域真边缘（400/403/404）误判拉黑；专属判据复核
+    通过的 IP 就解除，否则优选/候选池 6 小时内都不会再考虑这些好 IP。"""
+    path = os.path.join(DATA_DIR, "blacklist.json")
+    try:
+        bl = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        return 0
+    n = 0
+    for ip in set(verified):
+        if bl.pop(ip, None) is not None:
+            n += 1
+    if n:
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(bl, f)
+            os.replace(tmp, path)
+        except Exception:
+            pass
+    return n
+
+
 def heal_bad_fastly_pins(force=False):
     """校验资源域在用 IP 是不是真边缘；错钉换回 pin 里已验证的 IP。
 
@@ -574,9 +597,16 @@ def heal_bad_fastly_pins(force=False):
         return dom, fpr.check(ip, dom, path, set(codes), set(jumps))[1]
 
     items = [(d, v[1]) for d, v in located.items()]
+    pin_first = [(d, pin_ips[d][0]) for d in located if pin_ips.get(d)]
     with ThreadPoolExecutor(max_workers=8) as ex:
         rs = list(ex.map(_ok, items))
+        prs = list(ex.map(_ok, pin_first))
     bad = [d for d, ok in rs if not ok]
+    # 专属判据复核通过的 pin IP 解除历史误拉黑
+    verified = [ip for (_d, ip), (_d2, ok) in zip(pin_first, prs) if ok]
+    nb = _clear_resource_false_blacklist(verified)
+    if nb:
+        log("资源域自愈：解除 %d 个被通用巡检误拉黑的真边缘 IP" % nb)
 
     fixed = []
     for dom in bad:
@@ -967,6 +997,23 @@ def health(ip, domain, route):
     https_probe 对 <4KB 的响应不算速度、<32KB 的样本标 est=True（不可信），
     所以只拿可信样本判「慢到打不开」，不会误杀 API / 401 这类小页面。
     """
+    # Fastly 资源域（avatars/raw/objects/pkg-containers/...）根路径本来就回
+    # 400/403/404，通用判据把 400 一律判 blocked；而 GitHub 主站边缘对它们
+    # 回 301（path="/" 时又不严格判跳转）反而算「能用」。结果守护把真边缘
+    # 拉黑、把主站边缘换进来 —— ghcr 层文件被 301 踢到 github.com 后 404，
+    # docker pull 报 unknown blob。这类域一律交给专属判据复核。
+    try:
+        import fastly_pin_refresh as fpr
+        spec = fpr.DOMAIN_SPECS.get(domain)
+    except Exception:
+        spec = None
+    if spec:
+        path, codes, jumps = spec
+        ok = fpr.check(ip, domain, path, set(codes), set(jumps))[1]
+        if ok and not fpr.allow_blob_ip(domain, ip):
+            # 185.199.x 根路径同样回 400，但下 ghcr 大层会截断/超时
+            ok = False
+        return (True, "ok", None, None) if ok else (False, "wrongres", None, None)
     # gt 路现在逐行巡检：只有主域（translate.google.com / translate.googleapis.com）
     # 打真翻接口，这是「真能翻」的唯一证明；其余附加域（googleusercontent /
     # clients5 / translate-pa…）用各自 SNI + 宽松判据。不能拿真翻接口去问静态
