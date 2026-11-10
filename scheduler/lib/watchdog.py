@@ -79,7 +79,19 @@ def runtime_cfg():
         pass
     return sec, on
 
-HARD = ("cf", "cert", "wrong")   # 状态名以这些开头 = 明确不可用
+# 「明确不可用」只在证据确凿时成立（证书错 / CF 拦截页 / 421 跨站跳转）。
+# 注意 health() 对资源域走专属判据，失败时返回的是 "wrongres"（响应码不符），
+# 它和 "wrong" 只是前缀相同。以前用 startswith(("cf","cert","wrong")) 把
+# wrongres 一起算成 HARD —— 一次跨境抖动就跳过 3 次窗口确认、立刻拉黑 6 小时。
+# 结果 github 路黑名单被灌到 400+ 条，候选池被 candidates() 清空，守护每轮
+# 只能打印「保留原行等下轮自己判」，等于自愈被自己的黑名单锁死。
+HARD_PREFIX = ("cf", "cert")
+HARD_EXACT = ("wrong",)
+
+
+def is_hard(st):
+    s = str(st or "")
+    return s.startswith(HARD_PREFIX) or s in HARD_EXACT
 
 # static.hosts 在 mosdns 的 hosts 插件里排在 all.hosts 前面、优先命中，
 # 以前完全不在守护视野里：那里的 IP 坏了 101 发现不了。现在逐行纳入巡检。
@@ -732,10 +744,14 @@ def seed_ips(route):
     return out
 
 
-def candidates(route, domain, skip):
-    """补位候选：cfst 实测排序 > 抖动回血 > 订阅池 > 种子，去掉已在用的和已拉黑的。"""
+def candidates(route, domain, skip, ignore_bad=False):
+    """补位候选：cfst 实测排序 > 抖动回血 > 订阅池 > 种子，去掉已在用的和已拉黑的。
+
+    ignore_bad=True 只给「候选池被黑名单整批清空」时的自救用：不过滤黑名单
+    重取候选，但仍要过 101 同一套 HTTPS 复核，通过才写 hosts 并解除误判。
+    """
     bad_all = subs.load_bad()
-    bad = subs._bad_set()
+    bad = set() if ignore_bad else subs._bad_set()
     out = []
     # CloudflareSpeedTest 在 101 容器内实测排序出来的 cf 候选优先补位：
     # 工具真的决定「坏了换哪个 IP」，但仍要过下面同一套 101 严格复核，
@@ -1337,7 +1353,7 @@ def _heal_once_impl(only_route=None):
                     else:
                         keep.append(ip)
                     continue
-                if st.startswith(HARD):
+                if is_hard(st):
                     state.pop(key, None)
                     dropped.append((ip, st))
                     continue
@@ -1352,7 +1368,12 @@ def _heal_once_impl(only_route=None):
             # 必须立刻尝试补位，不能因为限频把该换的漏掉。
             if need and not dropped and is_main and route not in NO_REFILL_ROUTES:
                 now = int(time.time())
-                if now - int((state.get(tkey) or {}).get("try_ts", 0) or 0) < REFILL_RETRY_SEC:
+                # 只剩 1 个 IP 属于单点裸奔：跨境链路一抖就整站打不开，
+                # 不能让它再等 5 分钟的「纯冗余补齐」限频。
+                starving = len(keep) <= 1
+                if (not starving and
+                        now - int((state.get(tkey) or {}).get("try_ts", 0) or 0)
+                        < REFILL_RETRY_SEC):
                     need = 0
                 else:
                     state[tkey]["try_ts"] = now
@@ -1371,17 +1392,39 @@ def _heal_once_impl(only_route=None):
                     if o:
                         added.append(c)
                         subs.cmd_bump(route, c, "ok")
-                    elif st2.startswith(HARD):
+                    elif is_hard(st2):
                         subs.mark_bad(c, st2, route)
             final = keep + added
             if not final:
-                # 一个能用的都没有、候选也全测不过 = 链路整体抖动，不是 IP 坏。
-                # 绝不把整行删成空行（那样 DNS 会走上游真 IP，往往更糟），
-                # 也不把这些 IP 写进黑名单。保留原行，等 101 下轮自己再判。
-                final = list(ips)
+                # 以前这里只打印一句「保留原行等下轮自己判」就结束。若黑名单
+                # 被抖动污染到把候选池清空，下一轮还是同样的空池 —— 死循环，
+                # 用户看到的「不能稳定打开」就是这么一直挂着没人修。
+                # 现在先自救：忽略黑名单重取候选，用 101 同一套判据实测复核，
+                # 通过才写回并顺手解除误拉黑。真的一条都探不通才保留原行。
+                rescued = []
+                try:
+                    rc = candidates(route, dom, set(ips), ignore_bad=True)[:12]
+                    rr = _batch_health([(route, dom, c) for c in rc])
+                    for c in rc:
+                        if rr.get((route, dom, c), (False, "fail", None, None))[0]:
+                            subs.clear_bad(c)
+                            subs.cmd_bump(route, c, "ok")
+                            rescued.append(c)
+                            if len(rescued) >= target:
+                                break
+                except Exception as e:
+                    log("%s 路：%s 候选池自救复核异常：%s" % (route, dom, e))
+                if rescued:
+                    final = rescued
+                    log("%s 路：%s 候选池被黑名单清空，101 实测自救补回 %s"
+                        % (route, dom, " ".join(rescued)))
+                else:
+                    # 链路整体抖动，不是 IP 坏。绝不把整行删成空行（那样 DNS
+                    # 会走上游真 IP，往往更糟），也不把这些 IP 写进黑名单。
+                    final = list(ips)
+                    log("%s 路：%s 本轮全测不通、自救复核也无可用 IP，保留原行等下轮再判"
+                        % (route, dom))
                 removed = []
-                log("%s 路：%s 本轮全测不通、候选也不可用，保留原行等 101 下轮自己判"
-                    % (route, dom))
             else:
                 removed = [ip for ip, _ in dropped if ip not in final]
             for ip, why in dropped:
@@ -1518,6 +1561,97 @@ def heal_once(only_route=None):
             pass
 
 
+# ---------------------------------------------------------------- 黑名单污染自愈
+BL_HEAL_STAMP = os.path.join(DATA_DIR, ".blacklist_heal_stamp")
+BL_HEAL_INTERVAL = int(os.environ.get("PREF_BL_HEAL_SEC", "1800"))
+BL_HEAL_MAX = int(os.environ.get("PREF_BL_HEAL_MAX", "90"))
+# 抖动 / 响应码不符是软失败，不能当永久故障；cert / cf / wrong 才是硬证据
+BL_SOFT_REASONS = ("wrongres", "timeout", "fail", "busy", "blocked", "slow")
+
+
+def _bl_probe_domain(ip):
+    """资源段走 Fastly 专属判据，主站段走真页面判据。"""
+    if ip.startswith(("151.101.", "185.199.")):
+        return "raw.githubusercontent.com"
+    return "github.com"
+
+
+def heal_blacklist_pollution(force=False):
+    """按 101 实测洗掉黑名单污染，返回 (解除条数, 明细)。
+
+    1) hosts 里正在用的 IP 绝不能留在黑名单：否则故障补位时它自己被
+       candidates() 排除，守护只能打印「保留原行等下轮自己判」，自愈被
+       自己的黑名单锁死（2026-11-10 github 路 426 条污染就是这么卡住的）。
+    2) 软失败条目每半小时用 101 同一套判据复核一次，通过即解除；硬故障
+       （cert / cf / wrong）不动，等 6h TTL 自然过期。
+    """
+    now = int(time.time())
+    if not force:
+        try:
+            last = int(open(BL_HEAL_STAMP, encoding="utf-8").read().strip() or 0)
+        except Exception:
+            last = 0
+        if now - last < BL_HEAL_INTERVAL:
+            return 0, []
+    try:
+        with open(BL_HEAL_STAMP, "w", encoding="utf-8") as f:
+            f.write(str(now))
+    except Exception:
+        pass
+
+    d = subs.load_bad()
+    if not isinstance(d, dict) or not d:
+        return 0, []
+
+    # 1) 所有 *.hosts 里在用的 IP，无条件解禁
+    in_use = []
+    try:
+        for name in sorted(os.listdir(PREF_DIR)):
+            if not name.endswith(".hosts") or name == "all.hosts":
+                continue
+            for _dom, ips in read_lines(os.path.join(PREF_DIR, name)):
+                in_use.extend(ips)
+    except Exception:
+        pass
+    freed = []
+    for ip in set(in_use):
+        if ip in d:
+            d.pop(ip, None)
+            freed.append("在用IP " + ip)
+
+    # 2) 软失败条目用 101 复核；限量避免一次扫几百条把本轮拖垮
+    soft = [ip for ip, v in list(d.items())
+            if isinstance(v, dict)
+            and str(v.get("reason", "")).startswith(BL_SOFT_REASONS)][:BL_HEAL_MAX]
+
+    def _check(ip):
+        try:
+            ok = health(ip, _bl_probe_domain(ip), "github")[0]
+            return ip, ok
+        except Exception:
+            return ip, False
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            rs = list(ex.map(_check, soft))
+    except Exception:
+        rs = []
+    for ip, ok in rs:
+        if ok:
+            d.pop(ip, None)
+            freed.append("实测可用 " + ip)
+
+    if freed:
+        try:
+            subs.jsave(subs.BLACK_FILE, d)
+        except Exception:
+            for item in freed:
+                subs.clear_bad(item.split()[-1])
+        log("黑名单自愈：按 101 实测/在用状态解除 %d 条，候选池已恢复" % len(freed))
+    return len(freed), freed
+
+
 def run_once():
     """常驻守护入口：先清废行 → 真翻自检 → 等优选锁释放 → 全量巡检补位。"""
     # hosts 废行自愈优先于一切：纯 IPv6 的行会把某域名钉成 NODATA，
@@ -1532,6 +1666,16 @@ def run_once():
             reload_mosdns()
     except Exception as e:
         log("hosts 自愈异常：%s" % e)
+    # 黑名单污染先洗：抖动误判会把候选池清空，后面所有补位/纠钉都会
+    # 因为「没可用 IP」空转。放在一切补位之前，保证自愈不会锁死自己。
+    try:
+        n_bl, bl_det = heal_blacklist_pollution()
+        if n_bl:
+            for item in bl_det[:10]:
+                log("黑名单自愈：解除 %s" % item)
+            log("黑名单自愈：本轮共解除 %d 条" % n_bl)
+    except Exception as e:
+        log("黑名单自愈异常：%s" % e)
     # 剔完还得补：pin 文件里有、hosts 里没有的域名，用已验证的固定 IP 写回，
     # 否则它就一直走上游解析（而固定 IP 才是真正稳定的那条）。
     try:
