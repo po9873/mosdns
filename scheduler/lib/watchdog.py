@@ -860,7 +860,10 @@ def candidates(route, domain, skip, ignore_bad=False):
     # 用公共 DNS 实时解析补种，别再守着一个空池子每轮空转。
     if len(out) < 6:
         for ip in reseed_candidates(route, domain):
-            if ip not in skip and ip not in bad and ip not in out:
+            # 刚从公共 DNS 实时解析出来的真实入口，不受历史黑名单约束：
+            # 那批 wrongres 正是抖动误判，拿它挡新解析等于让污染永久生效。
+            # 后面照样要过 health() 实测，真坏的 IP 通不过、不会写进 hosts。
+            if ip not in skip and ip not in out:
                 out.append(ip)
     return out
 
@@ -1663,24 +1666,13 @@ def heal_blacklist_pollution(force=False):
        （cert / cf / wrong）不动，等 6h TTL 自然过期。
     """
     now = int(time.time())
-    if not force:
-        try:
-            last = int(open(BL_HEAL_STAMP, encoding="utf-8").read().strip() or 0)
-        except Exception:
-            last = 0
-        if now - last < BL_HEAL_INTERVAL:
-            return 0, []
-    try:
-        with open(BL_HEAL_STAMP, "w", encoding="utf-8") as f:
-            f.write(str(now))
-    except Exception:
-        pass
-
     d = subs.load_bad()
     if not isinstance(d, dict) or not d:
         return 0, []
 
-    # 1) 所有 *.hosts 里在用的 IP，无条件解禁
+    # 1) 所有 *.hosts 里在用的 IP，无条件解禁、每轮都做。
+    #    这条绝不能被下面的 30 分钟节流挡住：在用 IP 一旦被抖动误判拉黑，
+    #    半小时内故障补位都会把它自己排除掉。
     in_use = []
     try:
         for name in sorted(os.listdir(PREF_DIR)):
@@ -1696,28 +1688,41 @@ def heal_blacklist_pollution(force=False):
             d.pop(ip, None)
             freed.append("在用IP " + ip)
 
-    # 2) 软失败条目用 101 复核；限量避免一次扫几百条把本轮拖垮
-    soft = [ip for ip, v in list(d.items())
-            if isinstance(v, dict)
-            and str(v.get("reason", "")).startswith(BL_SOFT_REASONS)][:BL_HEAL_MAX]
-
-    def _check(ip):
+    # 2) 软失败复核才走节流：几十上百条 HTTPS 探测不能每轮都跑。
+    review = bool(force)
+    if not force:
         try:
-            ok = health(ip, _bl_probe_domain(ip), "github")[0]
-            return ip, ok
+            last = int(open(BL_HEAL_STAMP, encoding="utf-8").read().strip() or 0)
         except Exception:
-            return ip, False
+            last = 0
+        review = now - last >= BL_HEAL_INTERVAL
+    if review:
+        try:
+            with open(BL_HEAL_STAMP, "w", encoding="utf-8") as f:
+                f.write(str(now))
+        except Exception:
+            pass
+        soft = [ip for ip, v in list(d.items())
+                if isinstance(v, dict)
+                and str(v.get("reason", "")).startswith(BL_SOFT_REASONS)][:BL_HEAL_MAX]
 
-    try:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=16) as ex:
-            rs = list(ex.map(_check, soft))
-    except Exception:
-        rs = []
-    for ip, ok in rs:
-        if ok:
-            d.pop(ip, None)
-            freed.append("实测可用 " + ip)
+        def _check(ip):
+            try:
+                ok = health(ip, _bl_probe_domain(ip), "github")[0]
+                return ip, ok
+            except Exception:
+                return ip, False
+
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=16) as ex:
+                rs = list(ex.map(_check, soft))
+        except Exception:
+            rs = []
+        for ip, ok in rs:
+            if ok:
+                d.pop(ip, None)
+                freed.append("实测可用 " + ip)
 
     if freed:
         try:
