@@ -728,8 +728,15 @@ def purge_ips_everywhere(bad_ips):
     if purged:
         _rebuild_all_hosts()
 def seed_ips(route):
-    """该路的种子兜底 IP（镜像内置，无需联网）。"""
-    out = []
+    """该路的种子兜底 IP：内置 IP + 种子里写的域名用公共 DNS 实时解析。
+
+    seeds/*.txt 从一开始就允许写域名（github.txt 的注释也这么承诺），但旧实现
+    只收「形似 IP」的行，域名行被静默丢掉。结果 github 路种子常年只剩 2 个老
+    IP，一旦它们全废，候选池就空了 —— 守护每轮都在实测，却压根没有可换的 IP，
+    只能反复打印「候选暂不可用，下轮继续自己补」，用户看到的就是长期时好时坏。
+    解析必须问公共 DNS，不能问 101 自己（自己会被 hosts 钉死，拿到的还是旧 IP）。
+    """
+    out, doms = [], []
     path = os.path.join(SEED_DIR, "%s.txt" % route)
     try:
         for ln in open(path, encoding="utf-8"):
@@ -737,11 +744,75 @@ def seed_ips(route):
             if not ln or ln.startswith("#"):
                 continue
             tok = ln.split()[0]
-            if tok.count(".") == 3 or ":" in tok:
+            if tok.count(".") == 3 and tok.replace(".", "").isdigit():
                 out.append(tok)
+            elif ":" in tok:
+                out.append(tok)
+            elif "." in tok:
+                doms.append(tok)
     except Exception:
         pass
+    if doms:
+        try:
+            import fastly_pin_refresh as fpr
+            for dom in doms:
+                for srv in fpr.PUBLIC_DNS:
+                    for ip in fpr.udp_dns_a(dom, srv):
+                        if ":" not in ip and ip not in out:
+                            out.append(ip)
+        except Exception:
+            pass
     return out
+
+
+RESEED_INTERVAL = int(os.environ.get("PREF_RESEED_SEC", "600"))
+
+
+def reseed_candidates(route, domain, force=False):
+    """候选池枯竭时，用公共 DNS 实时解析主域补种，并写回 cfst 种子。
+
+    不依赖仓库里的内置种子：即便种子里的老 IP 全废、订阅池为空、cfst 结果
+    又扫错了段，101 也能自己拿到当前的真实入口 IP。解析出来的 IP 后面照样
+    要过 health() 实测，被污染的 IP 通不过，不会写进 hosts。
+    """
+    stamp = os.path.join(DATA_DIR, ".reseed_%s_stamp" % route)
+    now = int(time.time())
+    if not force:
+        try:
+            last = int(open(stamp, encoding="utf-8").read().strip() or 0)
+        except Exception:
+            last = 0
+        if now - last < RESEED_INTERVAL:
+            return []
+    try:
+        with open(stamp, "w", encoding="utf-8") as f:
+            f.write(str(now))
+    except Exception:
+        pass
+    try:
+        import fastly_pin_refresh as fpr
+    except Exception:
+        return []
+    doms = ([domain, "www." + domain, "api." + domain]
+            if domain == "github.com" else [domain])
+    ips = []
+    for d in doms:
+        for srv in fpr.PUBLIC_DNS:
+            for ip in fpr.udp_dns_a(d, srv):
+                if ":" not in ip and ip not in ips:
+                    ips.append(ip)
+    if not ips:
+        return []
+    try:
+        p = os.path.join(DATA_DIR, "cfst_%s_seed.txt" % route)
+        old = open(p, encoding="utf-8").read().splitlines() if os.path.exists(p) else []
+        head = [ln for ln in old[:2] if ln.startswith("#") or ln == domain]
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("\n".join(head + ips) + "\n")
+    except Exception:
+        pass
+    log("%s 路：候选池枯竭，公共 DNS 实时补种 %d 个真实入口 IP" % (route, len(ips)))
+    return ips
 
 
 def candidates(route, domain, skip, ignore_bad=False):
@@ -785,6 +856,12 @@ def candidates(route, domain, skip, ignore_bad=False):
     for ip in seed_ips(route):
         if ip not in skip and ip not in bad and ip not in out:
             out.append(ip)
+    # 上面四路全废时（种子老 IP 全坏 + 订阅池空 + cfst 扫错段），101 自己
+    # 用公共 DNS 实时解析补种，别再守着一个空池子每轮空转。
+    if len(out) < 6:
+        for ip in reseed_candidates(route, domain):
+            if ip not in skip and ip not in bad and ip not in out:
+                out.append(ip)
     return out
 
 
