@@ -530,8 +530,13 @@ def heal_pin_gaps(force=False):
 FASTLY_HEAL_INTERVAL = int(os.environ.get("PREF_FASTLY_HEAL_SEC", "30"))
 RESOURCE_MIN_IPS = int(os.environ.get("PREF_RESOURCE_MIN_IPS", "3"))
 RESOURCE_GUARD_SEC = int(os.environ.get("PREF_RESOURCE_GUARD_SEC", "30"))
+# 撤坏钉要连续 2 轮实测不通：跨境 SYN 单次抖动不该让 9 个资源域每 30 秒
+# 洗一次牌、每分钟重载两次 mosdns（那样反而比坏钉本身更不稳）。
+# 30s 一轮 × 2 = 约 1 分钟内换掉真坏钉，仍是「立刻」级别。
+RESOURCE_STRIKES = int(os.environ.get("PREF_RESOURCE_STRIKES", "2"))
 _FASTLY_HEAL_STAMP = os.path.join(DATA_DIR, "fastly_pin_heal.stamp")
 _RESOURCE_LOCK = os.path.join(DATA_DIR, ".resource_heal.lock")
+_RESOURCE_STATE = os.path.join(DATA_DIR, "resource_strikes.json")
 
 
 def _is_resource_domain(dom):
@@ -669,7 +674,9 @@ def _heal_resource_pins(now):
         if not is_ip(ip) or ":" in ip or not fpr.allow_blob_ip(dom, ip):
             return False
         try:
-            return bool(fpr.check(ip, dom, path, set(codes), set(jumps))[1])
+            # 与 fastly_pin_refresh.main 同一套 check_retry（内部重试 2 次），
+            # 单次跨境抖动不会立刻把一个好 IP 判死。
+            return bool(fpr.check_retry(ip, dom, path, set(codes), set(jumps))[1])
         except Exception:
             return False
 
@@ -679,11 +686,49 @@ def _heal_resource_pins(now):
         oks = list(ex.map(_ok, checks))
     verdict = dict(zip(checks, oks))
 
-    # 2) 只有「有坏钉 / 冗余不足」的域才需要探候选，正常一轮几乎零开销
+    # 2) 失败计数：连续 RESOURCE_STRIKES 轮不通才确认是坏钉。
+    #    单次抖动仍把 IP 留在行里（反正还有其它冗余 IP 兜底），
+    #    避免「每 30 秒把 9 个域洗一遍 + 重载 mosdns」这种自伤式抖动。
+    try:
+        st_all = json.load(open(_RESOURCE_STATE, encoding="utf-8"))
+        if not isinstance(st_all, dict):
+            st_all = {}
+    except Exception:
+        st_all = {}
+    confirmed = {}
+    for dom, (_route, cur) in located.items():
+        rec = st_all.setdefault(dom, {})
+        for ip in cur:
+            if verdict.get((dom, ip)):
+                rec.pop(ip, None)
+                continue
+            old = rec.get(ip) if isinstance(rec.get(ip), dict) else {}
+            n = int(old.get("n", 0) or 0)
+            ts = int(old.get("ts", 0) or 0)
+            # 哨兵与主巡检可能前后脚跑，同一次拥塞不能记成两票
+            if int(now) - ts >= 15:
+                n += 1
+            rec[ip] = {"n": n, "ts": int(now)}
+        confirmed[dom] = {
+            ip for ip in cur
+            if int((rec.get(ip) or {}).get("n", 0) or 0) >= RESOURCE_STRIKES
+        }
+        if confirmed[dom]:
+            log("资源域哨兵：%s 连续 %d 轮实测不通，撤下 %s"
+                % (dom, RESOURCE_STRIKES, " ".join(sorted(confirmed[dom]))))
+    try:
+        tmp = _RESOURCE_STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(st_all, f)
+        os.replace(tmp, _RESOURCE_STATE)
+    except Exception:
+        pass
+
+    # 3) 只有「确认坏钉 / 冗余不足」的域才需要探候选，正常一轮几乎零开销
     need_domains = []
-    for dom, (route, cur) in located.items():
-        good = [ip for ip in cur if verdict.get((dom, ip))]
-        if len(good) != len(cur) or len(good) < RESOURCE_MIN_IPS:
+    for dom, (_route, cur) in located.items():
+        good = [ip for ip in cur if ip not in confirmed[dom]]
+        if confirmed[dom] or len(good) < RESOURCE_MIN_IPS:
             need_domains.append(dom)
     cand_checks = []
     for dom in need_domains:
@@ -696,10 +741,10 @@ def _heal_resource_pins(now):
             coks = list(ex.map(_ok, cand_checks))
         verdict.update(dict(zip(cand_checks, coks)))
 
-    # 3) 逐域收敛：撤坏钉、留好 IP、补到至少 RESOURCE_MIN_IPS 个
+    # 4) 逐域收敛：撤掉已确认的坏钉、留好 IP、补到至少 RESOURCE_MIN_IPS 个
     changed = []
     for dom, (route, cur) in located.items():
-        good = [ip for ip in cur if verdict.get((dom, ip))]
+        good = [ip for ip in cur if ip not in confirmed[dom]]
         want = max(RESOURCE_MIN_IPS, len(cur))
         for d, ip in cand_checks:
             if d != dom or len(good) >= want:
@@ -729,7 +774,7 @@ def _heal_resource_pins(now):
         changed.append("%s: %s [%s] -> [%s]" % (route, dom,
                                                 " ".join(cur), " ".join(final)))
 
-    # 4) 复核通过的真边缘解除历史误拉黑（别让 400/404 误判挡住候选池）
+    # 5) 复核通过的真边缘解除历史误拉黑（别让 400/404 误判挡住候选池）
     nb = _clear_resource_false_blacklist([ip for (_d, ip), ok in verdict.items() if ok])
     if nb:
         log("资源域自愈：解除 %d 个被通用巡检误拉黑的真边缘 IP" % nb)
@@ -1203,7 +1248,9 @@ def health(ip, domain, route):
         spec = None
     if spec:
         path, codes, jumps = spec
-        ok = fpr.check(ip, domain, path, set(codes), set(jumps))[1]
+        # 与哨兵/优选统一用 check_retry（内部 2 次重试），避免单次抖动
+        # 把真边缘判成 wrongres 后撤下并拉黑 6 小时。
+        ok = fpr.check_retry(ip, domain, path, set(codes), set(jumps))[1]
         if ok and not fpr.allow_blob_ip(domain, ip):
             # 185.199.x 根路径同样回 400，但下 ghcr 大层会截断/超时
             ok = False
@@ -1538,16 +1585,9 @@ def _heal_once_impl(only_route=None):
                     state.pop(key, None)
                     dropped.append((ip, st))
                     continue
-                # 资源域的 wrongres 是专属 HTTP 判据给出的硬证据
-                # （fpr.check 内部已重试 2 次），再走 3 次失败窗口等于让坏钉
-                # 多挂十几分钟。有多点冗余兜底，偶发抖动误撤一个不会断域，
-                # 独立哨兵下一轮就会把它补回来。其余失败（timeout/fail）
-                # 仍按窗口确认，避免跨境 SYN 抖动一次就洗牌。
-                if (_is_resource_domain(dom) and not ok
-                        and st == "wrongres"):
-                    state.pop(key, None)
-                    dropped.append((ip, st))
-                    continue
+                # 资源域的快速换钉交给独立哨兵（30s 一轮 + 连续 2 次确认）；
+                # 主巡检 180s 一轮仍走窗口确认，两套都必须防抖，否则单次
+                # 跨境 SYN 抖动就会把 9 个域整批换掉 + 拉黑 6 小时。
                 bad, total, drop = window_strike(state, key, ok, st)
                 if drop:
                     dropped.append((ip, "%s %d/%d" % (st, bad, total)))
