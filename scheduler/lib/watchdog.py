@@ -521,8 +521,25 @@ def heal_pin_gaps(force=False):
 # heal_pin_gaps 只补「hosts 里没有的域名」，纠不了「域名在、IP 是错的」；
 # 这里按 fastly_pin_refresh 的每域专属判据复核在用 IP，错钉自动换回
 # 已验证的 Fastly 边缘，保证 ghcr 这类链路不用人工介入。
-FASTLY_HEAL_INTERVAL = 600
+# 资源域自愈底线（2026-11-10 用户明确要求「坏了立刻换 / 多点冗余」）：
+#   1) 坏钉立刻换：不等 600s 节流、不等主巡检 180s + 3 次失败窗口。
+#      独立哨兵每 30s 复核一次，判据是每域专属 HTTP 状态码（fpr.check
+#      内部已重试 2 次），一次 wrongres 就是硬证据。
+#   2) 多点冗余：每个资源域至少 RESOURCE_MIN_IPS 个 101 实测通过的 IP；
+#      坏一个只撤坏的那个，好 IP 全保留并立即补足，绝不留单点裸奔。
+FASTLY_HEAL_INTERVAL = int(os.environ.get("PREF_FASTLY_HEAL_SEC", "30"))
+RESOURCE_MIN_IPS = int(os.environ.get("PREF_RESOURCE_MIN_IPS", "3"))
+RESOURCE_GUARD_SEC = int(os.environ.get("PREF_RESOURCE_GUARD_SEC", "30"))
 _FASTLY_HEAL_STAMP = os.path.join(DATA_DIR, "fastly_pin_heal.stamp")
+_RESOURCE_LOCK = os.path.join(DATA_DIR, ".resource_heal.lock")
+
+
+def _is_resource_domain(dom):
+    try:
+        import fastly_pin_refresh as fpr
+        return dom in fpr.DOMAIN_SPECS
+    except Exception:
+        return False
 
 
 def _clear_resource_false_blacklist(verified):
@@ -548,10 +565,45 @@ def _clear_resource_false_blacklist(verified):
     return n
 
 
-def heal_bad_fastly_pins(force=False):
-    """校验资源域在用 IP 是不是真边缘；错钉换回 pin 里已验证的 IP。
+def resource_candidates(fpr, dom, skip):
+    """资源域专用补位候选：pin 已验证 IP > Fastly 同段变体 > 公共 DNS 实时解析。
 
-    返回 (修正域名数, 明细)。有改动时重建 all.hosts 并重载 mosdns。
+    主站段（140.82.x / 20.x）对这些域一律 301 踢回 github.com，绝不能拿来补位
+    —— 以前 candidates() 给的几乎全是 github.com 主站 IP，守护只能反复打印
+    「候选也不可用」。新解析不受历史黑名单约束（抖动误判的 wrongres 不该让
+    候选池永久枯竭），后面照样要过 101 的 fpr.check 实测，真坏的通不过。
+    """
+    out = []
+
+    def add(seq):
+        for ip in seq:
+            if (is_ip(ip) and ":" not in ip and ip not in skip
+                    and ip not in out and fpr.allow_blob_ip(dom, ip)):
+                out.append(ip)
+
+    try:
+        for name in sorted(os.listdir(PREF_DIR)):
+            if not name.startswith(".") or not any(name.endswith(s) for s in PIN_SUFFIXES):
+                continue
+            for d, ips in read_lines(os.path.join(PREF_DIR, name)):
+                if d == dom:
+                    add(ips)
+    except Exception:
+        pass
+    add([x for x in fpr.SAMPLE_IPS if x.startswith(("151.101.", "185.199."))])
+    try:
+        for srv in fpr.PUBLIC_DNS:
+            add(fpr.udp_dns_a(dom, srv))
+    except Exception:
+        pass
+    return out
+
+
+def heal_bad_fastly_pins(force=False):
+    """资源域全量复核：坏钉立即换、好 IP 保留、冗余不足立即补。
+
+    返回 (修正域名数, 明细)。只有 hosts 内容真变了才重建 all.hosts + reload。
+    force=True 给独立哨兵用（跳过节流，但照样走互斥锁）。
     """
     now = time.time()
     if not force:
@@ -561,37 +613,49 @@ def heal_bad_fastly_pins(force=False):
             last = 0.0
         if now - last < FASTLY_HEAL_INTERVAL:
             return 0, []
+    # 哨兵与主巡检可能同时进来，写同一份 hosts 会互相覆盖；陈旧锁超时自清。
+    try:
+        os.mkdir(_RESOURCE_LOCK)
+    except FileExistsError:
+        try:
+            if time.time() - os.path.getmtime(_RESOURCE_LOCK) > 180:
+                os.rmdir(_RESOURCE_LOCK)
+                os.mkdir(_RESOURCE_LOCK)
+            else:
+                return 0, []
+        except Exception:
+            return 0, []
+    except Exception:
+        pass
+    try:
+        return _heal_resource_pins(now)
+    finally:
+        try:
+            os.rmdir(_RESOURCE_LOCK)
+        except Exception:
+            pass
+
+
+def _heal_resource_pins(now):
     try:
         import fastly_pin_refresh as fpr
         specs = dict(fpr.DOMAIN_SPECS)
     except Exception:
         return 0, []
 
-    pin_ips = {}
+    # 各路 hosts 里资源域所在的行（同一域只处理第一次出现的位置）
+    located = {}
     try:
         for name in sorted(os.listdir(PREF_DIR)):
-            if not name.startswith(".") or not name.endswith(PIN_SUFFIXES):
+            if not name.endswith(".hosts") or name == "all.hosts":
                 continue
             for dom, ips in read_lines(os.path.join(PREF_DIR, name)):
-                if dom not in specs:
+                if dom not in specs or dom in located:
                     continue
-                v4 = [x for x in ips if is_ip(x) and ":" not in x]
-                if v4:
-                    pin_ips.setdefault(dom, []).extend(v4)
+                located[dom] = (name[:-6],
+                                [x for x in ips if is_ip(x) and ":" not in x])
     except Exception:
         return 0, []
-    if not pin_ips:
-        return 0, []
-
-    located = {}   # dom -> (route, first_ip, all_v4)
-    for name in sorted(os.listdir(PREF_DIR)):
-        if not name.endswith(".hosts") or name == "all.hosts":
-            continue
-        for dom, ips in read_lines(os.path.join(PREF_DIR, name)):
-            if dom in specs and dom not in located:
-                v4 = [x for x in ips if is_ip(x) and ":" not in x]
-                if v4:
-                    located[dom] = (name[:-6], v4[0], v4)
     if not located:
         return 0, []
 
@@ -602,35 +666,51 @@ def heal_bad_fastly_pins(force=False):
         path, codes, jumps = specs[dom]
         # ghcr 层域名只认 151.101.x 资源段：185.199.x 根路径同样回 400，
         # 但下大层会截断/超时（docker 报 unknown blob），专属判据分不出。
-        if not fpr.allow_blob_ip(dom, ip):
-            return dom, False
-        # 与 fastly_pin_refresh 用同一套判定：真边缘回专属状态码，
-        # 主站边缘 301 跳 github.com 一律判假（含带合法跳转的 gist）。
-        return dom, fpr.check(ip, dom, path, set(codes), set(jumps))[1]
+        if not is_ip(ip) or ":" in ip or not fpr.allow_blob_ip(dom, ip):
+            return False
+        try:
+            return bool(fpr.check(ip, dom, path, set(codes), set(jumps))[1])
+        except Exception:
+            return False
 
-    items = [(d, v[1]) for d, v in located.items()]
-    pin_first = [(d, pin_ips[d][0]) for d in located if pin_ips.get(d)]
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        rs = list(ex.map(_ok, items))
-        prs = list(ex.map(_ok, pin_first))
-    bad = [d for d, ok in rs if not ok]
-    # 专属判据复核通过的 pin IP 解除历史误拉黑
-    verified = [ip for (_d, ip), (_d2, ok) in zip(pin_first, prs) if ok]
-    nb = _clear_resource_false_blacklist(verified)
-    if nb:
-        log("资源域自愈：解除 %d 个被通用巡检误拉黑的真边缘 IP" % nb)
+    # 1) 全部在用 IP 并发复核（以前只看第一行第一个 IP，坏钉藏在后面就漏了）
+    checks = [(d, ip) for d, (_r, cur) in located.items() for ip in cur]
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        oks = list(ex.map(_ok, checks))
+    verdict = dict(zip(checks, oks))
 
-    fixed = []
-    for dom in bad:
-        route, first, _cur = located[dom]
-        path, codes, jumps = specs[dom]
-        good = None
-        for ip in [x for x in dict.fromkeys(pin_ips[dom])
-                   if fpr.allow_blob_ip(dom, x)][:PIN_HEAL_MAX_IPS]:
-            if fpr.check(ip, dom, path, set(codes), set(jumps))[1]:
-                good = ip
-                break
-        if not good or good == first:
+    # 2) 只有「有坏钉 / 冗余不足」的域才需要探候选，正常一轮几乎零开销
+    need_domains = []
+    for dom, (route, cur) in located.items():
+        good = [ip for ip in cur if verdict.get((dom, ip))]
+        if len(good) != len(cur) or len(good) < RESOURCE_MIN_IPS:
+            need_domains.append(dom)
+    cand_checks = []
+    for dom in need_domains:
+        skip = set(located[dom][1])
+        for ip in resource_candidates(fpr, dom, skip)[:PIN_HEAL_MAX_IPS * 2]:
+            if (dom, ip) not in cand_checks:
+                cand_checks.append((dom, ip))
+    if cand_checks:
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            coks = list(ex.map(_ok, cand_checks))
+        verdict.update(dict(zip(cand_checks, coks)))
+
+    # 3) 逐域收敛：撤坏钉、留好 IP、补到至少 RESOURCE_MIN_IPS 个
+    changed = []
+    for dom, (route, cur) in located.items():
+        good = [ip for ip in cur if verdict.get((dom, ip))]
+        want = max(RESOURCE_MIN_IPS, len(cur))
+        for d, ip in cand_checks:
+            if d != dom or len(good) >= want:
+                continue
+            if verdict.get((dom, ip)) and ip not in good:
+                good.append(ip)
+        # 全军覆没（跨境整段抖动）绝不把行删空，也不拉黑，保留原行等下轮
+        final = good if good else list(cur)
+        if not good:
+            log("资源域哨兵：%s 本轮候选全不通（链路抖动），保留原行等下轮" % dom)
+        if final == cur:
             continue
         host_path = os.path.join(PREF_DIR, route + ".hosts")
         try:
@@ -638,13 +718,23 @@ def heal_bad_fastly_pins(force=False):
         except Exception:
             continue
         rows = [ln for ln in rows if (ln.split()[:1] or [""])[0] != dom]
-        rows.append("%s %s" % (dom, good))
+        rows.append(" ".join([dom] + final))
         tmp = host_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write("\n".join(rows) + "\n")
-        os.replace(tmp, host_path)
-        fixed.append("%s: %s %s -> %s" % (route, dom, first, good))
-    if fixed:
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(rows) + "\n")
+            os.replace(tmp, host_path)
+        except Exception:
+            continue
+        changed.append("%s: %s [%s] -> [%s]" % (route, dom,
+                                                " ".join(cur), " ".join(final)))
+
+    # 4) 复核通过的真边缘解除历史误拉黑（别让 400/404 误判挡住候选池）
+    nb = _clear_resource_false_blacklist([ip for (_d, ip), ok in verdict.items() if ok])
+    if nb:
+        log("资源域自愈：解除 %d 个被通用巡检误拉黑的真边缘 IP" % nb)
+
+    if changed:
         _rebuild_all_hosts()
         reload_mosdns()
     try:
@@ -652,7 +742,7 @@ def heal_bad_fastly_pins(force=False):
             f.write(str(int(now)))
     except Exception:
         pass
-    return len(fixed), fixed
+    return len(changed), changed
 
 
 def _rebuild_all_hosts():
@@ -821,6 +911,14 @@ def candidates(route, domain, skip, ignore_bad=False):
     ignore_bad=True 只给「候选池被黑名单整批清空」时的自救用：不过滤黑名单
     重取候选，但仍要过 101 同一套 HTTPS 复核，通过才写 hosts 并解除误判。
     """
+    # 资源域必须走资源段候选：通用池里几乎全是 github.com 主站 IP，
+    # 对 avatars/raw/objects 一律 301/404，守护会一直判「候选也不可用」。
+    if _is_resource_domain(domain):
+        try:
+            import fastly_pin_refresh as fpr
+            return resource_candidates(fpr, domain, set(skip))[:12]
+        except Exception:
+            pass
     bad_all = subs.load_bad()
     bad = set() if ignore_bad else subs._bad_set()
     out = []
@@ -1412,7 +1510,10 @@ def _heal_once_impl(only_route=None):
                 state[tkey] = {"n": target, "ts": int(time.time()),
                                "try_ts": int(rec.get("try_ts", 0) or 0)}
             else:
-                target = len(ips)
+                # 资源域必须保持多点冗余：以前 target=len(ips)，单点坏了只补回
+                # 1 个，跨境一抖整个域就打不开。其余域沿用原有行数不动。
+                target = (max(len(ips), RESOURCE_MIN_IPS)
+                          if _is_resource_domain(dom) else len(ips))
             for ip in ips:
                 ok, st, ms, sp = results.get((route, dom, ip),
                                              (False, "fail", None, None))
@@ -1434,6 +1535,16 @@ def _heal_once_impl(only_route=None):
                         keep.append(ip)
                     continue
                 if is_hard(st):
+                    state.pop(key, None)
+                    dropped.append((ip, st))
+                    continue
+                # 资源域的 wrongres 是专属 HTTP 判据给出的硬证据
+                # （fpr.check 内部已重试 2 次），再走 3 次失败窗口等于让坏钉
+                # 多挂十几分钟。有多点冗余兜底，偶发抖动误撤一个不会断域，
+                # 独立哨兵下一轮就会把它补回来。其余失败（timeout/fail）
+                # 仍按窗口确认，避免跨境 SYN 抖动一次就洗牌。
+                if (_is_resource_domain(dom) and not ok
+                        and st == "wrongres"):
                     state.pop(key, None)
                     dropped.append((ip, st))
                     continue
@@ -1826,6 +1937,25 @@ def _doh_scan_async():
     t.start()
 
 
+def resource_guard_loop():
+    """资源域哨兵：与主巡检解耦，独立高频复核全部资源域在用 IP。
+
+    主巡检 180s 一轮、还要过 3 次失败窗口；单点坏钉靠它要挂十几分钟
+    （2026-11-10 raw.githubusercontent.com 单点钉死就是这个下场）。
+    这里每 30s 只探资源域（正常一轮全是好 IP，并发探测几秒就完），
+    有坏钉立即换、冗余不足立即补，不改动任何其它路。
+    """
+    while True:
+        time.sleep(max(15, RESOURCE_GUARD_SEC))
+        try:
+            n, det = heal_bad_fastly_pins(force=True)
+            if n:
+                log("资源域哨兵：立即修正 %d 个域名：%s"
+                    % (n, "; ".join(det[:4])))
+        except Exception as e:
+            log("资源域哨兵异常：%s" % e)
+
+
 def main():
     once = "--once" in sys.argv
     sec, on = runtime_cfg()
@@ -1838,6 +1968,9 @@ def main():
     if once:
         run_once()
         return 0
+    threading.Thread(target=resource_guard_loop, daemon=True).start()
+    log("资源域哨兵已启动：每 %d 秒复核一次，坏钉立即换 / 每域至少 %d 个冗余 IP"
+        % (max(15, RESOURCE_GUARD_SEC), RESOURCE_MIN_IPS))
     while True:
         sec, on = runtime_cfg()
         if on:
