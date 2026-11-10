@@ -534,6 +534,10 @@ RESOURCE_GUARD_SEC = int(os.environ.get("PREF_RESOURCE_GUARD_SEC", "30"))
 # 洗一次牌、每分钟重载两次 mosdns（那样反而比坏钉本身更不稳）。
 # 30s 一轮 × 2 = 约 1 分钟内换掉真坏钉，仍是「立刻」级别。
 RESOURCE_STRIKES = int(os.environ.get("PREF_RESOURCE_STRIKES", "2"))
+# 整轮在用 IP 不通比例超过这个数 = 跨境出口在丢包，不是 IP 坏。
+# 此时撤任何一个都是误杀，且候选必然也全 timeout，会把 3 个冗余压成 1 个
+# （2026-11-11 00:00 实测回归：raw 被压成单点、连续访问 0/10）。
+RESOURCE_OUTAGE_RATIO = float(os.environ.get("PREF_RESOURCE_OUTAGE_RATIO", "0.4"))
 _FASTLY_HEAL_STAMP = os.path.join(DATA_DIR, "fastly_pin_heal.stamp")
 _RESOURCE_LOCK = os.path.join(DATA_DIR, ".resource_heal.lock")
 _RESOURCE_STATE = os.path.join(DATA_DIR, "resource_strikes.json")
@@ -579,11 +583,24 @@ def resource_candidates(fpr, dom, skip):
     候选池永久枯竭），后面照样要过 101 的 fpr.check 实测，真坏的通不过。
     """
     out = []
+    # 刚被确认坏钉撤下的 IP 别又从 pin 文件里补回来（否则撤了又补、
+    # 补了又撤，每轮白重载一次）。按域判断，同一 IP 对别的域仍可用。
+    banned = set()
+    try:
+        st = json.load(open(_RESOURCE_STATE, encoding="utf-8"))
+        rec = st.get(dom, {}) if isinstance(st, dict) else {}
+        if isinstance(rec, dict):
+            banned = {ip for ip, v in rec.items()
+                      if isinstance(v, dict)
+                      and int(v.get("n", 0) or 0) >= RESOURCE_STRIKES}
+    except Exception:
+        pass
 
     def add(seq):
         for ip in seq:
             if (is_ip(ip) and ":" not in ip and ip not in skip
-                    and ip not in out and fpr.allow_blob_ip(dom, ip)):
+                    and ip not in banned and ip not in out
+                    and fpr.allow_blob_ip(dom, ip)):
                 out.append(ip)
 
     try:
@@ -686,6 +703,20 @@ def _heal_resource_pins(now):
         oks = list(ex.map(_ok, checks))
     verdict = dict(zip(checks, oks))
 
+    # 1b) 整批不通 = 链路抖动保护：这些 IP 来自不同域、不同段，一起挂
+    #     只可能是跨境出口丢包。这时候既不能记失败也不能改 hosts。
+    if len(checks) >= 6:
+        failed = sum(1 for v in oks if not v)
+        if failed / float(len(checks)) >= RESOURCE_OUTAGE_RATIO:
+            log("资源域哨兵：本轮 %d/%d 在用 IP 不通，判定链路抖动，"
+                "不动 hosts、不记失败" % (failed, len(checks)))
+            try:
+                with open(_FASTLY_HEAL_STAMP, "w", encoding="utf-8") as f:
+                    f.write(str(int(now)))
+            except Exception:
+                pass
+            return 0, []
+
     # 2) 失败计数：连续 RESOURCE_STRIKES 轮不通才确认是坏钉。
     #    单次抖动仍把 IP 留在行里（反正还有其它冗余 IP 兜底），
     #    避免「每 30 秒把 9 个域洗一遍 + 重载 mosdns」这种自伤式抖动。
@@ -695,6 +726,19 @@ def _heal_resource_pins(now):
             st_all = {}
     except Exception:
         st_all = {}
+    # 撤下过的 IP 回来时不能背着旧账：15 分钟没更新的计数一律清掉
+    for dom in list(st_all):
+        rec = st_all[dom]
+        if not isinstance(rec, dict):
+            st_all.pop(dom, None)
+            continue
+        for ip in list(rec):
+            v = rec[ip]
+            if (not isinstance(v, dict)
+                    or int(now) - int(v.get("ts", 0) or 0) > 900):
+                rec.pop(ip, None)
+        if not rec:
+            st_all.pop(dom, None)
     confirmed = {}
     for dom, (_route, cur) in located.items():
         rec = st_all.setdefault(dom, {})
@@ -714,7 +758,7 @@ def _heal_resource_pins(now):
             if int((rec.get(ip) or {}).get("n", 0) or 0) >= RESOURCE_STRIKES
         }
         if confirmed[dom]:
-            log("资源域哨兵：%s 连续 %d 轮实测不通，撤下 %s"
+            log("资源域哨兵：%s 连续 %d 轮实测不通，确认坏钉 %s（待补位）"
                 % (dom, RESOURCE_STRIKES, " ".join(sorted(confirmed[dom]))))
     try:
         tmp = _RESOURCE_STATE + ".tmp"
@@ -755,6 +799,13 @@ def _heal_resource_pins(now):
         final = good if good else list(cur)
         if not good:
             log("资源域哨兵：%s 本轮候选全不通（链路抖动），保留原行等下轮" % dom)
+        # 绝不把行写瘦：补位候选全 timeout 时若把 3 个 IP 压成 1 个，
+        # 反而制造单点裸奔（比留着那个坏 IP 糟得多）。链路恢复后候选能
+        # 测通，自然会把坏钉换掉并补回 3 个。
+        if len(final) < len(cur):
+            log("资源域哨兵：%s 补位不足，保留原 %d 个 IP 不动，等链路恢复"
+                % (dom, len(cur)))
+            continue
         if final == cur:
             continue
         host_path = os.path.join(PREF_DIR, route + ".hosts")
