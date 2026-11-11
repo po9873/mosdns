@@ -598,6 +598,9 @@ EXPERIENCE_PROBES = (
     ("github", "https://github.com/", "200"),
     ("raw", "https://raw.githubusercontent.com/jqtmviyu/"
             "Transmission-block-xunlei-pcdn/main/transmission_blacklist.gz", "200"),
+    # 2026-11-11 实测：api.github.com 被钉到 GitHub Pages 段 185.199.110.133，
+    # 全屋访问 GitHub API 返回 404 Pages 页，而通用判据一直判「能用」。
+    ("api", "https://api.github.com/", "200"),
 )
 
 
@@ -2144,6 +2147,23 @@ def _doh_scan_async():
 
 
 # ---------------------------------------------------------------- 体验哨兵
+def _api_ok(ip):
+    """api.github.com 根路径固定 200；用 101 自身 curl 直判，别用通用判据。
+
+    通用 health() 把 GitHub Pages 的 404 错误页当成正常 HTTPS 应答，这正是
+    api 错钉一直没被主巡检发现、却让全屋 GitHub API 全挂的原因。
+    """
+    try:
+        p = subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+             "-m", "6", "--resolve", "api.github.com:443:" + ip,
+             "https://api.github.com/"],
+            capture_output=True, timeout=8)
+        return (p.stdout or b"").decode("utf-8", "replace").strip() == "200"
+    except Exception:
+        return False
+
+
 def _experience_probe():
     """按 101 自身 DNS 真实访问，每个探针连测 3 次；返回 (是否可用, 明细)。
 
@@ -2192,25 +2212,56 @@ def _experience_self_heal(status):
     except Exception as e:
         actions.append("资源域自愈异常 %s" % e)
     try:
-        route, dom = "github", "github.com"
+        route = "github"
         rows = list(read_lines(os.path.join(PREF_DIR, route + ".hosts")))
-        cur = next((ips for d, ips in rows if d == dom), [])
-        cands = candidates(route, dom, set(cur), ignore_bad=True)[:24]
-        cr = _batch_health([(route, dom, c) for c in cands])
-        cur_res = _batch_health([(route, dom, ip) for ip in cur])
-        cur_ok = [ip for ip in cur
-                  if cur_res.get((route, dom, ip), (False,))[0]]
-        good = [c for c in cands if cr.get((route, dom, c), (False,))[0]]
-        if len(good) >= 2:
-            # 实测可用的优先：旧钉不能因为「原本占着 3 个位置」就把新测通的
-            # IP 挤掉，否则自愈看起来跑了、主站行其实一个字没换。
-            final = list(dict.fromkeys(cur_ok + good))[:max(3, len(cur))]
-            extra = [(d, ips) for d, ips in rows if d != dom]
-            write_hosts(route, dom, final, extra)
-            actions.append("主站 101 实测换成 %s" % " ".join(final))
-        else:
-            actions.append("候选池本轮无可用主站 IP（跨境出口丢包，DNS 层无法修复）；"
-                           "保留原 %d 个 IP 不动" % len(cur))
+        by_dom = {d: list(ips) for d, ips in rows}
+        fixed = {}
+        for dom in ("github.com", "api.github.com"):
+            cur = by_dom.get(dom, [])
+            if not cur:
+                continue
+            cands = candidates(route, dom, set(cur), ignore_bad=True)[:24]
+            if dom == "api.github.com":
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=8) as ex:
+                    oks = list(ex.map(_api_ok, cands))
+                good = [c for c, ok in zip(cands, oks) if ok]
+                cur_ok = [ip for ip in cur if _api_ok(ip)]
+            else:
+                items = ([(route, dom, c) for c in cands]
+                         + [(route, dom, ip) for ip in cur])
+                cr = _batch_health(items)
+                good = [c for c in cands
+                        if cr.get((route, dom, c), (False,))[0]]
+                cur_ok = [ip for ip in cur
+                          if cr.get((route, dom, ip), (False,))[0]]
+            # api 原本就是单点，有 1 个实测 200 的边缘就该换；主站仍要求
+            # 至少 2 个，避免拿「碰巧通一次」的 IP 去换掉整行冗余。
+            min_good = 1 if dom == "api.github.com" else 2
+            if len(good) >= min_good:
+                # 实测可用的优先：旧钉不能因为「原本占着 3 个位置」就把新
+                # 测通的 IP 挤掉，否则自愈看起来跑了、行其实一个字没换。
+                new = list(dict.fromkeys(cur_ok + good))[:max(3, len(cur))]
+                if new != cur:
+                    fixed[dom] = new
+                    actions.append("%s 101 实测换成 %s" % (dom, " ".join(new)))
+            else:
+                actions.append("%s 本轮无可用候选（跨境丢包，DNS 层无法修复），"
+                               "保留原 %d 个 IP 不动" % (dom, len(cur)))
+        if fixed:
+            by_dom.update(fixed)
+            # 探测耗时几秒，期间资源哨兵可能已改同一份文件，重放磁盘最新行
+            try:
+                disk = dict(read_lines(os.path.join(PREF_DIR, route + ".hosts")))
+                for d, ips in disk.items():
+                    if d not in fixed and _is_resource_domain(d):
+                        by_dom[d] = list(ips)
+            except Exception:
+                pass
+            main = by_dom.get("github.com", [])
+            extra = [(d, ips) for d, ips in by_dom.items()
+                     if d != "github.com"]
+            write_hosts(route, "github.com", main, extra)
     except Exception as e:
         actions.append("主站重选异常 %s" % e)
 
