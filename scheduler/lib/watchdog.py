@@ -606,16 +606,19 @@ EXPERIENCE_GUARD_SEC = int(os.environ.get("PREF_EXPERIENCE_GUARD_SEC", "45"))
 EXPERIENCE_HEAL_SEC = int(os.environ.get("PREF_EXPERIENCE_HEAL_SEC", "300"))
 EXPERIENCE_STATUS = os.path.join(DATA_DIR, "health_status.json")
 
-# ---- 2026-11-12：101 主动通知（默认关闭，配置只在宿主机） ----------------
-# 不进仓库、不改 compose：容器已挂 /data（宿主机 /mnt/sda1/mosdns），
-# 在宿主机 /mnt/sda1/mosdns/notify.env 写一行即可生效，例如：
-#   NOTIFY_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx
-#   NOTIFY_MIN_FAIL=3        # 连续几轮不可用才推（默认 3，约 2 分钟）
-#   NOTIFY_RECOVERY=1        # 恢复后是否再推一条（默认 1）
-# 支持企业微信群机器人（qyapi.weixin.qq.com）或任意接收 JSON 的 webhook。
-# 没有这个文件 / 没有 webhook 就完全静默，行为与以前一致。
+# ---- 2026-11-12：101 主动通知 ------------------------------------------
+# 直接复用面板里用户已经填好的推送配置：/data/settings.json 的 push 段
+# （enabled / url / events），发送走项目统一的 scheduler/lib/push.py，
+# 企业微信 / 钉钉 / 飞书 机器人格式都由它负责，不另起一套 payload。
+# 可选覆盖：宿主机 /data/notify.env（= /mnt/sda1/mosdns/notify.env）里写
+#   NOTIFY_WEBHOOK=...      # 覆盖面板 URL
+#   NOTIFY_MIN_FAIL=3       # 连续几轮不可用才推（默认 3，约 2 分钟）
+#   NOTIFY_RECOVERY=1       # 恢复后是否再推一条（默认 1）
+# 私有信息只在宿主机 settings.json，不进仓库、不改 compose、不改镜像名。
+# 面板 push 关闭且没有 notify.env 时完全静默，行为与以前一致。
 NOTIFY_ENV = os.path.join(DATA_DIR, "notify.env")
 NOTIFY_MIN_FAIL = int(os.environ.get("PREF_NOTIFY_MIN_FAIL", "3"))
+PUSH_PY = os.path.join(HERE, "push.py")
 
 EXPERIENCE_PROBES = (
     ("github", "https://github.com/", "200"),
@@ -2292,8 +2295,22 @@ _EXPERIENCE_HISTORY_KEYS = (
 
 
 def _notify_conf():
-    """只读宿主机挂载卷，私有信息不进仓库、不改 compose。"""
+    """通知配置来源（后者覆盖前者）：
+
+    1) 面板设置 settings.json 的 push 段 —— 用户早就在面板里填好了
+       企业微信机器人 Webhook，别再让人重填一遍。
+    2) 宿主机 /data/notify.env —— 可选覆盖，私有信息不进仓库。
+    两处都没有 / push 被关掉就返回空，调用方完全静默。
+    """
     conf = {}
+    try:
+        p = (json.load(open(SETTINGS_FILE, encoding="utf-8")) or {}).get("push") or {}
+        url = str(p.get("url", "") or "").strip()
+        if p.get("enabled") and url.startswith(("http://", "https://")):
+            conf["NOTIFY_WEBHOOK"] = url
+            conf["NOTIFY_SOURCE"] = "settings.push"
+    except Exception:
+        pass
     try:
         for ln in open(NOTIFY_ENV, encoding="utf-8", errors="replace"):
             ln = ln.strip()
@@ -2301,66 +2318,65 @@ def _notify_conf():
                 continue
             k, v = ln.split("=", 1)
             conf[k.strip()] = v.strip()
+        if conf.get("NOTIFY_WEBHOOK"):
+            conf["NOTIFY_SOURCE"] = "notify.env"
     except Exception:
         pass
     return conf
 
 
 def _notify_text(kind, status, incident=None):
+    """返回 (短标题, 正文)；消息格式交给项目统一的 push.py 处理。"""
     probes = status.get("probes", {})
     fmt = lambda n: "%s=%s" % (n, probes.get(n, {}).get("codes", []))
     t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(status.get("ts", 0)))
     if kind == "incident":
-        return (
-            "【101 主动告警】GitHub 访问持续异常\n"
-            "时间：%s\n连续不可用：%d 轮（约 %d 秒）\n"
-            "实测：%s / %s / %s\n"
-            "判定：%s\n自愈：%s\n"
-            "说明：101 已按自身 DNS 主动发现并自愈；配置保持多点冗余，"
-            "若为跨境出口丢包则 DNS 层无法根治，链路恢复后自动恢复，"
-            "无需人工糊 IP。"
-            % (t, status.get("consecutive_fail", 0),
-               status.get("consecutive_fail", 0) * EXPERIENCE_GUARD_SEC,
-               fmt("github"), fmt("raw"), fmt("api"),
-               status.get("last_verdict") or status.get("verdict") or "observing",
-               "; ".join(status.get("last_heal_actions", [])[:4]) or "本轮尚未自愈"))
+        return ("101 主动告警：GitHub 访问持续异常",
+                "时间：%s\n连续不可用：%d 轮（约 %d 秒）\n"
+                "实测：%s / %s / %s\n"
+                "判定：%s\n自愈：%s\n"
+                "说明：101 已按自身 DNS 主动发现并自愈；配置保持多点冗余，"
+                "若为跨境出口丢包则 DNS 层无法根治，链路恢复后自动恢复，"
+                "无需人工糊 IP。"
+                % (t, status.get("consecutive_fail", 0),
+                   status.get("consecutive_fail", 0) * EXPERIENCE_GUARD_SEC,
+                   fmt("github"), fmt("raw"), fmt("api"),
+                   status.get("last_verdict") or status.get("verdict") or "observing",
+                   "; ".join(status.get("last_heal_actions", [])[:4]) or "本轮尚未自愈"))
     inc = incident or status.get("last_incident") or {}
     dur = 0
     if inc.get("start") and inc.get("end"):
         dur = int(inc["end"]) - int(inc["start"])
-    return (
-        "【101 已恢复】GitHub 访问恢复正常\n"
-        "时间：%s\n故障窗口：%s（约 %d 秒，峰值连续 %d 轮不可用）\n"
-        "当时结论：%s\n当前实测：%s / %s / %s\n"
-        "说明：101 自己发现、自己判定、自己恢复，无需人工介入。"
-        % (t,
-           time.strftime("%H:%M:%S", time.localtime(inc.get("start") or 0)),
-           dur, inc.get("peak_fail", 0), inc.get("verdict", ""),
-           fmt("github"), fmt("raw"), fmt("api")))
+    return ("101 已恢复：GitHub 访问恢复正常",
+            "时间：%s\n故障窗口：%s（约 %d 秒，峰值连续 %d 轮不可用）\n"
+            "当时结论：%s\n当前实测：%s / %s / %s\n"
+            "说明：101 自己发现、自己判定、自己恢复，无需人工介入。"
+            % (t,
+               time.strftime("%H:%M:%S", time.localtime(inc.get("start") or 0)),
+               dur, inc.get("peak_fail", 0), inc.get("verdict", ""),
+               fmt("github"), fmt("raw"), fmt("api")))
 
 
 def _notify_send(kind, status, incident=None):
-    """主动推一条出去；没配置 webhook 就静默跳过，失败只记日志不影响主流程。"""
+    """走面板同一条推送通道 push.py（企微/钉钉/飞书格式统一）。
+
+    没配置 webhook 就静默跳过；发送失败只记日志，绝不影响自愈主流程。
+    """
     conf = _notify_conf()
     url = conf.get("NOTIFY_WEBHOOK", "").strip()
     if not url:
         return False
-    text = _notify_text(kind, status, incident)
-    if "qyapi.weixin.qq.com" in url:
-        payload = {"msgtype": "text", "text": {"content": text}}
-    else:
-        payload = {"kind": kind, "text": text, "status": status}
+    title, body = _notify_text(kind, status, incident)
+    text = "【MosDNS 优选】%s\n%s" % (title, body)
     try:
         p = subprocess.run(
-            ["curl", "-s", "-m", "6", "--noproxy", "*",
-             "-H", "Content-Type: application/json", "-X", "POST",
-             "-d", json.dumps(payload, ensure_ascii=False), url],
-            capture_output=True, timeout=10)
-        out = (p.stdout or b"").decode("utf-8", "replace").strip()
-        ok = p.returncode == 0 and ('"errcode":0' in out or '"errcode": 0' in out
-                                   or not out or "ok" in out.lower()
-                                   or "success" in out.lower())
-        log("体验哨兵：主动通知 %s %s %s" % (kind, "已送达" if ok else "未确认", out[:120]))
+            ["python3", PUSH_PY, url, title, body],
+            capture_output=True, timeout=12)
+        ok = p.returncode == 0
+        err = (p.stderr or b"").decode("utf-8", "replace").strip()
+        log("体验哨兵：主动通知 %s %s（来源 %s）%s"
+            % (kind, "已送达" if ok else "失败",
+               conf.get("NOTIFY_SOURCE", "settings.push"), err[:120]))
         try:
             subs.add_event("notify", "dns", "",
                            "101 主动通知 %s" % kind, text[:180])
@@ -2654,8 +2670,9 @@ def main():
     log("体验哨兵已启动：每 %d 秒按 101 自身 DNS 真实访问验收，"
         "连续 2 轮不可用主动自愈（%d 秒限频），结论与故障窗口写 health_status.json"
         % (max(20, EXPERIENCE_GUARD_SEC), EXPERIENCE_HEAL_SEC))
-    log("主动通知：%s 有 webhook 则持续 %d 轮不可用主动推送、恢复再推一条；"
-        "无配置静默跳过" % (NOTIFY_ENV, NOTIFY_MIN_FAIL))
+    log("主动通知：复用面板 settings.json 的 push webhook（%s 可覆盖），"
+        "持续 %d 轮不可用主动推送、恢复再推一条；未启用则静默跳过"
+        % (NOTIFY_ENV, NOTIFY_MIN_FAIL))
     log("抖动粘性：整轮不通 >=%.0f%% 后冻结换钉 %d 秒，余波期间不通 >=%.0f%% "
         "只复核不洗牌" % (RESOURCE_OUTAGE_RATIO * 100, RESOURCE_OUTAGE_COOL_SEC,
                      RESOURCE_STABLE_RATIO * 100))
