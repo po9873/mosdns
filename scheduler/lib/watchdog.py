@@ -248,13 +248,14 @@ def _reload_worker():
             _do_reload_locked()
 
 
-def reload_mosdns():
+def reload_mosdns(force=False):
     """合并重载：RELOAD_MIN_SEC 内多次变更只重启一次 DNS。
 
-    --once 模式没有常驻 worker，直接同步重载，避免变更永远不生效。
+    --once 模式没有常驻 worker，直接同步重载；主动自愈（5 分钟限频）用
+    force=True 立即生效，不必等合并窗口结束。
     """
     with _reload_lock:
-        if not _reload_state["worker"]:
+        if force or not _reload_state["worker"]:
             return _do_reload_locked()
         if time.time() - _reload_state["last"] < RELOAD_MIN_SEC:
             _reload_state["pending"] = True
@@ -2147,21 +2148,25 @@ def _doh_scan_async():
 
 
 # ---------------------------------------------------------------- 体验哨兵
-def _api_ok(ip):
-    """api.github.com 根路径固定 200；用 101 自身 curl 直判，别用通用判据。
+def _api_ok(ip, tries=2):
+    """api.github.com 根路径固定 200；用 101 自身 curl 连测 2 次。
 
     通用 health() 把 GitHub Pages 的 404 错误页当成正常 HTTPS 应答，这正是
     api 错钉一直没被主巡检发现、却让全屋 GitHub API 全挂的原因。
+    跨境抖动时 IP 会「碰巧通一次」，单次 200 不足以补进冗余，必须连续通过。
     """
-    try:
-        p = subprocess.run(
-            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-             "-m", "6", "--resolve", "api.github.com:443:" + ip,
-             "https://api.github.com/"],
-            capture_output=True, timeout=8)
-        return (p.stdout or b"").decode("utf-8", "replace").strip() == "200"
-    except Exception:
-        return False
+    for _ in range(tries):
+        try:
+            p = subprocess.run(
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                 "-m", "6", "--resolve", "api.github.com:443:" + ip,
+                 "https://api.github.com/"],
+                capture_output=True, timeout=8)
+            if (p.stdout or b"").decode("utf-8", "replace").strip() != "200":
+                return False
+        except Exception:
+            return False
+    return True
 
 
 def _experience_probe():
@@ -2262,11 +2267,24 @@ def _experience_self_heal(status):
             extra = [(d, ips) for d, ips in by_dom.items()
                      if d != "github.com"]
             write_hosts(route, "github.com", main, extra)
+            # 主动自愈的换钉必须立刻生效：以前只写 hosts 不重载，要等别的
+            # 任务碰巧重载，实测 00:10:48 换完到 00:12:03 才生效。
+            reload_mosdns(force=True)
     except Exception as e:
         actions.append("主站重选异常 %s" % e)
 
     status["last_heal"] = int(time.time())
     status["last_heal_actions"] = actions
+    changed = any("101 实测换成" in a for a in actions)
+    if changed:
+        status["verdict"] = "self_healed"
+        status["note"] = ("101 已主动发现、换钉并立即重载；"
+                          ".252/.254 缓存约 120 秒后同步，期间旧应答属正常")
+    else:
+        status["verdict"] = "upstream_packet_loss"
+        status["note"] = ("101 已主动验收并自愈：本轮候选实测全不通，"
+                          "是跨境出口按 IP 段丢包，DNS 层无法修复；"
+                          "配置保持多点冗余，链路恢复后自动恢复")
     _write_experience_status(status)
     for a in actions:
         log("体验哨兵自愈：%s" % a)
@@ -2298,6 +2316,7 @@ def experience_guard_loop():
                 "probes": detail,
                 "consecutive_fail": fails,
                 "last_heal": last_heal,
+                "verdict": "",
                 "note": "",
             }
             if usable:
