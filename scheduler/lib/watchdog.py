@@ -574,6 +574,16 @@ RESOURCE_STRIKES = int(os.environ.get("PREF_RESOURCE_STRIKES", "2"))
 # 此时撤任何一个都是误杀，且候选必然也全 timeout，会把 3 个冗余压成 1 个
 # （2026-11-11 00:00 实测回归：raw 被压成单点、连续访问 0/10）。
 RESOURCE_OUTAGE_RATIO = float(os.environ.get("PREF_RESOURCE_OUTAGE_RATIO", "0.4"))
+# 2026-11-12：抖动保护从「全有全无」升级为「粘性窗口」。
+# 实测 00:24-00:34 跨境间歇丢包：整轮 48% 不通那轮 return 不记失败，但夹在
+# 中间 30% 不通的轮次照样累积失败票，链路一回暖就「确认坏钉→立即修正」。
+# 同一颗 151.101.194.217 七分钟内被换走、换进、又判坏，36 分钟重载 18 次。
+# 现在：最近 RESOURCE_OUTAGE_COOL_SEC 内出现过整轮抖动后，后续轮次必须实测
+# 「绝大多数在用 IP 都通」(不通比例 < RESOURCE_STABLE_RATIO) 才解冻换钉；
+# 抖动余波期间只复核、不记失败票、不换钉、不重载。
+RESOURCE_OUTAGE_COOL_SEC = int(os.environ.get("PREF_RESOURCE_OUTAGE_COOL_SEC", "180"))
+RESOURCE_STABLE_RATIO = float(os.environ.get("PREF_RESOURCE_STABLE_RATIO", "0.15"))
+_LINK_OUTAGE_STAMP = os.path.join(DATA_DIR, "link_outage.stamp")
 _FASTLY_HEAL_STAMP = os.path.join(DATA_DIR, "fastly_pin_heal.stamp")
 _RESOURCE_LOCK = os.path.join(DATA_DIR, ".resource_heal.lock")
 _RESOURCE_STATE = os.path.join(DATA_DIR, "resource_strikes.json")
@@ -595,6 +605,18 @@ _reload_state = {"last": 0.0, "pending": False, "worker": False}
 EXPERIENCE_GUARD_SEC = int(os.environ.get("PREF_EXPERIENCE_GUARD_SEC", "45"))
 EXPERIENCE_HEAL_SEC = int(os.environ.get("PREF_EXPERIENCE_HEAL_SEC", "300"))
 EXPERIENCE_STATUS = os.path.join(DATA_DIR, "health_status.json")
+
+# ---- 2026-11-12：101 主动通知（默认关闭，配置只在宿主机） ----------------
+# 不进仓库、不改 compose：容器已挂 /data（宿主机 /mnt/sda1/mosdns），
+# 在宿主机 /mnt/sda1/mosdns/notify.env 写一行即可生效，例如：
+#   NOTIFY_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx
+#   NOTIFY_MIN_FAIL=3        # 连续几轮不可用才推（默认 3，约 2 分钟）
+#   NOTIFY_RECOVERY=1        # 恢复后是否再推一条（默认 1）
+# 支持企业微信群机器人（qyapi.weixin.qq.com）或任意接收 JSON 的 webhook。
+# 没有这个文件 / 没有 webhook 就完全静默，行为与以前一致。
+NOTIFY_ENV = os.path.join(DATA_DIR, "notify.env")
+NOTIFY_MIN_FAIL = int(os.environ.get("PREF_NOTIFY_MIN_FAIL", "3"))
+
 EXPERIENCE_PROBES = (
     ("github", "https://github.com/", "200"),
     ("raw", "https://raw.githubusercontent.com/jqtmviyu/"
@@ -605,15 +627,41 @@ EXPERIENCE_PROBES = (
 )
 
 
+def _in_outage_cooldown(now=None):
+    """最近是否刚发生过整轮链路抖动（跨境间歇丢包会有余波）。"""
+    try:
+        last = float(open(_LINK_OUTAGE_STAMP, encoding="utf-8").read().strip() or 0)
+    except Exception:
+        return False
+    return (now or time.time()) - last < RESOURCE_OUTAGE_COOL_SEC
+
+
+def _clear_resource_strikes():
+    """抖动轮清失败票：跨境丢包时 timeout 不是 IP 坏，票留着会在链路
+    回暖那一轮凑够 STRIKES，把刚通过复核的好 IP 误判成坏钉换掉。"""
+    try:
+        tmp = _RESOURCE_STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+        os.replace(tmp, _RESOURCE_STATE)
+    except Exception:
+        pass
+
+
 def _guard_final(cur, final, target, tested_fail, tested_total):
     """统一「不写瘦」保护，主巡检与资源哨兵共用同一套判据。
 
     返回 (最终行, 是否链路抖动, 是否补位不足)。抖动期间故意不换钉：
     那时所有候选也 timeout，换只会把 3 个冗余压成 1 个单点。
     """
-    outage = (tested_total > 0
-              and tested_fail / float(tested_total) >= RESOURCE_OUTAGE_RATIO)
-    if outage:
+    ratio = (tested_fail / float(tested_total)) if tested_total > 0 else 0.0
+    outage = tested_total > 0 and ratio >= RESOURCE_OUTAGE_RATIO
+    # 抖动余波同样冻结：只有整体实测恢复到「绝大多数在用 IP 都通」，
+    # 个别不通才可能是真坏钉，否则换上去的新 IP 下一轮又会被判坏。
+    aftershock = (tested_total > 0 and not outage
+                  and _in_outage_cooldown()
+                  and ratio >= RESOURCE_STABLE_RATIO)
+    if outage or aftershock:
         return list(cur), True, False
     if len(final) < len(cur) and len(final) < target:
         return list(cur), False, True
@@ -782,11 +830,30 @@ def _heal_resource_pins(now):
 
     # 1b) 整批不通 = 链路抖动保护：这些 IP 来自不同域、不同段，一起挂
     #     只可能是跨境出口丢包。这时候既不能记失败也不能改 hosts。
+    #     并记一个「抖动冷却」时间戳，余波期间仍冻结换钉，避免间歇丢包
+    #     把同一批 IP 来回洗牌（2026-11-12 00:24-00:34 实测）。
     if len(checks) >= 6:
         failed = sum(1 for v in oks if not v)
-        if failed / float(len(checks)) >= RESOURCE_OUTAGE_RATIO:
+        ratio = failed / float(len(checks))
+        if ratio >= RESOURCE_OUTAGE_RATIO:
             log("资源域哨兵：本轮 %d/%d 在用 IP 不通，判定链路抖动，"
-                "不动 hosts、不记失败" % (failed, len(checks)))
+                "冻结换钉 %d 秒、不动 hosts、不记失败"
+                % (failed, len(checks), RESOURCE_OUTAGE_COOL_SEC))
+            try:
+                with open(_LINK_OUTAGE_STAMP, "w", encoding="utf-8") as f:
+                    f.write(str(int(now)))
+                with open(_FASTLY_HEAL_STAMP, "w", encoding="utf-8") as f:
+                    f.write(str(int(now)))
+            except Exception:
+                pass
+            # 抖动轮不记失败，且要把之前累积的票清零：否则夹在抖动之间
+            # 的低比例轮次会把票凑够 STRIKES，链路一回暖就误杀好 IP。
+            _clear_resource_strikes()
+            return 0, []
+        if _in_outage_cooldown(now) and ratio >= RESOURCE_STABLE_RATIO:
+            log("资源域哨兵：链路抖动余波（%d/%d 在用 IP 不通），"
+                "只复核不换钉，等链路稳定" % (failed, len(checks)))
+            _clear_resource_strikes()
             try:
                 with open(_FASTLY_HEAL_STAMP, "w", encoding="utf-8") as f:
                     f.write(str(int(now)))
@@ -1771,7 +1838,7 @@ def _heal_once_impl(only_route=None):
             final, outage, thin = _guard_final(ips, final, target,
                                                nfail, len(tested))
             if outage:
-                log("%s 路：%s 本轮 %d/%d 在用 IP 不通，判定链路抖动，"
+                log("%s 路：%s 本轮 %d/%d 在用 IP 不通，判定链路抖动或抖动余波，"
                     "保留原行不动（不撤钉、不拉黑）"
                     % (route, dom, nfail, len(tested)))
                 dropped = []
@@ -2192,11 +2259,117 @@ def _experience_probe():
     return all(v["ok"] >= 2 for v in detail.values()), detail
 
 
+_EXPERIENCE_LOCK = threading.Lock()
+
+
+def _read_experience_status():
+    """读回上一轮状态：恢复分支不能再把「上次自愈结论/故障窗口」抹掉。"""
+    with _EXPERIENCE_LOCK:
+        try:
+            s = json.load(open(EXPERIENCE_STATUS, encoding="utf-8"))
+            return s if isinstance(s, dict) else {}
+        except Exception:
+            return {}
+
+
 def _write_experience_status(status):
+    # 主循环与异步自愈线程可能同时写：jsave 的 .tmp 同名，必须串行，
+    # 否则一个线程 replace 到一半的文件会写成半截 JSON。
+    with _EXPERIENCE_LOCK:
+        try:
+            jsave(EXPERIENCE_STATUS, status)
+        except Exception as e:
+            log("体验哨兵：状态写入失败：%s" % e)
+
+
+# 恢复后仍要保留的历史字段，用户打开面板能看到「刚才发生过什么」，
+# 而不是只看到一句「现在正常」。
+_EXPERIENCE_HISTORY_KEYS = (
+    "last_heal", "last_heal_actions", "last_verdict", "last_heal_note",
+    "last_incident", "notified_incident_for", "notified_recovery_for",
+    "incident_start", "peak_fail",
+)
+
+
+def _notify_conf():
+    """只读宿主机挂载卷，私有信息不进仓库、不改 compose。"""
+    conf = {}
     try:
-        jsave(EXPERIENCE_STATUS, status)
+        for ln in open(NOTIFY_ENV, encoding="utf-8", errors="replace"):
+            ln = ln.strip()
+            if not ln or ln.startswith("#") or "=" not in ln:
+                continue
+            k, v = ln.split("=", 1)
+            conf[k.strip()] = v.strip()
+    except Exception:
+        pass
+    return conf
+
+
+def _notify_text(kind, status, incident=None):
+    probes = status.get("probes", {})
+    fmt = lambda n: "%s=%s" % (n, probes.get(n, {}).get("codes", []))
+    t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(status.get("ts", 0)))
+    if kind == "incident":
+        return (
+            "【101 主动告警】GitHub 访问持续异常\n"
+            "时间：%s\n连续不可用：%d 轮（约 %d 秒）\n"
+            "实测：%s / %s / %s\n"
+            "判定：%s\n自愈：%s\n"
+            "说明：101 已按自身 DNS 主动发现并自愈；配置保持多点冗余，"
+            "若为跨境出口丢包则 DNS 层无法根治，链路恢复后自动恢复，"
+            "无需人工糊 IP。"
+            % (t, status.get("consecutive_fail", 0),
+               status.get("consecutive_fail", 0) * EXPERIENCE_GUARD_SEC,
+               fmt("github"), fmt("raw"), fmt("api"),
+               status.get("last_verdict") or status.get("verdict") or "observing",
+               "; ".join(status.get("last_heal_actions", [])[:4]) or "本轮尚未自愈"))
+    inc = incident or status.get("last_incident") or {}
+    dur = 0
+    if inc.get("start") and inc.get("end"):
+        dur = int(inc["end"]) - int(inc["start"])
+    return (
+        "【101 已恢复】GitHub 访问恢复正常\n"
+        "时间：%s\n故障窗口：%s（约 %d 秒，峰值连续 %d 轮不可用）\n"
+        "当时结论：%s\n当前实测：%s / %s / %s\n"
+        "说明：101 自己发现、自己判定、自己恢复，无需人工介入。"
+        % (t,
+           time.strftime("%H:%M:%S", time.localtime(inc.get("start") or 0)),
+           dur, inc.get("peak_fail", 0), inc.get("verdict", ""),
+           fmt("github"), fmt("raw"), fmt("api")))
+
+
+def _notify_send(kind, status, incident=None):
+    """主动推一条出去；没配置 webhook 就静默跳过，失败只记日志不影响主流程。"""
+    conf = _notify_conf()
+    url = conf.get("NOTIFY_WEBHOOK", "").strip()
+    if not url:
+        return False
+    text = _notify_text(kind, status, incident)
+    if "qyapi.weixin.qq.com" in url:
+        payload = {"msgtype": "text", "text": {"content": text}}
+    else:
+        payload = {"kind": kind, "text": text, "status": status}
+    try:
+        p = subprocess.run(
+            ["curl", "-s", "-m", "6", "--noproxy", "*",
+             "-H", "Content-Type: application/json", "-X", "POST",
+             "-d", json.dumps(payload, ensure_ascii=False), url],
+            capture_output=True, timeout=10)
+        out = (p.stdout or b"").decode("utf-8", "replace").strip()
+        ok = p.returncode == 0 and ('"errcode":0' in out or '"errcode": 0' in out
+                                   or not out or "ok" in out.lower()
+                                   or "success" in out.lower())
+        log("体验哨兵：主动通知 %s %s %s" % (kind, "已送达" if ok else "未确认", out[:120]))
+        try:
+            subs.add_event("notify", "dns", "",
+                           "101 主动通知 %s" % kind, text[:180])
+        except Exception:
+            pass
+        return ok
     except Exception as e:
-        log("体验哨兵：状态写入失败：%s" % e)
+        log("体验哨兵：主动通知异常 %s" % e)
+        return False
 
 
 def _experience_self_heal(status):
@@ -2273,19 +2446,29 @@ def _experience_self_heal(status):
     except Exception as e:
         actions.append("主站重选异常 %s" % e)
 
-    status["last_heal"] = int(time.time())
-    status["last_heal_actions"] = actions
     changed = any("101 实测换成" in a for a in actions)
     if changed:
-        status["verdict"] = "self_healed"
-        status["note"] = ("101 已主动发现、换钉并立即重载；"
-                          ".252/.254 缓存约 120 秒后同步，期间旧应答属正常")
+        verdict = "self_healed"
+        note = ("101 已主动发现、换钉并立即重载；"
+                ".252/.254 缓存约 120 秒后同步，期间旧应答属正常")
     else:
-        status["verdict"] = "upstream_packet_loss"
-        status["note"] = ("101 已主动验收并自愈：本轮候选实测全不通，"
-                          "是跨境出口按 IP 段丢包，DNS 层无法修复；"
-                          "配置保持多点冗余，链路恢复后自动恢复")
-    _write_experience_status(status)
+        verdict = "upstream_packet_loss"
+        note = ("101 已主动验收并自愈：本轮候选实测全不通，"
+                "是跨境出口按 IP 段丢包，DNS 层无法修复；"
+                "配置保持多点冗余，链路恢复后自动恢复")
+    # 异步线程与主循环可能前后脚写同一文件：以磁盘最新为底合并，
+    # 别把主循环刚记的故障窗口 / 历史结论覆盖掉。
+    merged = _read_experience_status()
+    merged.update(status)
+    merged.update({
+        "last_heal": int(time.time()),
+        "last_heal_actions": actions,
+        "last_verdict": verdict,
+        "last_heal_note": note,
+        "verdict": verdict,
+        "note": note,
+    })
+    _write_experience_status(merged)
     for a in actions:
         log("体验哨兵自愈：%s" % a)
     try:
@@ -2298,38 +2481,105 @@ def _experience_self_heal(status):
 def experience_guard_loop():
     """按真实访问主动验收，别再等用户打开网页才发现坏。
 
-    每 EXPERIENCE_GUARD_SEC 走 101 自身 DNS 连测 github.com 与 raw 各 3 次；
-    连续 2 轮不可用就主动触发一次强制自愈（EXPERIENCE_HEAL_SEC 限频），
-    结果写 health_status.json 和面板事件。跨境丢包时如实标注「非 DNS 故障」，
-    不假装修好，也不无限洗牌。
+    每 EXPERIENCE_GUARD_SEC 走 101 自身 DNS 连测 github/raw/api 各 3 次；
+    连续 2 轮不可用主动触发强制自愈（限频从磁盘读，重启不丢），持续
+    NOTIFY_MIN_FAIL 轮主动推通知，恢复后再推一条。结论与故障窗口持久写
+    health_status.json —— 以前恢复分支每轮把 verdict 清空、last_heal 是
+    进程内变量，101 明明发现并判过，用户打开面板却只看到「现在正常」。
     """
     fails = 0
-    last_heal = 0
     while True:
         time.sleep(max(20, EXPERIENCE_GUARD_SEC))
         try:
             usable, detail = _experience_probe()
-            status = {
-                "ts": int(time.time()),
+            prev = _read_experience_status()
+            now = int(time.time())
+            conf = _notify_conf()
+            try:
+                min_fail = max(2, int(conf.get("NOTIFY_MIN_FAIL",
+                                               NOTIFY_MIN_FAIL)))
+            except Exception:
+                min_fail = NOTIFY_MIN_FAIL
+            # 历史字段一律先继承，恢复分支绝不清空
+            status = {k: prev[k] for k in _EXPERIENCE_HISTORY_KEYS if k in prev}
+            status.update({
+                "ts": now,
                 "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "usable": usable,
                 "probes": detail,
-                "consecutive_fail": fails,
-                "last_heal": last_heal,
-                "verdict": "",
-                "note": "",
-            }
+                "consecutive_fail": 0,
+            })
+
             if usable:
                 if fails:
-                    log("体验哨兵：101 真实访问恢复正常（github/raw 均可用）")
-                fails = 0
-                status["note"] = "101 真实访问正常"
+                    incident = {
+                        "start": int(prev.get("incident_start") or 0),
+                        "end": now,
+                        "peak_fail": max(fails, int(prev.get("peak_fail", 0) or 0)),
+                        "verdict": prev.get("last_verdict", ""),
+                        "note": prev.get("last_heal_note", ""),
+                        "actions": prev.get("last_heal_actions", []),
+                    }
+                    dur = (now - incident["start"]) if incident["start"] else 0
+                    status.update({
+                        "last_incident": incident,
+                        "verdict": "recovered",
+                        "note": ("101 真实访问已恢复正常；"
+                                 "最近一次故障与判定见 last_incident"),
+                        "incident_start": 0,
+                        "peak_fail": 0,
+                    })
+                    log("体验哨兵：101 真实访问恢复正常，故障窗口 %d 秒 / "
+                        "峰值连续 %d 轮不可用，结论 %s"
+                        % (dur, incident["peak_fail"], incident["verdict"]))
+                    try:
+                        subs.add_event("recovered", "dns", "",
+                                       "101 真实访问恢复正常",
+                                       "持续 %d 轮，结论 %s" % (
+                                           incident["peak_fail"],
+                                           incident["verdict"]))
+                    except Exception:
+                        pass
+                    if conf.get("NOTIFY_RECOVERY", "1") == "1":
+                        status["notified_recovery_for"] = now
+                        _notify_send("recovered", status, incident)
+                else:
+                    v = prev.get("verdict", "")
+                    status["verdict"] = v if v in ("recovered", "") else ""
+                    status["note"] = "101 真实访问正常"
                 _write_experience_status(status)
+                fails = 0
                 continue
+
+            # ---- 不可用窗口 ----
+            window_start = int(prev.get("incident_start") or now)
+            if fails == 0:
+                window_start = now
+                try:
+                    subs.add_event("incident", "dns", "",
+                                   "101 主动发现真实访问不可用",
+                                   "github=%s raw=%s api=%s" % (
+                                       detail.get("github", {}).get("codes"),
+                                       detail.get("raw", {}).get("codes"),
+                                       detail.get("api", {}).get("codes")))
+                except Exception:
+                    pass
             fails += 1
-            status["consecutive_fail"] = fails
-            status["note"] = ("101 自身 DNS 真实访问失败，正在主动自愈"
-                              if fails >= 2 else "101 检测到访问异常，继续观察")
+            # 自愈线程写的本窗口结论要沿用；上次故障的旧结论不能串到本窗口
+            keep_v = prev.get("verdict", "")
+            status.update({
+                "consecutive_fail": fails,
+                "incident_start": window_start,
+                "peak_fail": max(fails, int(prev.get("peak_fail", 0) or 0)),
+                "verdict": (keep_v if keep_v in ("self_healed",
+                                                 "upstream_packet_loss",
+                                                 "observing", "degraded")
+                            else "observing"),
+                "note": ("101 自身 DNS 真实访问失败，正在主动自愈"
+                         if fails >= 2 else "101 检测到访问异常，继续观察"),
+            })
+            if status["verdict"] == "observing" and fails >= 2:
+                status["verdict"] = "degraded"
             _write_experience_status(status)
             log("体验哨兵：第 %d 轮真实访问不可用 github=%s raw=%s"
                 % (fails, detail.get("github", {}).get("codes"),
@@ -2337,17 +2587,28 @@ def experience_guard_loop():
             try:
                 subs.add_event("experience", "dns", "",
                                "真实访问失败 %d 轮" % fails,
-                               "github=%s raw=%s" % (
+                               "github=%s raw=%s api=%s" % (
                                    detail.get("github", {}).get("codes"),
-                                   detail.get("raw", {}).get("codes")))
+                                   detail.get("raw", {}).get("codes"),
+                                   detail.get("api", {}).get("codes")))
             except Exception:
                 pass
-            if fails >= 2 and time.time() - last_heal >= EXPERIENCE_HEAL_SEC:
-                last_heal = int(time.time())
+
+            # 限频读磁盘，容器重启也不会把 last_heal 归零后立刻重复自愈
+            if fails >= 2 and now - int(prev.get("last_heal", 0) or 0) >= EXPERIENCE_HEAL_SEC:
+                status["last_heal"] = now
+                _write_experience_status(status)
                 log("体验哨兵：连续 %d 轮不可用，101 主动触发强制自愈" % fails)
                 threading.Thread(
                     target=lambda: _experience_self_heal(dict(status)),
                     daemon=True).start()
+
+            # 持续不可用主动推通知，同一个故障窗口只推一次
+            if (fails >= min_fail
+                    and int(prev.get("notified_incident_for") or 0) != window_start):
+                status["notified_incident_for"] = window_start
+                _write_experience_status(status)
+                _notify_send("incident", status)
         except Exception as e:
             log("体验哨兵异常：%s" % e)
 
@@ -2391,8 +2652,13 @@ def main():
     log("资源域哨兵已启动：每 %d 秒复核一次，坏钉立即换 / 每域至少 %d 个冗余 IP"
         % (max(15, RESOURCE_GUARD_SEC), RESOURCE_MIN_IPS))
     log("体验哨兵已启动：每 %d 秒按 101 自身 DNS 真实访问验收，"
-        "连续 2 轮不可用主动自愈（%d 秒限频），结果写 health_status.json"
+        "连续 2 轮不可用主动自愈（%d 秒限频），结论与故障窗口写 health_status.json"
         % (max(20, EXPERIENCE_GUARD_SEC), EXPERIENCE_HEAL_SEC))
+    log("主动通知：%s 有 webhook 则持续 %d 轮不可用主动推送、恢复再推一条；"
+        "无配置静默跳过" % (NOTIFY_ENV, NOTIFY_MIN_FAIL))
+    log("抖动粘性：整轮不通 >=%.0f%% 后冻结换钉 %d 秒，余波期间不通 >=%.0f%% "
+        "只复核不洗牌" % (RESOURCE_OUTAGE_RATIO * 100, RESOURCE_OUTAGE_COOL_SEC,
+                     RESOURCE_STABLE_RATIO * 100))
     log("重载合并已启用：%d 秒内多次变更只重启一次 mosdns" % RELOAD_MIN_SEC)
     while True:
         sec, on = runtime_cfg()
