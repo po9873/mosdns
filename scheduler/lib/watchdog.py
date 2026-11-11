@@ -224,14 +224,43 @@ def jsave(p, obj):
     os.replace(tmp, p)
 
 
-def reload_mosdns():
+def _do_reload_locked():
+    """调用者必须持有 _reload_lock。"""
     try:
         pid = int(open(PID_FILE).read().strip())
         os.kill(pid, signal.SIGTERM)
+        _reload_state["last"] = time.time()
         log("已请求重载 mosdns（pid %d）" % pid)
         return True
     except Exception:
         return False
+
+
+def _reload_worker():
+    """冷却期内的多次写 hosts 合并成一次重载，绝不丢掉任何一次变更。"""
+    while True:
+        time.sleep(2)
+        with _reload_lock:
+            if (not _reload_state["pending"]
+                    or time.time() - _reload_state["last"] < RELOAD_MIN_SEC):
+                continue
+            _reload_state["pending"] = False
+            _do_reload_locked()
+
+
+def reload_mosdns():
+    """合并重载：RELOAD_MIN_SEC 内多次变更只重启一次 DNS。
+
+    --once 模式没有常驻 worker，直接同步重载，避免变更永远不生效。
+    """
+    with _reload_lock:
+        if not _reload_state["worker"]:
+            return _do_reload_locked()
+        if time.time() - _reload_state["last"] < RELOAD_MIN_SEC:
+            _reload_state["pending"] = True
+            return False
+        _reload_state["pending"] = False
+        return _do_reload_locked()
 
 
 def read_hosts(path):
@@ -291,6 +320,12 @@ def read_lines(path):
 
 
 def write_hosts(route, domain, ips, extra=None):
+    """所有写 *.hosts 的线程统一串行，杜绝主巡检/哨兵互相覆盖。"""
+    with _HOSTS_LOCK:
+        return _write_hosts_unlocked(route, domain, ips, extra)
+
+
+def _write_hosts_unlocked(route, domain, ips, extra=None):
     # all.hosts 是各路合并出来的，绝不能把它当成一路来回写：
     # 之前巡检到它（route 名就叫 all）就把整份合并文件压成了一行，
     # mosdns 起不来、全屋 DNS 一起挂。
@@ -541,6 +576,44 @@ RESOURCE_OUTAGE_RATIO = float(os.environ.get("PREF_RESOURCE_OUTAGE_RATIO", "0.4"
 _FASTLY_HEAL_STAMP = os.path.join(DATA_DIR, "fastly_pin_heal.stamp")
 _RESOURCE_LOCK = os.path.join(DATA_DIR, ".resource_heal.lock")
 _RESOURCE_STATE = os.path.join(DATA_DIR, "resource_strikes.json")
+
+# ---- 2026-11-11：把「被动救火」改成「主动验收」 --------------------------
+# 1) 进程内统一写锁：主巡检(HEAL_LOCK)、资源哨兵(_RESOURCE_LOCK)、体验哨兵
+#    是同一进程里三个线程，以前各拿各的锁同时写 github.hosts / all.hosts，
+#    实测 23:43:44 主巡检写 3 个 IP、23:43:47 哨兵按旧行写回 2 个，互相覆盖。
+_HOSTS_LOCK = threading.RLock()
+
+# 2) 重载合并：以前每换一次钉就 SIGTERM mosdns，实测 23:25-23:44 十九分钟
+#    重载 12 次；DNS 反复重启造成的中断本身就是「时好时坏」的一大来源。
+RELOAD_MIN_SEC = int(os.environ.get("PREF_RELOAD_MIN_SEC", "60"))
+_reload_lock = threading.Lock()
+_reload_state = {"last": 0.0, "pending": False, "worker": False}
+
+# 3) 体验哨兵：按 101 自身 DNS 真实访问，主动发现「用户打不开」并限频自愈。
+#    内部判据全绿但用户网页打不开，以前只能等用户发现再叫人来查。
+EXPERIENCE_GUARD_SEC = int(os.environ.get("PREF_EXPERIENCE_GUARD_SEC", "45"))
+EXPERIENCE_HEAL_SEC = int(os.environ.get("PREF_EXPERIENCE_HEAL_SEC", "300"))
+EXPERIENCE_STATUS = os.path.join(DATA_DIR, "health_status.json")
+EXPERIENCE_PROBES = (
+    ("github", "https://github.com/", "200"),
+    ("raw", "https://raw.githubusercontent.com/jqtmviyu/"
+            "Transmission-block-xunlei-pcdn/main/transmission_blacklist.gz", "200"),
+)
+
+
+def _guard_final(cur, final, target, tested_fail, tested_total):
+    """统一「不写瘦」保护，主巡检与资源哨兵共用同一套判据。
+
+    返回 (最终行, 是否链路抖动, 是否补位不足)。抖动期间故意不换钉：
+    那时所有候选也 timeout，换只会把 3 个冗余压成 1 个单点。
+    """
+    outage = (tested_total > 0
+              and tested_fail / float(tested_total) >= RESOURCE_OUTAGE_RATIO)
+    if outage:
+        return list(cur), True, False
+    if len(final) < len(cur) and len(final) < target:
+        return list(cur), False, True
+    return list(final), False, False
 
 
 def _is_resource_domain(dom):
@@ -808,20 +881,21 @@ def _heal_resource_pins(now):
             continue
         if final == cur:
             continue
-        host_path = os.path.join(PREF_DIR, route + ".hosts")
-        try:
-            rows = open(host_path, encoding="utf-8", errors="replace").read().splitlines()
-        except Exception:
-            continue
-        rows = [ln for ln in rows if (ln.split()[:1] or [""])[0] != dom]
-        rows.append(" ".join([dom] + final))
-        tmp = host_path + ".tmp"
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write("\n".join(rows) + "\n")
-            os.replace(tmp, host_path)
-        except Exception:
-            continue
+        with _HOSTS_LOCK:
+            host_path = os.path.join(PREF_DIR, route + ".hosts")
+            try:
+                rows = open(host_path, encoding="utf-8", errors="replace").read().splitlines()
+            except Exception:
+                continue
+            rows = [ln for ln in rows if (ln.split()[:1] or [""])[0] != dom]
+            rows.append(" ".join([dom] + final))
+            tmp = host_path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write("\n".join(rows) + "\n")
+                os.replace(tmp, host_path)
+            except Exception:
+                continue
         changed.append("%s: %s [%s] -> [%s]" % (route, dom,
                                                 " ".join(cur), " ".join(final)))
 
@@ -842,7 +916,12 @@ def _heal_resource_pins(now):
 
 
 def _rebuild_all_hosts():
-    """把各路 *.hosts 合并成 mosdns 实际读取的 all.hosts"""
+    """把各路 *.hosts 合并成 mosdns 实际读取的 all.hosts（串行）"""
+    with _HOSTS_LOCK:
+        return _rebuild_all_hosts_unlocked()
+
+
+def _rebuild_all_hosts_unlocked():
     out = []
     try:
         for name in os.listdir(PREF_DIR):
@@ -1677,6 +1756,29 @@ def _heal_once_impl(only_route=None):
                     elif is_hard(st2):
                         subs.mark_bad(c, st2, route)
             final = keep + added
+            # ---- 链路抖动保护（主站也要有，资源域早就有了）----
+            # 2026-11-11 实测：github.com 主站被巡检逐个撤成单点 140.82.113.3，
+            # 而这颗钉子本身 6s 超时；内部判据却认为「已处理」，用户网页 0/10。
+            # 整轮在用 IP 大面积不通 = 跨境出口丢包，此时撤任何一个都是误杀，
+            # 候选也必然全 timeout，结果就是 3 个冗余被压成 1 个死钉。
+            tested = [ip for ip in ips if (route, dom, ip) in results]
+            nfail = sum(1 for ip in tested
+                        if not results.get((route, dom, ip), (False,))[0])
+            final, outage, thin = _guard_final(ips, final, target,
+                                               nfail, len(tested))
+            if outage:
+                log("%s 路：%s 本轮 %d/%d 在用 IP 不通，判定链路抖动，"
+                    "保留原行不动（不撤钉、不拉黑）"
+                    % (route, dom, nfail, len(tested)))
+                dropped = []
+                added = []
+            elif thin:
+                # 绝不把行写瘦：候选全 timeout 时撤掉坏钉会压成单点死钉，
+                # 比留着那颗坏钉更糟。链路恢复后候选能测通，自然补齐并换掉。
+                log("%s 路：%s 补位不足，保留原 %d 个 IP 不动，等链路恢复"
+                    % (route, dom, len(ips)))
+                dropped = []
+                added = []
             if not final:
                 # 以前这里只打印一句「保留原行等下轮自己判」就结束。若黑名单
                 # 被抖动污染到把候选池清空，下一轮还是同样的空池 —— 死循环，
@@ -1741,7 +1843,20 @@ def _heal_once_impl(only_route=None):
         if not new_rows:
             continue
         if new_rows != rows:
-            write_hosts(route, new_rows[0][0], new_rows[0][1], new_rows[1:])
+            # 一轮巡检要探 100+ IP、耗时几分钟，期间资源哨兵可能已改写同一份
+            # github.hosts。以磁盘最新内容重放资源域行，避免主巡检拿几分钟前的
+            # 旧快照把哨兵刚换好的钉子覆盖回去（2026-11-11 23:43 实测竞态）。
+            try:
+                disk = dict(read_lines(os.path.join(PREF_DIR, "%s.hosts" % route)))
+            except Exception:
+                disk = {}
+            fresh = []
+            for d, l in new_rows[1:]:
+                if _is_resource_domain(d) and disk.get(d):
+                    fresh.append((d, list(disk[d])))
+                else:
+                    fresh.append((d, l))
+            write_hosts(route, new_rows[0][0], new_rows[0][1], fresh)
             changed = True
 
     # 粘滞守卫「沿用不换」不会跑 write_route，漏网依赖域只能由守护补。
@@ -2028,6 +2143,145 @@ def _doh_scan_async():
     t.start()
 
 
+# ---------------------------------------------------------------- 体验哨兵
+def _experience_probe():
+    """按 101 自身 DNS 真实访问，每个探针连测 3 次；返回 (是否可用, 明细)。
+
+    与内部 health() 的区别：不带 --resolve，走的就是全屋设备同一条 DNS 链，
+    用户打不开时这里也一定打不开 —— 这才是「用户视角」的验收。
+    """
+    detail = {}
+    for name, url, want in EXPERIENCE_PROBES:
+        codes = []
+        for _ in range(3):
+            try:
+                p = subprocess.run(
+                    ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                     "-m", "6", url], capture_output=True, timeout=8)
+                codes.append((p.stdout or b"").decode("utf-8", "replace").strip()
+                             or "000")
+            except Exception:
+                codes.append("000")
+        detail[name] = {"codes": codes,
+                        "ok": sum(1 for c in codes if c == want)}
+    return all(v["ok"] >= 2 for v in detail.values()), detail
+
+
+def _write_experience_status(status):
+    try:
+        jsave(EXPERIENCE_STATUS, status)
+    except Exception as e:
+        log("体验哨兵：状态写入失败：%s" % e)
+
+
+def _experience_self_heal(status):
+    """101 主动自愈：只按自己的实测结果写，绝不手工糊 IP。
+
+    关键克制：验收失败 ≠ 链路能修。跨境整体丢包时所有候选也 timeout，
+    这时绝不洗牌、绝不写瘦，只如实记录原因；有实测可用候选才换钉。
+    """
+    actions = []
+    try:
+        freed, _ = heal_blacklist_pollution(force=True)
+        actions.append("黑名单复核解除 %d 条" % freed)
+    except Exception as e:
+        actions.append("黑名单复核异常 %s" % e)
+    try:
+        n, _det = heal_bad_fastly_pins(force=True)
+        actions.append("资源域补齐 %d 个域" % n)
+    except Exception as e:
+        actions.append("资源域自愈异常 %s" % e)
+    try:
+        route, dom = "github", "github.com"
+        rows = list(read_lines(os.path.join(PREF_DIR, route + ".hosts")))
+        cur = next((ips for d, ips in rows if d == dom), [])
+        cands = candidates(route, dom, set(cur), ignore_bad=True)[:24]
+        cr = _batch_health([(route, dom, c) for c in cands])
+        cur_res = _batch_health([(route, dom, ip) for ip in cur])
+        cur_ok = [ip for ip in cur
+                  if cur_res.get((route, dom, ip), (False,))[0]]
+        good = [c for c in cands if cr.get((route, dom, c), (False,))[0]]
+        if len(good) >= 2:
+            # 实测可用的优先：旧钉不能因为「原本占着 3 个位置」就把新测通的
+            # IP 挤掉，否则自愈看起来跑了、主站行其实一个字没换。
+            final = list(dict.fromkeys(cur_ok + good))[:max(3, len(cur))]
+            extra = [(d, ips) for d, ips in rows if d != dom]
+            write_hosts(route, dom, final, extra)
+            actions.append("主站 101 实测换成 %s" % " ".join(final))
+        else:
+            actions.append("候选池本轮无可用主站 IP（跨境出口丢包，DNS 层无法修复）；"
+                           "保留原 %d 个 IP 不动" % len(cur))
+    except Exception as e:
+        actions.append("主站重选异常 %s" % e)
+
+    status["last_heal"] = int(time.time())
+    status["last_heal_actions"] = actions
+    _write_experience_status(status)
+    for a in actions:
+        log("体验哨兵自愈：%s" % a)
+    try:
+        subs.add_event("selfheal", "dns", "", "体验验收触发的主动自愈",
+                       "; ".join(actions)[:180])
+    except Exception:
+        pass
+
+
+def experience_guard_loop():
+    """按真实访问主动验收，别再等用户打开网页才发现坏。
+
+    每 EXPERIENCE_GUARD_SEC 走 101 自身 DNS 连测 github.com 与 raw 各 3 次；
+    连续 2 轮不可用就主动触发一次强制自愈（EXPERIENCE_HEAL_SEC 限频），
+    结果写 health_status.json 和面板事件。跨境丢包时如实标注「非 DNS 故障」，
+    不假装修好，也不无限洗牌。
+    """
+    fails = 0
+    last_heal = 0
+    while True:
+        time.sleep(max(20, EXPERIENCE_GUARD_SEC))
+        try:
+            usable, detail = _experience_probe()
+            status = {
+                "ts": int(time.time()),
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "usable": usable,
+                "probes": detail,
+                "consecutive_fail": fails,
+                "last_heal": last_heal,
+                "note": "",
+            }
+            if usable:
+                if fails:
+                    log("体验哨兵：101 真实访问恢复正常（github/raw 均可用）")
+                fails = 0
+                status["note"] = "101 真实访问正常"
+                _write_experience_status(status)
+                continue
+            fails += 1
+            status["consecutive_fail"] = fails
+            status["note"] = ("101 自身 DNS 真实访问失败，正在主动自愈"
+                              if fails >= 2 else "101 检测到访问异常，继续观察")
+            _write_experience_status(status)
+            log("体验哨兵：第 %d 轮真实访问不可用 github=%s raw=%s"
+                % (fails, detail.get("github", {}).get("codes"),
+                   detail.get("raw", {}).get("codes")))
+            try:
+                subs.add_event("experience", "dns", "",
+                               "真实访问失败 %d 轮" % fails,
+                               "github=%s raw=%s" % (
+                                   detail.get("github", {}).get("codes"),
+                                   detail.get("raw", {}).get("codes")))
+            except Exception:
+                pass
+            if fails >= 2 and time.time() - last_heal >= EXPERIENCE_HEAL_SEC:
+                last_heal = int(time.time())
+                log("体验哨兵：连续 %d 轮不可用，101 主动触发强制自愈" % fails)
+                threading.Thread(
+                    target=lambda: _experience_self_heal(dict(status)),
+                    daemon=True).start()
+        except Exception as e:
+            log("体验哨兵异常：%s" % e)
+
+
 def resource_guard_loop():
     """资源域哨兵：与主巡检解耦，独立高频复核全部资源域在用 IP。
 
@@ -2059,9 +2313,17 @@ def main():
     if once:
         run_once()
         return 0
+    with _reload_lock:
+        _reload_state["worker"] = True
+    threading.Thread(target=_reload_worker, daemon=True).start()
     threading.Thread(target=resource_guard_loop, daemon=True).start()
+    threading.Thread(target=experience_guard_loop, daemon=True).start()
     log("资源域哨兵已启动：每 %d 秒复核一次，坏钉立即换 / 每域至少 %d 个冗余 IP"
         % (max(15, RESOURCE_GUARD_SEC), RESOURCE_MIN_IPS))
+    log("体验哨兵已启动：每 %d 秒按 101 自身 DNS 真实访问验收，"
+        "连续 2 轮不可用主动自愈（%d 秒限频），结果写 health_status.json"
+        % (max(20, EXPERIENCE_GUARD_SEC), EXPERIENCE_HEAL_SEC))
+    log("重载合并已启用：%d 秒内多次变更只重启一次 mosdns" % RELOAD_MIN_SEC)
     while True:
         sec, on = runtime_cfg()
         if on:
