@@ -2619,12 +2619,14 @@ def experience_guard_loop():
                     target=lambda: _experience_self_heal(dict(status)),
                     daemon=True).start()
 
-            # 持续不可用主动推通知，同一个故障窗口只推一次
+            # 持续不可用主动推通知，同一个故障窗口只推一次。
+            # 只有真的送达才标记：没配 webhook / 网络失败时下轮还能补推，
+            # 否则「刚启用 webhook 时正处在故障窗口」会一条都收不到。
             if (fails >= min_fail
-                    and int(prev.get("notified_incident_for") or 0) != window_start):
+                    and int(prev.get("notified_incident_for") or 0) != window_start
+                    and _notify_send("incident", status)):
                 status["notified_incident_for"] = window_start
                 _write_experience_status(status)
-                _notify_send("incident", status)
         except Exception as e:
             log("体验哨兵异常：%s" % e)
 
