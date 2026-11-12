@@ -1218,7 +1218,10 @@ def candidates(route, domain, skip, ignore_bad=False):
                     continue
                 if ip not in skip and ip not in bad and ip not in out:
                     out.append(ip)
-                    if len(out) >= 6:
+                    # 6 个太少：cfst 排序容易被同族（如 Azure 区域段）霸榜，
+                    # 排在第 7 名往后的其它段真边缘永远轮不到。放到 12 个，
+                    # 反正后面全都要过 101 同一套 HTTPS 复核。
+                    if len(out) >= 12:
                         break
     except Exception:
         pass
@@ -2517,7 +2520,21 @@ def _experience_self_heal(status):
             if len(good) >= min_good:
                 # 实测可用的优先：旧钉不能因为「原本占着 3 个位置」就把新
                 # 测通的 IP 挤掉，否则自愈看起来跑了、行其实一个字没换。
-                new = list(dict.fromkeys(cur_ok + good))[:max(3, len(cur))]
+                # 跨段分散：2026-11-12 三颗钉全是 Azure 区域段（20.27/20.200/
+                # 20.205），同族一起死、主站整行瘫痪。优先每个 /24 段取一个，
+                # 主站行冗余提到 5 个——多余 A 记录浏览器只会并行竞速，不亏。
+                ordered = list(dict.fromkeys(cur_ok + good))
+                picked, seen = [], set()
+                for ip in ordered:
+                    seg = ip.rsplit(".", 1)[0]
+                    if seg not in seen:
+                        picked.append(ip)
+                        seen.add(seg)
+                for ip in ordered:
+                    if ip not in picked:
+                        picked.append(ip)
+                want = 5 if dom == "github.com" else max(3, len(cur))
+                new = picked[:want]
                 if new != cur:
                     fixed[dom] = new
                     actions.append("%s 101 实测换成 %s" % (dom, " ".join(new)))
