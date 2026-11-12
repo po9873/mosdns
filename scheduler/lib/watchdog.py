@@ -2795,12 +2795,24 @@ def experience_guard_loop():
                         "routes": affected,
                     }
                     dur = (now - incident["start"]) if incident["start"] else 0
+                    # 故障窗口彻底结束：必须清掉每路残留的 incident_start/fails/
+                    # peak_fail，否则同一路再次抖动会复用第一次的时间戳，导致
+                    # 「中断 X 秒」随 now 一直涨、且告警去重键永远命中首轮而不重报。
+                    for n, r in routes.items():
+                        if (int(prev_routes.get(n, {}).get("incident_start", 0)
+                                or 0)
+                                or int(r.get("fails", 0) or 0) > 0):
+                            r["incident_start"] = 0
+                            r["fails"] = 0
+                            r["peak_fail"] = 0
+                            r["verdict"] = ""
                     status.update({
                         "last_incident": incident,
                         "verdict": "recovered",
                         "note": "101 真实访问已全部恢复；明细见 last_incident",
                         "incident_start": 0,
                         "peak_fail": 0,
+                        "notified_incident_for": 0,
                     })
                     log("体验哨兵：%s 恢复，窗口 %d 秒 / 峰值 %d 轮，结论 %s"
                         % ("/".join(affected), dur, incident["peak_fail"],
@@ -2826,6 +2838,8 @@ def experience_guard_loop():
                     v = prev.get("verdict", "")
                     status["verdict"] = v if v in ("recovered", "") else ""
                     status["note"] = "101 各路真实访问正常"
+                    status["incident_start"] = 0
+                    status["notified_incident_for"] = 0
                 _write_experience_status(status)
                 continue
 
