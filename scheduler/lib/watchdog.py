@@ -2664,11 +2664,24 @@ def _route_self_heal(route, status):
 
 
 def _routes_self_heal(targets, status):
-    """串行、非阻塞：一轮最多一个自愈任务，避免 7 路同时抢 hosts。"""
+    """串行、非阻塞：一轮最多一个自愈任务，避免 7 路同时抢 hosts。
+
+    heal_once 有全局巡检锁；撞上主巡检那一轮会被跳过。这时必须把刚写进
+    状态的 last_heal 回退，否则接下来 300 秒都以为「已经自愈过了」。
+    """
     if not _ROUTE_HEAL_LOCK.acquire(blocking=False):
         log("体验哨兵：已有自愈在跑，本轮跳过（下轮会补上）")
         return
     try:
+        try:
+            locked = (os.path.exists(HEAL_LOCK)
+                      and time.time() - os.path.getmtime(HEAL_LOCK) < HEAL_LOCK_STALE)
+        except OSError:
+            locked = False
+        if locked:
+            log("体验哨兵：主巡检正在跑，本轮自愈顺延（不记已自愈）")
+            _rollback_last_heal(targets)
+            return
         for route in targets:
             try:
                 _route_self_heal(route, status)
@@ -2676,6 +2689,24 @@ def _routes_self_heal(targets, status):
                 log("体验哨兵自愈[%s]异常：%s" % (route, e))
     finally:
         _ROUTE_HEAL_LOCK.release()
+
+
+def _rollback_last_heal(targets):
+    """撞锁顺延时清零限频标记，让下一轮（45 秒后）能立刻重试。"""
+    with _EXPERIENCE_LOCK:
+        try:
+            s = json.load(open(EXPERIENCE_STATUS, encoding="utf-8"))
+        except Exception:
+            return
+        rs = s.get("routes") or {}
+        for name in targets:
+            if name in rs:
+                rs[name]["last_heal"] = 0
+        s["routes"] = rs
+        try:
+            jsave(EXPERIENCE_STATUS, s)
+        except Exception:
+            pass
 
 
 def experience_guard_loop():
