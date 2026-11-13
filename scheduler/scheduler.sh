@@ -208,6 +208,7 @@ lists_mode() {
 daemon_mode() {
   local interval
   log "调度器启动，各路串行"
+  rotate_log "$DATA_DIR/mosdns.log"
   maybe_update_lists
   maybe_pull_sources
   while true; do
@@ -216,6 +217,7 @@ daemon_mode() {
     if [ -z "$interval" ] || [ "$interval" -lt 1 ] 2>/dev/null; then
       interval=60
     fi
+    rotate_log "$DATA_DIR/mosdns.log"
     # 清单更新跟优选开关无关：优选暂停了，四份清单也照常自动更新
     maybe_update_lists
     if [ "$(setting pref_enabled)" = "false" ]; then

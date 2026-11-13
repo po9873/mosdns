@@ -26,6 +26,21 @@ log() {
   echo "$m" >> "${PREF_LOG:-$DATA_DIR/pref.log}" 2>/dev/null || true
 }
 
+# mosdns.log 是 qlog（全屋每条 DNS 查询一行），不轮转会无限涨
+# （2026-11-13 实测 6 天涨到 173MB，还拖着一轮 1.4KB/s 的持续写盘）。
+# copytruncate：mosdns 持有打开的 fd，不能 mv 换 inode，只能原文件截断。
+# 保一份 .1 旧档（≈半个轮转周期），dom_watch 靠它读「最近 4MB」不受影响。
+LOG_ROTATE_BYTES=$((50 * 1024 * 1024))
+rotate_log() {
+  local f="$1" size
+  [ -f "$f" ] || return 0
+  size=$(stat -c %s "$f" 2>/dev/null) || return 0
+  [ "$size" -ge "$LOG_ROTATE_BYTES" ] || return 0
+  cp -f "$f" "$f.1" 2>/dev/null || true
+  : > "$f"
+  log "日志轮转：$f 已达 $((size / 1024 / 1024))MB，截断重计（旧档 $f.1）"
+}
+
 # 自动并发线程：取 CPU 核数，受 cgroup 限制约束，虚拟机折半，最低 1
 detect_threads() {
   local n
