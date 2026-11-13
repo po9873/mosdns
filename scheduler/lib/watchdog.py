@@ -108,7 +108,22 @@ GT_STATIC_DEPS = ("translate.gstatic.com", "apis.google.com",
 # 由守护每轮用「本路当前在用的 IP」自己实测补上，不改任何在用 IP。
 # 值 = (域名, 真实资源路径)：静态资源域根路径 404/204 都属正常，必须打真实路径。
 NEEDED_DEPS = {
-    "google": (("www.gstatic.com", "/generate_204"),),
+    "google": (
+        ("www.gstatic.com", "/generate_204"),
+        # Gmail 全家桶（2026-11-13）：google_pref.sh 的 PREF_EXTRA_DOMAINS 里
+        # 早就列了这些域名，但粘滞守卫「沿用不换」每轮提前退出，写 extras 的
+        # 分支一次都不跑——mail.google.com / gmail.com / accounts.google.com
+        # 一直走上游污染解析（真实 Google IP 全被墙），Gmail 打不开。
+        # 挪进 NEEDED_DEPS 由 fill_missing_deps 每轮巡检用本路在用 IP 实测补上。
+        # lh3.googleusercontent.com 不收：它对任何路径回 400，判据判 blocked，
+        # 写进来只会每轮白探（头像破图可容忍，核心收发信不受影响）。
+        ("mail.google.com", "/"),
+        ("gmail.com", "/"),
+        ("accounts.google.com", "/"),
+        ("www.googleapis.com", "/"),
+        ("content-gmail.googleapis.com", "/"),
+        ("ssl.gstatic.com", "/"),
+    ),
 }
 
 # hosts 行的合法性判定：域名 + 后面全是 IP。写文件前必须过这一关，

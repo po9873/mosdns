@@ -40,3 +40,15 @@ domain:ssl.gstatic.com
 # 会优先连 v6 然后超时/重置；和 ghcr 一样，DNS 层直接判 NODATA 强制走 v4。
 domain:docker.io
 domain:docker.com
+
+# ---- Gmail 族 ----
+# 病根同翻译族：google 路优选只写 A 记录，mail.google.com / gmail.com 的
+# AAAA 查询穿过 hosts 拿回真实 Google v6（2404:6800::/32），有 IPv6 的客户端
+# 按 RFC 6724 优先连 v6 → 全部超时，Gmail 打不开。2026-11-13 实测：mail 的
+# 真实 v4/v6 从 101 全部 6s 超时，而中转节点（SNI 透传，证书 CN 就是
+# mail.google.com）0.3~1.9s 全通。钉 A + 压 AAAA 双管齐下。
+# accounts / content-gmail 是登录与网页端接口，漏了会「页面开了登录不上」。
+domain:mail.google.com
+domain:gmail.com
+domain:accounts.google.com
+domain:content-gmail.googleapis.com

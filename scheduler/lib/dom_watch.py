@@ -43,7 +43,7 @@ MAX_PER_ROUTE = 40      # 每路最多登记多少个（防日志异常把清单
 # 故意不收的：youtube.com / googlevideo.com / ytimg.com（视频流量不走中转）、
 # 广告域名（googleadservices 等，AdGuard 在前面就拦了，到不了这层日志）。
 FAMILIES = [
-    ("google", ("google.com", "googleapis.com", "gstatic.com",
+    ("google", ("google.com", "gmail.com", "googleapis.com", "gstatic.com",
                 "googleusercontent.com", "ggpht.com", "withgoogle.com", "gvt1.com")),
     ("gt", ("translate.googleapis.com", "translate.googleusercontent.com",
             "clients5.google.com")),
