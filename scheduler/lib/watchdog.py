@@ -582,6 +582,10 @@ def heal_pin_gaps(force=False):
 #      坏一个只撤坏的那个，好 IP 全保留并立即补足，绝不留单点裸奔。
 FASTLY_HEAL_INTERVAL = int(os.environ.get("PREF_FASTLY_HEAL_SEC", "30"))
 RESOURCE_MIN_IPS = int(os.environ.get("PREF_RESOURCE_MIN_IPS", "3"))
+# 2026-11-16：raw 的 Fastly 边缘跨境丢包最频繁（同一批 IP 时通时断），
+# 3 个冗余在抖动窗口里容易全军覆没。单独把 raw 的下限提到 5，其它资源域
+# 维持 3，不影响重载频率。
+RESOURCE_MIN_IPS_PER_DOMAIN = {"raw.githubusercontent.com": 5}
 RESOURCE_GUARD_SEC = int(os.environ.get("PREF_RESOURCE_GUARD_SEC", "30"))
 # 撤坏钉要连续 2 轮实测不通：跨境 SYN 单次抖动不该让 9 个资源域每 30 秒
 # 洗一次牌、每分钟重载两次 mosdns（那样反而比坏钉本身更不稳）。
@@ -634,7 +638,10 @@ EXPERIENCE_STATUS = os.path.join(DATA_DIR, "health_status.json")
 # 私有信息只在宿主机 settings.json，不进仓库、不改 compose、不改镜像名。
 # 面板 push 关闭且没有 notify.env 时完全静默，行为与以前一致。
 NOTIFY_ENV = os.path.join(DATA_DIR, "notify.env")
-NOTIFY_MIN_FAIL = int(os.environ.get("PREF_NOTIFY_MIN_FAIL", "3"))
+# 2026-11-16：告警阈值 3→6。github 网页探针走跨境链路，实测 12 次里 6 次
+# 随机 000（超时），连续 3 轮≈2 分钟很容易撞上，导致「告警→恢复」反复刷屏。
+# 提到 6 轮≈4.5 分钟：短抖动过滤掉，真长时间不通才告警。
+NOTIFY_MIN_FAIL = int(os.environ.get("PREF_NOTIFY_MIN_FAIL", "6"))
 PUSH_PY = os.path.join(HERE, "push.py")
 
 # 2026-11-12：只有 github 一路有「用户视角主动验收」，其它 6 路照样是
@@ -790,6 +797,15 @@ def resource_candidates(fpr, dom, skip):
     try:
         for srv in fpr.PUBLIC_DNS:
             add(fpr.udp_dns_a(dom, srv))
+    except Exception:
+        pass
+    # 2026-11-16：新增两条实时获取途径（UDP 被劫/池子枯竭时的兜底）
+    try:
+        add(fpr.doh_json_a(dom))          # 阿里 DoH 权威 A 记录
+    except Exception:
+        pass
+    try:
+        add(fpr.fastly_official_ips())    # Fastly 官方网段采样
     except Exception:
         pass
     return out
@@ -965,7 +981,8 @@ def _heal_resource_pins(now):
     need_domains = []
     for dom, (_route, cur) in located.items():
         good = [ip for ip in cur if ip not in confirmed[dom]]
-        if confirmed[dom] or len(good) < RESOURCE_MIN_IPS:
+        min_ips = RESOURCE_MIN_IPS_PER_DOMAIN.get(dom, RESOURCE_MIN_IPS)
+        if confirmed[dom] or len(good) < min_ips:
             need_domains.append(dom)
     cand_checks = []
     for dom in need_domains:
@@ -982,7 +999,7 @@ def _heal_resource_pins(now):
     changed = []
     for dom, (route, cur) in located.items():
         good = [ip for ip in cur if ip not in confirmed[dom]]
-        want = max(RESOURCE_MIN_IPS, len(cur))
+        want = max(RESOURCE_MIN_IPS_PER_DOMAIN.get(dom, RESOURCE_MIN_IPS), len(cur))
         for d, ip in cand_checks:
             if d != dom or len(good) >= want:
                 continue
@@ -1145,6 +1162,10 @@ def seed_ips(route):
                     for ip in fpr.udp_dns_a(dom, srv):
                         if ":" not in ip and ip not in out:
                             out.append(ip)
+                # 2026-11-16：阿里 DoH 实时 A 记录兜底
+                for ip in fpr.doh_json_a(dom):
+                    if ":" not in ip and ip not in out:
+                        out.append(ip)
         except Exception:
             pass
     return out
@@ -1186,6 +1207,10 @@ def reseed_candidates(route, domain, force=False):
             for ip in fpr.udp_dns_a(d, srv):
                 if ":" not in ip and ip not in ips:
                     ips.append(ip)
+        # 2026-11-16：阿里 DoH 实时 A 记录，UDP 公共 DNS 被劫/过期时的新途径
+        for ip in fpr.doh_json_a(d):
+            if ":" not in ip and ip not in ips:
+                ips.append(ip)
     if not ips:
         return []
     try:
@@ -2332,7 +2357,37 @@ def _probe_routes(selected=None):
         e = detail.setdefault(route, {}).setdefault(name, {"codes": [], "ok": 0})
         e["codes"].append(code)
         e["ok"] += int(ok)
-    return {r: {"usable": all(v["ok"] >= 2 for v in d.values()), "probes": d}
+    # 2026-11-16：github 路的分工修正（不是放宽、是各归其位）：
+    #   - github 网页主站 + api = 用户真实用的核心入口，由本哨兵硬判（必须过）；
+    #   - raw / avatars / objects 等资源域 = 由资源域哨兵每 30s 用 fpr 专属判据
+    #     独立保证（坏钉即换 + 每域至少 3 冗余 + 抖动冻结），本哨兵的 raw 探针
+    #     只作观测，不再一票否决整路。
+    # 旧逻辑 all(3探针)：raw 域名跨境链路本就频繁整段丢包（实测同一批 IP 此刻
+    # 全 0/3、换秒全 3/3），它一次 0/3 就把网页+api 都通的整路判死、空转自愈
+    # 10 轮狂发告警，而资源域哨兵其实一直在正常给 raw 补位。分工后 raw 仍被
+    # 独立保证，只是不再连累核心入口判定。其它 6 路逻辑不变。
+    def _usable(r, d):
+        if r == "github":
+            # api 是硬指标：必须 >=2/3（用户明确要求 api 必须保证）。
+            # 网页探针（github.com）走跨境链路会随机 000，实测 12 次 6 次超时；
+            # 但同一时刻 api/raw 往往 3/3 全通，证明 DNS 和链路本身没断，只是
+            # github.com 首页那个请求超时。旧逻辑网页<2 就把整路判坏→自愈换钉→
+            # 换上去的 IP 下一轮照样随机超时→反复告警刷屏。
+            # 新逻辑：api 必须过；网页若抖动，只要 raw 或 api 之任一满 3/3 达标，
+            # 就认定 GitHub 整体可达，不判坏、不触发自愈告警。raw 由资源域哨兵
+            # 独立保证（每 30s 专属判据 + 冗余 + 抖动冻结），这里只当佐证。
+            api_ok = d.get("api", {}).get("ok", 0)
+            web_ok = d.get("github", {}).get("ok", 0)
+            raw_ok = d.get("raw", {}).get("ok", 0)
+            if api_ok < 2:            # api 挂 = 真故障，必须报
+                return False
+            if web_ok >= 2:
+                return True           # 网页正常，直接过
+            # 网页抖动：api 满 3/3 或 raw 达标，说明只是首页超时，GitHub 可达
+            return api_ok >= 3 or raw_ok >= 2
+        return all(v["ok"] >= 2 for v in d.values())
+
+    return {r: {"usable": _usable(r, d), "probes": d}
             for r, d in detail.items()}
 
 

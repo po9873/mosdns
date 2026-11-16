@@ -70,6 +70,14 @@ SAMPLE_IPS = [
     for n in (108, 109, 110, 111) for last in (133, 154)]
 
 PUBLIC_DNS = ("223.5.5.5", "119.29.29.29", "180.76.76.76")
+# 2026-11-16 实测：境外 DoH（cloudflare-dns.com / dns.google）在本链路返回空，
+# 只有阿里 doh.pub 能拿到 raw 的权威 A 记录（185.199.108~111.133）。UDP 公共 DNS
+# 拿不到时就靠它补实时答案，比硬编码变体更跟得上 CDN 调度。
+DOH_JSON = "https://doh.pub/dns-query?name=%s&type=A"
+# Fastly 官方网段清单（101 上实测 0.4s 可达）：SAMPLE_IPS 只硬编码了
+# 151.101/185.199 两类，官方列表还给出 199.232/185.31/146.75/23.235 等段，
+# 逐个变体实测后真的有可用 IP（199.232.32.133 等），扩进来做兜底。
+FASTLY_LIST_URL = "https://api.fastly.com/public-ip-list"
 TIMEOUT = 6.0
 TOP_N = 6          # Fastly anycast 变体波动大（同一 IP 时通时断），多点冗余
 RETRIES = 2        # 单次超时可能是抖动，每个候选最多试两次
@@ -143,6 +151,71 @@ def udp_dns_a(name, server):
     return ips
 
 
+def doh_json_a(name):
+    """阿里 DoH(doh.pub) 查 A 记录。境外 DoH 在本链路不通，只有这个能用。
+    返回 IPv4 列表；失败 silent 返回空，由上层 UDP/池子兜底。"""
+    import urllib.request
+    out = []
+    try:
+        req = urllib.request.Request(
+            DOH_JSON % name, headers={"accept": "application/dns-json",
+                                      "User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+        for a in d.get("Answer", []):
+            if a.get("type") == 1 and ":" not in str(a.get("data", "")):
+                ip = a["data"]
+                if ip not in out:
+                    out.append(ip)
+    except Exception:
+        pass
+    return out
+
+
+def fastly_official_ips():
+    """Fastly 官方 public-ip-list 展开成候选 IP。官方给的是 CIDR 段，
+    这里按 github 资源域已知的 anycast 尾号(.133/.217/.154)对每段采样若干 IP：
+    /16 段取常见二段字节 + 尾号组合，/22~/24 段取段内代表地址。数量可控，
+    且都还要过 check_retry 实测，假的通不过。"""
+    import urllib.request
+    out = []
+    try:
+        req = urllib.request.Request(FASTLY_LIST_URL,
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+        nets = d.get("addresses", [])
+    except Exception:
+        return out
+    # 只取与 github 资源域相关的段；其它 CDN 客户段测 raw 一律失败，不浪费探测
+    keep = ("151.101.", "185.199.", "185.31.", "199.232.",
+            "146.75.", "23.235.", "43.249.", "104.156.", "199.27.")
+    tails = (133, 217, 154)
+    for net in nets:
+        if ":" in net:            # 跳过 IPv6 段
+            continue
+        base = net.split("/")[0]
+        p = base.split(".")
+        if len(p) != 4:
+            continue
+        pref = p[0] + "." + p[1] + "."
+        if pref not in keep:
+            continue
+        plen = int(net.split("/")[1]) if "/" in net else 24
+        if plen <= 16:            # /16：采样常见二段字节
+            mids = (0, 1, 2, 64, 65, 66, 128, 129, 130, 192, 193, 194)
+        elif plen <= 20:          # /20：段起始 + 少量代表
+            mids = (int(p[2]), int(p[2]) + 1, 32, 64, 128, 192)
+        else:                     # /22~/24：段内代表
+            mids = (int(p[2]), int(p[2]) + 1)
+        for m in mids:
+            for t in tails:
+                ip = "%s%d.%d" % (pref, m, t)
+                if ip not in out:
+                    out.append(ip)
+    return out
+
+
 def candidates():
     bad = banned_ips()
     out = []
@@ -159,6 +232,16 @@ def candidates():
                 if ip not in bad and ip not in seen:
                     seen.add(ip)
                     out.append(ip)
+        # 阿里 DoH 实时 A 记录（UDP 被劫时的新途径，2026-11-16 加入）
+        for ip in doh_json_a(dom):
+            if ip not in bad and ip not in seen:
+                seen.add(ip)
+                out.append(ip)
+    # Fastly 官方网段采样（补 SAMPLE_IPS 没覆盖的 199.232/185.31 等段）
+    for ip in fastly_official_ips():
+        if ip not in bad and ip not in seen:
+            seen.add(ip)
+            out.append(ip)
     # github 池子全量兜底
     try:
         for ip in subs.cmd_pool("github", 2000):
