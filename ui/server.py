@@ -2933,7 +2933,33 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, data, ctype=ctype)
 
 
+def _reap_zombies():
+    """后台回收僵尸子进程（容器 PID 1 的职责）。
+
+    server.py 是 mosdns 容器的 PID 1；优选脚本用 `timeout 8 python3 ...`
+    拉起的子进程退出后，其父 shell 已先退出，这些进程被 reparent 给 PID 1。
+    PID 1 若从不 wait() 它们，就会一个个变成 Z（defunct）僵尸累积在进程表里。
+    这里周期性 waitpid(-1, WNOHANG) 把它们收割掉；WNOHANG 保证非阻塞，
+    只回收已退出的，绝不影响正在运行的探测/优选子进程。
+    """
+    while True:
+        try:
+            while True:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+                if pid <= 0:
+                    break
+        except ChildProcessError:
+            # 暂无子进程可回收，正常
+            pass
+        except Exception:
+            # 回收失败不影响主流程，下一轮再试
+            pass
+        time.sleep(10)
+
+
 def main():
+    # 回收僵尸子进程（PID 1 职责），不碰任何优选/探测逻辑
+    threading.Thread(target=_reap_zombies, daemon=True).start()
     if doh_cfg:
         # 后台定时扫描候选池：死了的自动删，不依赖页面开着
         threading.Thread(target=_speed_scheduler, daemon=True).start()
