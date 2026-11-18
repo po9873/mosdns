@@ -47,10 +47,12 @@ PROBE_OFFSET_FILE = "/data/prefs/.gt.probe_offset"
 
 RESOLVERS = ["223.5.5.5", "119.29.29.29", "180.76.76.76"]
 TIMEOUT = 6.0
-# 只留 2 个：一个域名写 4 个 IP 时，客户端会随机挑；只要其中有一个对某个
-# 翻译域不服务，用户就是「这次能翻、下次不能」。全池实测有 177 个 IP 完整
-# 支持 Chrome 内置翻译，冗余完全够，少写反而更稳。
-TOP_N = 2
+# 留 3 个：11-18 一天 gt 路抖了 6 轮（每轮约 50 秒翻译不可用），根因是实际
+# 在钉的只剩 1 个 IP（221.194.152.177），单点一抖全屋翻译就断。.gt.extra
+# 空时粘滞守卫从不触发补位，候选批次又靠 offset 撞运气，29 个已验证的好
+# IP 进不了在用组。改 3 个：客户端在钉的 IP 里轮着挑，单点抖动另外两个顶。
+# 全池实测通过的 IP 足够多，3 个不会稀释质量（判定标准不变，照样全接口强校验）。
+TOP_N = 3
 WORKERS = 16
 RETRIES = 1          # 分层短路后单 IP 只花 1 个请求，不再重试（死 IP 重试纯浪费时间）
 
@@ -412,11 +414,25 @@ def candidates():
     #    之前漏掉了，只在本地解析的半吊子里打转。改为「每轮取一批、循环推进」
     #    自动覆盖全池，强校验筛选出真能翻的即自动接入——正是「上游给半吊子就
     #    换来源」的思路，全程 mosdns 自己跑，不依赖人工提供任何 IP。
+    #    11-18 增强：池条目带历轮强校验战绩（ok=连续通过次数），先把「已验证
+    #    通过」的 IP 全部前置进候选，再叠加批次推进扫新池。以前只靠 offset
+    #    撞运气，29 个验证过的备用好 IP 明明躺在池里却进不了候选——在用组一抖，
+    #    补位只能等批次恰好扫到它们。前置后，任何时刻重选都有充足验证过备胎。
     try:
         d = json.load(open(POOL_FILE, errors="replace"))
-        allips = list(d.get("ips", {}).keys())
+        pool_ips = d.get("ips", {})
+        allips = list(pool_ips.keys())
         n = len(allips)
         if n:
+            # 先验成绩排前（ok 高者优先），已验证的一律前置（上限 40，控制单轮耗时）
+            proven = [ip for ip, v in pool_ips.items()
+                      if isinstance(v, dict) and v.get("ok", 0) >= 1]
+            proven.sort(key=lambda ip: -pool_ips[ip].get("ok", 0))
+            pre_add = 0
+            for ip in proven[:40]:
+                before = len(out)
+                add(ip)
+                pre_add += len(out) - before
             off = 0
             try:
                 off = int(open(PROBE_OFFSET_FILE, errors="replace").read().strip() or 0)
@@ -432,7 +448,8 @@ def candidates():
                 open(PROBE_OFFSET_FILE, "w").write(str((off + PROBE_BATCH) % n))
             except Exception:
                 pass
-            log("从订阅池取第 %d~%d 个候选（共 %d）参与本轮强校验" % (off + 1, min(off + PROBE_BATCH, n), n))
+            log("候选=已验证 %d 个前置 + 订阅池第 %d~%d 个批次（共 %d）参与本轮强校验"
+                % (pre_add, off + 1, min(off + PROBE_BATCH, n), n))
     except Exception:
         pass
     # 说明：不查公共 DNS 兜底（理由同上）。候选保留「本机解析 + 历史 .gt.extra
