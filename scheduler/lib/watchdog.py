@@ -52,6 +52,15 @@ WINDOW_N = int(os.environ.get("PREF_WD_WINDOW", "6"))
 WINDOW_BAD = int(os.environ.get("PREF_WD_BAD", "2"))
 WINDOW_MIN = int(os.environ.get("PREF_WD_MIN", "3"))
 WINDOW_SEC = int(os.environ.get("PREF_WD_WINDOW_SEC", "1800"))
+# 相对慢降级：101 每轮用自己实测的 TTFB 跟「同组在用 IP 的中位数」比。
+# 只有明显比同伴慢（>中位数 PREF_REL_SLOW_RATIO 倍 且 >绝对下限）才算慢；
+# 链路整体拥塞时大家一样慢、中位数也高，谁都超不过阈值 → 一律不动，
+# 正好符合「现在慢不等于下次慢」：瞬时拥塞不误杀，持续拖后腿的才降级。
+REL_SLOW_RATIO = float(os.environ.get("PREF_REL_SLOW_RATIO", "2.5"))
+REL_SLOW_FLOOR = float(os.environ.get("PREF_REL_SLOW_FLOOR_MS", "1500"))
+REL_SLOW_WIN_N = int(os.environ.get("PREF_REL_SLOW_WIN_N", "6"))
+REL_SLOW_WIN_BAD = int(os.environ.get("PREF_REL_SLOW_WIN_BAD", "4"))
+REL_SLOW_WIN_SEC = int(os.environ.get("PREF_REL_SLOW_WIN_SEC", "1800"))
 PORT = int(os.environ.get("PREF_WATCHDOG_PORT", "443"))
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 GT_GUARD_STATE = os.path.join(DATA_DIR, "gt_guard_state.json")
@@ -1624,6 +1633,73 @@ def window_strike(state, key, ok, st):
                             and bad >= WINDOW_BAD)
 
 
+def _relative_slow_set(results, state):
+    """101 自己判「相对慢」：按 (route,dom) 分组，用同组在用 IP 的 TTFB
+    中位数做基线。某 IP 明显比同伴慢（>中位数 REL_SLOW_RATIO 倍 且 >绝对
+    下限 REL_SLOW_FLOOR）计一轮 slow；最近 REL_SLOW_WIN_N 轮里累计
+    REL_SLOW_WIN_BAD 轮 slow → 判定为持续慢钉，返回其 key 集合。
+
+    关键（用户 2026-11-19 明确要求）：链路整体拥塞时所有 IP 的 TTFB 同时
+    抬高、中位数也跟着抬高，谁都超不过「中位数×倍数」这条线 → 返回空集，
+    谁都不动。这就实现了「现在慢不等于下次慢」——瞬时拥塞不误杀，只有长期
+    明显拖同伴后腿的 IP 才降级。跟 window_strike 的失败率判定完全独立，
+    不触发 40% 链路抖动保护（那是给「连不上」用的，慢不该混入）。
+    """
+    if REL_SLOW_RATIO <= 1 or REL_SLOW_WIN_BAD > REL_SLOW_WIN_N or REL_SLOW_WIN_N <= 0:
+        return set()
+    by_group = {}
+    for (route, dom, ip), v in results.items():
+        ok, st, ms, sp = v
+        if ms is None:  # 连不上/超时，没有 TTFB 样本，交给 window_strike 处理
+            continue
+        try:
+            ms = float(ms)
+        except (TypeError, ValueError):
+            continue
+        by_group.setdefault((route, dom), []).append((ip, ms))
+
+    # NO_REFILL_ROUTES 撤钉后不补位，撤了只会写瘦成单点，跳过；gt 有多域
+    # 必须同组的约束，走它自己的 gt_guard 真翻自检，不走这里的相对慢判定。
+    skip_routes = {"gt", "google", "auto"}
+    slow_keys = set()
+    now = int(time.time())
+    for (route, dom), items in by_group.items():
+        if route in skip_routes:
+            continue
+        if len(items) < 3:  # 同组少于 3 个 TTFB 样本，中位数不可靠，不判
+            continue
+        vals = sorted(m for _ip, m in items)
+        med = vals[len(vals) // 2]
+        for ip, ms in items:
+            key = "relslow|%s|%s|%s" % (route, dom, ip)
+            is_slow = (ms > med * REL_SLOW_RATIO) and (ms > REL_SLOW_FLOOR)
+            rec = state.get(key) or {"hist": []}
+            hist = [(t, s) for t, s in rec.get("hist", [])
+                    if isinstance(t, int) and now - t < REL_SLOW_WIN_SEC]
+            if hist and now - hist[-1][0] < 60:
+                hist[-1] = (now, "slow" if is_slow else "ok")
+            else:
+                hist.append((now, "slow" if is_slow else "ok"))
+            hist = hist[-REL_SLOW_WIN_N:]
+            prev = state.get(key) or {}
+            # 单独存「最近一次 slow 那轮」的 ms/中位，恢复轮不覆盖它：
+            # 否则窗口凑满那轮若恰好恢复，日志会拿恢复值冒充，看着矛盾。
+            rec = {"hist": hist, "ts": now,
+                   "slow_ms": prev.get("slow_ms"), "slow_med": prev.get("slow_med")}
+            if is_slow:
+                rec["slow_ms"] = round(ms)
+                rec["slow_med"] = round(med)
+            state[key] = rec
+            slow_n = sum(1 for _t, s in hist if s == "slow")
+            if len(hist) >= REL_SLOW_WIN_N and slow_n >= REL_SLOW_WIN_BAD:
+                slow_keys.add((route, dom, ip))
+                log("%s 路 %s 相对慢钉 %s：TTFB %sms 超同组中位 %sms 的 %.1f 倍，"
+                    "最近 %d/%d 轮都慢 → 标记降级"
+                    % (route, dom, ip, rec.get("slow_ms", "?"),
+                       rec.get("slow_med", "?"), REL_SLOW_RATIO, slow_n, len(hist)))
+    return slow_keys
+
+
 # 冗余自愈：每个主域记住「应该有几个在用 IP」。链路整体抖动时坏 IP 被撤下、
 # 候选又全部测不过，hosts 会退化成单 IP；旧逻辑下一轮 need = len(ips)-len(keep)
 # = 0，就算链路恢复了也永远不会自己补回冗余（必须人工介入）。现在把目标数
@@ -1771,6 +1847,10 @@ def _heal_once_impl(only_route=None):
     else:
         static_rows, static_items = static_targets()
     results = _batch_health(items + static_items)
+    # 相对慢判定：101 用本轮自己实测的 TTFB，按同组中位数判谁持续拖后腿。
+    # 只在全量轮做（粘滞守卫的单路「沿用不换」轮跳过），结果只用于「标记降级」，
+    # 不写黑名单、不混入 window_strike。
+    slow_keys = _relative_slow_set(results, state) if not only_route else set()
     # 只用本轮 101 自己的实测结果复核黑名单，且只在全量轮做（证据最全）：
     # 误拉黑的在用 IP 当场自动解除，本轮补位就能重新把它算进候选。
     if not only_route:
@@ -1858,6 +1938,14 @@ def _heal_once_impl(only_route=None):
                         dropped.append((ip, st + "x%d" % n))
                     else:
                         keep.append(ip)
+                    continue
+                # 相对慢降级：101 自己判定「持续明显慢于同组中位数」→ 撤下补位。
+                # 与 window_strike 独立：慢（能开但 TTFB 高）在 window_strike 里
+                # 按 usable 保留，只有这里会因其持续拖后腿而撤下。链路整体拥塞时
+                # 中位数同样抬高，_relative_slow_set 返回空集，这里不会触发。
+                if (route, dom, ip) in slow_keys:
+                    state.pop(key, None)
+                    dropped.append((ip, "relslow"))
                     continue
                 if is_hard(st):
                     state.pop(key, None)
