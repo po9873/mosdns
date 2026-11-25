@@ -1510,6 +1510,17 @@
             </label>
           </div>
 
+          <div class="rowline" id="ghTokenRow">
+            <label class="grow">GitHub Token（认证后 API 额度 5000/小时）
+              <div id="ghTokenStatus" class="muted" style="font-size:12px;margin-top:4px">检测中…</div>
+              <div id="ghRateInfo" class="muted" style="font-size:12px;margin-top:2px"></div>
+              <input id="ghTokenInput" type="text" placeholder="也可手动粘贴 ghp_/gho_ Token，点添加即可" autocomplete="off" style="margin-top:6px;width:100%">
+            </label>
+            <a class="btn primary" id="btnGhDevice" href="/gh/device" target="_blank" rel="noopener" style="align-self:flex-start">一键获取</a>
+            <button class="btn" id="btnGhTokenSave" style="align-self:flex-start">添加</button>
+            <button class="btn" id="btnGhTokenDel" style="align-self:flex-start;display:none">解除授权</button>
+          </div>
+
           <div class="rowline">
             <label class="chk" title="每天把所有源（含已停用的第三方）拉一遍，确认还能用">
               <input type="checkbox" id="hlOn"> 定时体检
@@ -4296,6 +4307,77 @@
       hideLogin(); boot(); switchView("overview");
     });
   }).catch(function(){ showLogin(); });
+  /* ---------- GitHub Token（MP 风格：重新授权 / 解除授权 + 手动添加） ---------- */
+  var GH_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" style="vertical-align:-2px;margin-right:4px"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+  var UNLINK_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-2px;margin-right:4px"><path d="M6.5 9.5l3-3M5 11l-1 1a2.5 2.5 0 01-3.5-3.5l2-2A2.5 2.5 0 016 7.5M11 5l1-1a2.5 2.5 0 013.5 3.5l-2 2A2.5 2.5 0 0110 8.5"/></svg>';
+  function loadGithubToken(){
+    return api("/api/settings", {method:"POST", body:{}}).then(function(r){
+      var t = ((r && r.settings) || {}).github_token || "";
+      var st = $("#ghTokenStatus"), dev = $("#btnGhDevice"), del = $("#btnGhTokenDel");
+      if (t) {
+        if (st) { st.style.color = "#86efac"; st.textContent = "已授权 · " + t.slice(0,4) + "…" + t.slice(-4); }
+        if (dev) { dev.innerHTML = GH_ICON + " 重新授权"; }
+        if (del) { del.style.display = ""; del.innerHTML = UNLINK_ICON + " 解除授权"; }
+        loadGhRate();
+      } else {
+        if (st) { st.style.color = ""; st.textContent = "未授权 · 匿名额度 60/小时"; }
+        if (dev) { dev.innerHTML = GH_ICON + " 一键获取"; }
+        if (del) { del.style.display = "none"; }
+        var ri = $("#ghRateInfo"); if (ri) ri.textContent = "";
+      }
+    }).catch(function(e){ var st=$("#ghTokenStatus"); if(st){st.textContent="读取失败："+e.message;} });
+  }
+  function loadGhRate(){
+    var ri = $("#ghRateInfo");
+    if (!ri) return;
+    ri.textContent = "额度查询中…";
+    api("/api/ghrate").then(function(r){
+      if (!r.ok) { ri.textContent = "额度查询失败：" + (r.error || "未知"); return; }
+      var rest = r.reset_in || 0;
+      var mm = Math.floor(rest / 60), ss = rest % 60;
+      ri.style.color = "#93c5fd";
+      ri.textContent = "本小时剩余 " + r.remaining + " / " + r.limit + " 次（已用 " + r.used + "，" + mm + "分" + ss + "秒后重置）";
+    }).catch(function(){ ri.textContent = "额度查询失败"; });
+  }
+  function saveGithubToken(){
+    var el = $("#ghTokenInput"); if (!el) return;
+    var v = el.value.trim();
+    if (!/^gh[pousr]_[A-Za-z0-9_]{20,}$/.test(v)) { toast("Token 格式不对，应形如 ghp_…"); return; }
+    api("/api/settings", {method:"POST", body:{github_token:v}}).then(function(){
+      toast("GitHub Token 已添加，watchdog 下次探测生效"); el.value = ""; loadGithubToken();
+    }).catch(function(e){ toast("添加失败：" + e.message); });
+  }
+  function delGithubToken(){
+    api("/api/settings", {method:"POST", body:{github_token:""}}).then(function(){
+      toast("已解除授权：本机 Token 已清除。如需在 GitHub 端撤销，请到 GitHub 应用授权页操作。");
+      var ri = $("#ghRateInfo"); if (ri) ri.textContent = "";
+      loadGithubToken();
+    }).catch(function(e){ toast("解除失败：" + e.message); });
+  }
+  var ghWatchTimer = null;
+  function watchGithubToken(){
+    if (ghWatchTimer) return;
+    ghWatchTimer = setInterval(function(){
+      api("/api/settings", {method:"POST", body:{}}).then(function(r){
+        var t = ((r && r.settings) || {}).github_token || "";
+        if (t) {
+          clearInterval(ghWatchTimer); ghWatchTimer = null;
+          loadGithubToken();
+          toast("GitHub Token 已自动获取并填入，无需复制粘贴");
+        }
+      }).catch(function(){});
+    }, 2000);
+  }
+  loadGithubToken().then(function(){
+    var el = $("#ghTokenInput");
+    if (el && (el.value || "").indexOf("已保存") < 0) watchGithubToken();
+  });
+  var _sv = $("#btnGhTokenSave"), _dl = $("#btnGhTokenDel");
+  if (_sv) _sv.addEventListener("click", saveGithubToken);
+  if (_dl) _dl.addEventListener("click", delGithubToken);
+  var _ri = $("#ghRateInfo"); if (_ri) _ri.style.cursor = "pointer";
+  if (_ri) _ri.addEventListener("click", function(){ loadGhRate(); });
+
 })();
 </script>
 </body>

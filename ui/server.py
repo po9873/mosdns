@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 
 # 上游探测 / 配置读写的实现在 scheduler/lib 下，UI 与定时扫描共用同一份，
 # 免得两处各写一套正则，改了一边忘了另一边。
@@ -42,6 +42,132 @@ AUTH_FILE = os.path.join(DATA_DIR, "auth.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 PREF_DIR = os.path.join(DATA_DIR, "prefs")
 PREF_LOG = os.path.join(DATA_DIR, "pref.log")
+
+# GitHub Device Flow：面板点一下就能授权，不用手动生成/复制 PAT。
+# client_id 用 GitHub CLI 的公开值（OAuth client_id 本来就不是密钥）。
+GH_CLIENT_ID = "178c6fc778ccc68e1d6a"
+GH_SCOPE = "repo workflow read:org gist write:packages"
+_gh_dev = {"device_code": "", "user_code": "", "uri": "", "interval": 5,
+           "expires": 0.0, "last_poll": 0.0, "error": ""}
+_gh_lock = threading.Lock()
+
+
+def _gh_post(url, data):
+    req = urllib.request.Request(
+        url, data=urlencode(data).encode("utf-8"),
+        headers={"Accept": "application/json", "User-Agent": "mosdns-ui"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def gh_device_start():
+    try:
+        d = _gh_post("https://github.com/login/device/code",
+                     {"client_id": GH_CLIENT_ID, "scope": GH_SCOPE})
+        with _gh_lock:
+            _gh_dev.update(device_code=d.get("device_code", ""),
+                           user_code=d.get("user_code", ""),
+                           uri=d.get("verification_uri", "https://github.com/login/device"),
+                           interval=max(3, int(d.get("interval", 5))),
+                           expires=time.time() + int(d.get("expires_in", 900)),
+                           last_poll=0.0, error="")
+        return {"ok": True, "user_code": d.get("user_code", ""),
+                "uri": d.get("verification_uri", "https://github.com/login/device"),
+                "interval": max(3, int(d.get("interval", 5)))}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def gh_device_poll():
+    with _gh_lock:
+        dc = _gh_dev.get("device_code", "")
+        if not dc:
+            return {"status": "idle"}
+        if time.time() > _gh_dev["expires"]:
+            _gh_dev["device_code"] = ""
+            return {"status": "expired"}
+        if time.time() - _gh_dev["last_poll"] < _gh_dev["interval"]:
+            return {"status": "pending"}
+        _gh_dev["last_poll"] = time.time()
+    try:
+        d = _gh_post("https://github.com/login/oauth/access_token", {
+            "client_id": GH_CLIENT_ID, "device_code": dc,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        })
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    err = d.get("error")
+    if err == "authorization_pending":
+        return {"status": "pending"}
+    if err == "slow_down":
+        with _gh_lock:
+            _gh_dev["interval"] = min(30, _gh_dev["interval"] + 5)
+        return {"status": "pending"}
+    if err in ("expired_token", "access_denied"):
+        with _gh_lock:
+            _gh_dev["device_code"] = ""
+        return {"status": "expired" if err == "expired_token" else "denied"}
+    tok = d.get("access_token")
+    if tok:
+        cur = read_json(SETTINGS_FILE, {})
+        cur["github_token"] = tok
+        write_json(SETTINGS_FILE, cur)
+        with _gh_lock:
+            _gh_dev["device_code"] = ""
+        return {"status": "ok", "token_tail": tok[-4:]}
+    return {"status": "error", "error": json.dumps(d, ensure_ascii=False)[:200]}
+
+
+
+def _gh_rate_limit():
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            tok = str((json.load(f) or {}).get("github_token") or "").strip()
+    except Exception:
+        tok = ""
+    if not tok:
+        return {"ok": False, "error": "no token"}
+    try:
+        import time as _t
+        req = urllib.request.Request(
+            "https://api.github.com/rate_limit",
+            headers={"Authorization": "Bearer " + tok, "User-Agent": "mosdns-ui", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=12) as r:
+            d = json.load(r)
+        core = d.get("resources", {}).get("core", {})
+        reset = int(core.get("reset") or 0)
+        return {"ok": True, "limit": core.get("limit"), "used": core.get("used"),
+                "remaining": core.get("remaining"), "reset": reset,
+                "reset_in": max(0, reset - int(_t.time()))}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+GH_DEVICE_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>GitHub 一键授权</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:40px;text-align:center}
+.code{font-size:34px;letter-spacing:5px;font-weight:700;margin:24px 0;color:#7dd3fc}
+a.btn{display:inline-block;padding:10px 22px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;margin:8px}
+.ok{color:#86efac}.err{color:#fca5a5}
+</style></head><body>
+<h2>GitHub 一键授权</h2>
+<p>在 GitHub 授权页输入下面代码并点“继续”：</p>
+<div class="code">__CODE__</div>
+<a class="btn" href="__URI__" target="_blank" rel="noopener">打开 GitHub 授权页</a>
+<div id="msg" style="margin-top:20px">等待授权…</div>
+<script>
+var iv=setInterval(function(){
+  fetch('/api/ghdevice/poll').then(function(r){return r.json()}).then(function(p){
+    if(p.status==='ok'){clearInterval(iv);document.getElementById('msg').innerHTML='<span class="ok">授权成功！Token 已自动保存，尾号 '+p.token_tail+'。请关闭本页。</span>';}
+    else if(p.status==='denied'){clearInterval(iv);document.getElementById('msg').innerHTML='<span class="err">你拒绝了授权。</span>';}
+    else if(p.status==='expired'){clearInterval(iv);document.getElementById('msg').innerHTML='<span class="err">授权码过期，请回到面板重新点“一键获取”。</span>';}
+    else if(p.status==='error'){clearInterval(iv);document.getElementById('msg').textContent='获取失败：'+p.error;}
+  })
+}, __INTERVAL__*1000);
+</script></body></html>"""
 MOSDNS_OUT = os.path.join(DATA_DIR, "mosdns.out")
 MOSDNS_PID = os.path.join(DATA_DIR, "mosdns.pid")
 MOSDNS_LOG = os.path.join(DATA_DIR, "mosdns.log")
@@ -617,7 +743,7 @@ def read_qlog(limit=30, uniq=False, resolve=0):
             "status": RCODE.get(rcode, "无响应" if rcode is None else "异常"),
             "ms": ms,
             "cached": bool(ms is not None and ms <= CACHE_MS),
-            # mosdns 给的 client 不带端口，但 IPv4 会写成 ::ffff:192.168.1.252；
+            # mosdns 给的 client 不带端口，但 IPv4 会写成 ::ffff:<内网IP>；
             # 之前用 rsplit(":") 会把这种地址截成 "::ffff"，这里只剥前缀。
             "client": cli,
         })
@@ -2350,6 +2476,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/ping":
             return self._send(200, PING_PAGE, "text/html; charset=utf-8")
 
+        if path == "/gh/device":
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            r = gh_device_start()
+            if not r.get("ok"):
+                return self._send(500, {"error": r.get("error", "start failed")})
+            html = (GH_DEVICE_PAGE.replace("__CODE__", str(r.get("user_code", "")))
+                    .replace("__URI__", str(r.get("uri", "https://github.com/login/device")))
+                    .replace("__INTERVAL__", str(r.get("interval", 5))))
+            return self._send(200, html, "text/html; charset=utf-8")
+
         if path.startswith("/api/"):
             if not self._authed():
                 return self._send(401, {"error": "unauthorized"})
@@ -2397,6 +2534,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"lines": tail(f, n)})
             if path == "/api/lock":
                 return self._send(200, {"locked": os.path.isdir(os.path.join(DATA_DIR, ".pref.lock"))})
+            if path == "/api/ghdevice/start":
+                return self._send(200, gh_device_start())
+            if path == "/api/ghdevice/poll":
+                return self._send(200, gh_device_poll())
+            if path == "/api/ghrate":
+                return self._send(200, _gh_rate_limit())
             if path == "/api/qlog":
                 q = parse_qs(u.query)
                 try:
@@ -2914,6 +3057,12 @@ class Handler(BaseHTTPRequestHandler):
                     if k in data["routes"]:
                         r[k] = bool(data["routes"][k])
                 cur["routes"] = r
+            if "github_token" in data:
+                t = str(data.get("github_token") or "").strip()
+                if t:
+                    cur["github_token"] = t
+                else:
+                    cur.pop("github_token", None)
             write_json(SETTINGS_FILE, cur)
             return self._send(200, {"ok": True, "settings": cur})
 

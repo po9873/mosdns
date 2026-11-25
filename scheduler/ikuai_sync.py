@@ -10,7 +10,7 @@ pin 变化后最多 2 分钟全网跟上。本脚本只做抽查：爱快答的 
 
 环境变量:
   IKUAI_TOKEN   未设置则静默退出（保留以便将来需要管理动作）
-  IKUAI_DNSIP   爱快 DNS 查询地址, 默认 192.168.6.254
+  IKUAI_DNSIP   爱快 DNS 查询地址, 默认由环境变量 IKUAI_DNSIP 指定
   IKUAI_SAMPLE  抽查域名数上限, 默认 20
 映射来源: /data/prefs/all.hosts (每行 "域名 IP1 IP2 ...")
 """
@@ -94,7 +94,7 @@ def dns_query(name, server, timeout=3):
 def main():
     if not os.environ.get("IKUAI_TOKEN"):
         sys.exit(0)
-    dns_ip = os.environ.get("IKUAI_DNSIP", "192.168.6.254")
+    dns_ip = os.environ.get("IKUAI_DNSIP", "127.0.0.1")
     sample_n = int(os.environ.get("IKUAI_SAMPLE", "20"))
 
     pins = load_pins()

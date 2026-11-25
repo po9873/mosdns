@@ -626,7 +626,7 @@ _HOSTS_LOCK = threading.RLock()
 
 # 2) 重载合并：以前每换一次钉就 SIGTERM mosdns，实测 23:25-23:44 十九分钟
 #    重载 12 次；DNS 反复重启造成的中断本身就是「时好时坏」的一大来源。
-RELOAD_MIN_SEC = int(os.environ.get("PREF_RELOAD_MIN_SEC", "60"))
+RELOAD_MIN_SEC = int(os.environ.get("PREF_RELOAD_MIN_SEC", "300"))
 _reload_lock = threading.Lock()
 _reload_state = {"last": 0.0, "pending": False, "worker": False}
 
@@ -1347,7 +1347,7 @@ def _private(ip):
 def static_targets():
     """读静态钉子，返回 ([(域名, [IP...])...], [(route, 域名, IP)...])。
 
-    内网地址（registry.linkease.net 192.168.6.34）不探也不换；注释行原样
+    内网地址（registry.linkease.net <内网IP>）不探也不换；注释行原样
     留在文件里。巡检时按该行自己的域名做 SNI，不套任何一路的专属判据。
     """
     rows, items = [], []
@@ -2380,6 +2380,15 @@ def _doh_scan_async():
 
 
 # ---------------------------------------------------------------- 体验哨兵
+def _github_token():
+    try:
+        import json, os
+        with open(os.path.join(DATA_DIR, "settings.json"), "r", encoding="utf-8") as f:
+            return str((json.load(f) or {}).get("github_token") or "").strip()
+    except Exception:
+        return ""
+
+
 def _api_ok(ip, tries=2):
     """api.github.com 根路径固定 200；用 101 自身 curl 连测 2 次。
 
@@ -2389,13 +2398,26 @@ def _api_ok(ip, tries=2):
     """
     for _ in range(tries):
         try:
-            p = subprocess.run(
-                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                 "-m", "6", "--resolve", "api.github.com:443:" + ip,
-                 "https://api.github.com/"],
-                capture_output=True, timeout=8)
-            if (p.stdout or b"").decode("utf-8", "replace").strip() != "200":
+            cmd = ["curl", "-s", "-m", "6", "--resolve", "api.github.com:443:" + ip,
+                   "https://api.github.com/", "-o", "/tmp/_api_ok_body",
+                   "-w", "%{http_code}"]
+            tok = _github_token()
+            if tok:
+                cmd[1:1] = ["-H", "Authorization: Bearer " + tok]
+            p = subprocess.run(cmd, capture_output=True, timeout=8)
+            code = (p.stdout or b"").decode("utf-8", "replace").strip()
+            try:
+                body = open("/tmp/_api_ok_body", "rb").read()
+            except Exception:
                 return False
+            # Real GitHub root: 200 + current_user_url.
+            # Legit rate-limit: 403 JSON with "API rate limit exceeded" / documentation_url.
+            # Bare "OK" from 140.82.x.x is a fake node and must be rejected.
+            if code == "200" and b"current_user_url" in body:
+                continue
+            if code == "403" and (b"rate limit" in body.lower() or b"documentation_url" in body):
+                continue
+            return False
         except Exception:
             return False
     return True
