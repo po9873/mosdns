@@ -2430,8 +2430,16 @@ def _probe_once(url, codes, marker=None):
     = 240 次/小时，匿名额度只有 60/小时，必然打爆回 403；旧的只认 200 的
     判据把这当成 GitHub 真故障，反复触发自愈重载，反而制造了不稳定。
     带 token 后额度 5000/小时，并认合法 403 限流，双保险。
+
+    2026-11-26：TMDB 前面挂 Cloudflare，伪装成 Chrome 的 curl 会被 JA3/UA
+    一致性识别成机器人，稳定回 403（本机实测：Chrome UA 403，诚实 UA 200）。
+    而内部巡检用 mosdns-watchdog UA 一直 200（health_snapshot 全绿）——
+    体验哨兵却用浏览器 UA 被拦，误判故障反复自愈重载。TMDB 探针改用与内部
+    巡检一致的诚实 UA，与 Cloudflare 和平共处。
     """
-    cmd = ["curl", "-s", "-m", "6", "-A", EXPERIENCE_UA, "--compressed"]
+    is_tmdb = "themoviedb.org" in url
+    ua = "mosdns-watchdog" if is_tmdb else EXPERIENCE_UA
+    cmd = ["curl", "-s", "-m", "6", "-A", ua, "--compressed"]
     is_api = "api.github.com" in url
     if is_api:
         tok = _github_token()
