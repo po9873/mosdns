@@ -2424,9 +2424,22 @@ def _api_ok(ip, tries=2):
 
 
 def _probe_once(url, codes, marker=None):
-    """走 101 自身 DNS 真实访问一次（不带 --resolve）。返回 (是否符合, 状态码)。"""
+    """走 101 自身 DNS 真实访问一次（不带 --resolve）。返回 (是否符合, 状态码)。
+
+    2026-11-26：api.github.com 探针必须带已存 token。体验哨兵每 45s × 3 次
+    = 240 次/小时，匿名额度只有 60/小时，必然打爆回 403；旧的只认 200 的
+    判据把这当成 GitHub 真故障，反复触发自愈重载，反而制造了不稳定。
+    带 token 后额度 5000/小时，并认合法 403 限流，双保险。
+    """
     cmd = ["curl", "-s", "-m", "6", "-A", EXPERIENCE_UA, "--compressed"]
-    if marker:
+    is_api = "api.github.com" in url
+    if is_api:
+        tok = _github_token()
+        if tok:
+            cmd += ["-H", "Authorization: Bearer " + tok]
+    # api 需读 body 辨认合法 403 限流；其余沿用原 marker 逻辑
+    want_body = bool(marker) or is_api
+    if want_body:
         cmd += ["-o", "-", "-w", "\n__META__%{http_code}"]
     else:
         cmd += ["-o", "/dev/null", "-w", "%{http_code}"]
@@ -2436,10 +2449,13 @@ def _probe_once(url, codes, marker=None):
         out = (p.stdout or b"").decode("utf-8", "replace")
     except Exception:
         return False, "000"
-    if marker:
+    if want_body:
         body, _, code = out.rpartition("__META__")
         code = code.strip() or "000"
-        return (code in codes and marker in body), code
+        if is_api and code == "403" and (
+                "rate limit" in body.lower() or "documentation_url" in body.lower()):
+            return True, code
+        return (code in codes and (marker in body if marker else True)), code
     code = out.strip() or "000"
     return (code in codes), code
 
