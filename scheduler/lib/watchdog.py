@@ -2511,7 +2511,14 @@ def _probe_routes(selected=None):
                 return True           # 网页正常，直接过
             # 网页抖动：api 满 3/3 或 raw 达标，说明只是首页超时，GitHub 可达
             return api_ok >= 3 or raw_ok >= 2
-        return all(v["ok"] >= 2 for v in d.values())
+        # 2026-11-26：其余 6 路（ghcr/gt/google/cf/tmdb/imdb）套用 GitHub
+        # 同款抖动容错。它们是单探针专属判据（ghcr 401 / gt 真翻出「你好」/
+        # imdb 202...），旧逻辑要求 >=2/3，跨境链路随机丢包时实测常只通 1 次，
+        # 就把抖动误判成故障 → 触发自愈重载 → DNS 断 1~2 秒，反而制造不稳定。
+        # 改成 >=1/3：3 次里只要 1 次通过专属判据，就说明服务本身可达，其余
+        # 是链路抖动，不判故障、不触发自愈告警。真故障 3 次全断（0/3）仍判
+        # 不可用，且 experience_guard_loop 要求连续 2 轮才自愈，真故障不会漏。
+        return all(v["ok"] >= 1 for v in d.values())
 
     return {r: {"usable": _usable(r, d), "probes": d}
             for r, d in detail.items()}
